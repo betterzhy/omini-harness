@@ -1,6 +1,7 @@
 .DS_Store
 .idea/
 .venv/
+.worktrees/
 __pycache__/
 *.py[cod]
 .pytest_cache/

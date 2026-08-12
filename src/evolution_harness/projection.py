@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import uuid
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
@@ -206,67 +207,103 @@ def build_projection_pack(
         source_capabilities.append(source)
         selected_index[item["id"]] = source
 
-    pack = root / "generated" / "projections" / runtime.lower() / resolved_context["project"]
-    if pack.exists():
-        shutil.rmtree(pack)
-    pack.mkdir(parents=True, exist_ok=True)
+    target_pack = root / "generated" / "projections" / runtime.lower() / resolved_context["project"]
+    target_pack.parent.mkdir(parents=True, exist_ok=True)
+    token = uuid.uuid4().hex
+    pack = target_pack.parent / f".{target_pack.name}.tmp-{token}"
+    backup = target_pack.parent / f".{target_pack.name}.backup-{token}"
+    pack.mkdir()
 
-    stable_name = "project-instructions.md" if runtime == "CHATGPT" else "repository-guidance.md"
-    (pack / stable_name).write_text(adapter.stable_guidance(root), encoding="utf-8")
-    (pack / adapter.context_filename()).write_text(_resolved_context_markdown(resolved_context), encoding="utf-8")
-    write_generated_json(pack / "resolved-context.json", resolved_context)
-    (pack / "discussion-contract.md").write_text(
-        materialize_discussion_contract(root, project, resolved_context), encoding="utf-8"
-    )
-
-    omitted_references: list[dict[str, str]] = []
-    generated_skills: list[dict[str, str]] = []
-    for source in source_capabilities:
-        if source["kind"] != "SKILL":
-            continue
-        capability = by_version[(source["id"], source["version"])]
-        if not _can_materialize(capability.asset.get("visibility", "PRIVATE")):
-            marker = {"id": source["id"], "reason": "visibility-gate"}
-            if marker not in omitted_references:
-                omitted_references.append(marker)
-            continue
-        name = source["id"].rsplit(":", 1)[-1]
-        target = pack / "skills" / name / "SKILL.md"
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(_render_skill(capability, selected_index, by_version, omitted_references), encoding="utf-8")
-        generated_skills.append(
-            {
-                "id": source["id"],
-                "version": source["version"],
-                "contentHash": source["contentHash"],
-                "skillProjectionVersion": AGENT_SKILL_PROJECTION_VERSION,
-                "path": target.relative_to(pack).as_posix(),
-            }
+    try:
+        stable_name = "project-instructions.md" if runtime == "CHATGPT" else "repository-guidance.md"
+        (pack / stable_name).write_text(adapter.stable_guidance(root), encoding="utf-8")
+        (pack / adapter.context_filename()).write_text(_resolved_context_markdown(resolved_context), encoding="utf-8")
+        write_generated_json(pack / "resolved-context.json", resolved_context)
+        (pack / "discussion-contract.md").write_text(
+            materialize_discussion_contract(root, project, resolved_context), encoding="utf-8"
         )
 
-    generated_files: list[dict[str, str]] = []
-    for path in sorted(p for p in pack.rglob("*") if p.is_file()):
-        generated_files.append({"path": path.relative_to(pack).as_posix(), "sha256": file_sha256(path)})
-    manifest = {
-        "schemaVersion": "runtime-projection-manifest/v1",
-        "projectionType": adapter.projection_type,
-        "projectionVersion": adapter.projection_version,
-        "runtime": runtime,
-        "project": resolved_context["project"],
-        "sourceResolutionId": resolved_context["resolutionId"],
-        "capabilityLockFingerprint": resolved_context["capabilityLockFingerprint"],
-        "projectStateHash": resolved_context["projectStateHash"],
-        "projectBindingHash": resolved_context["projectBindingHash"],
-        "sourceCapabilities": source_capabilities,
-        "generatedSkills": generated_skills,
-        "omittedReferences": sorted(omitted_references, key=lambda item: (item["id"], item["reason"])),
-        "generatedFiles": generated_files,
-    }
-    write_generated_json(pack / "projection-manifest.json", manifest)
-    return manifest
+        omitted_references: list[dict[str, str]] = []
+        generated_skills: list[dict[str, str]] = []
+        for source in source_capabilities:
+            if source["kind"] != "SKILL":
+                continue
+            capability = by_version[(source["id"], source["version"])]
+            if not _can_materialize(capability.asset.get("visibility", "PRIVATE")):
+                marker = {"id": source["id"], "reason": "visibility-gate"}
+                if marker not in omitted_references:
+                    omitted_references.append(marker)
+                continue
+            name = source["id"].rsplit(":", 1)[-1]
+            target = pack / "skills" / name / "SKILL.md"
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(_render_skill(capability, selected_index, by_version, omitted_references), encoding="utf-8")
+            generated_skills.append(
+                {
+                    "id": source["id"],
+                    "version": source["version"],
+                    "contentHash": source["contentHash"],
+                    "skillProjectionVersion": AGENT_SKILL_PROJECTION_VERSION,
+                    "path": target.relative_to(pack).as_posix(),
+                }
+            )
+
+        generated_files: list[dict[str, str]] = []
+        for path in sorted(p for p in pack.rglob("*") if p.is_file()):
+            generated_files.append({"path": path.relative_to(pack).as_posix(), "sha256": file_sha256(path)})
+        manifest = {
+            "schemaVersion": "runtime-projection-manifest/v1",
+            "projectionType": adapter.projection_type,
+            "projectionVersion": adapter.projection_version,
+            "runtime": runtime,
+            "project": resolved_context["project"],
+            "sourceResolutionId": resolved_context["resolutionId"],
+            "capabilityLockFingerprint": resolved_context["capabilityLockFingerprint"],
+            "projectStateHash": resolved_context["projectStateHash"],
+            "projectBindingHash": resolved_context["projectBindingHash"],
+            "sourceCapabilities": source_capabilities,
+            "generatedSkills": generated_skills,
+            "omittedReferences": sorted(omitted_references, key=lambda item: (item["id"], item["reason"])),
+            "generatedFiles": generated_files,
+        }
+        if "authoritySnapshotFingerprint" in resolved_context:
+            manifest.update(
+                {
+                    "authoritySnapshotFingerprint": resolved_context["authoritySnapshotFingerprint"],
+                    "authoritySourceRevision": resolved_context["authoritySourceRevision"],
+                    "authorityGate": resolved_context["authorityGate"],
+                }
+            )
+        write_generated_json(pack / "projection-manifest.json", manifest)
+
+        if target_pack.exists():
+            target_pack.replace(backup)
+        try:
+            pack.replace(target_pack)
+        except Exception:
+            if backup.exists():
+                backup.replace(target_pack)
+            raise
+        if backup.exists():
+            shutil.rmtree(backup)
+        return manifest
+    except Exception:
+        if pack.exists():
+            shutil.rmtree(pack)
+        if backup.exists():
+            if target_pack.exists():
+                shutil.rmtree(target_pack)
+            backup.replace(target_pack)
+        raise
 
 
-def check_projection_freshness(repository_root: Path, project_root: Path, *, runtime: str) -> ProjectionFreshness:
+def check_projection_freshness(
+    repository_root: Path,
+    project_root: Path,
+    *,
+    runtime: str,
+    authority_snapshot: dict[str, Any] | None = None,
+) -> ProjectionFreshness:
     root = Path(repository_root)
     project = Path(project_root)
     try:
@@ -297,6 +334,14 @@ def check_projection_freshness(repository_root: Path, project_root: Path, *, run
         reasons.add("project-state-drift")
     if not binding_path.exists() or manifest.get("projectBindingHash") != file_sha256(binding_path):
         reasons.add("project-binding-drift")
+    if "authoritySnapshotFingerprint" in manifest:
+        if authority_snapshot is None:
+            reasons.add("authority-snapshot-required")
+        elif (
+            manifest.get("authoritySnapshotFingerprint") != authority_snapshot.get("snapshotFingerprint")
+            or manifest.get("authoritySourceRevision") != authority_snapshot.get("sourceRevision")
+        ):
+            reasons.add("authority-snapshot-drift")
     by_version = _capability_maps(root)
     for source in manifest.get("sourceCapabilities", []):
         current = by_version.get((source["id"], source["version"]))

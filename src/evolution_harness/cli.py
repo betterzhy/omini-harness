@@ -13,6 +13,13 @@ from .discussion import materialize_discussion_contract, route_next_topics
 from .evals import record_eval_result
 from .feedback import capture_feedback_as_experience
 from .handoff import build_design_handoff
+from .install import install_projection, uninstall_projection
+from .integration import (
+    build_integration_projection,
+    check_integration_projection,
+    load_integration,
+    resolve_integration_context,
+)
 from .learning import create_candidate, promote_candidate, triage_experience, capture_experience
 from .project import build_capability_lock
 from .projection import build_projection_pack, check_projection_freshness
@@ -51,6 +58,17 @@ def _add_resolution_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--reopen-signal")
 
 
+def _add_integration_resolution_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--integration", required=True)
+    parser.add_argument("--source", required=True)
+    parser.add_argument("--intent", required=True)
+    parser.add_argument("--topic", required=True)
+    parser.add_argument("--output", required=True)
+    parser.add_argument("--stage")
+    parser.add_argument("--runtime", choices=["CHATGPT", "CODEX"], required=True)
+    parser.add_argument("--reopen-signal")
+
+
 def _resolve(root: Path, args) -> dict[str, Any]:
     return resolve_design_context(
         root, Path(args.project), intent=args.intent, topic=args.topic, requested_output=args.output,
@@ -86,7 +104,16 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("eval"); s = p.add_subparsers(dest="action", required=True); q = s.add_parser("run"); q.add_argument("--result", required=True); _add_format(q)
 
-    p = sub.add_parser("projection"); s = p.add_subparsers(dest="action", required=True); q = s.add_parser("build"); _add_resolution_args(q); q.add_argument("--check", action="store_true"); _add_format(q)
+    p = sub.add_parser("projection"); s = p.add_subparsers(dest="action", required=True)
+    q = s.add_parser("build"); _add_resolution_args(q); q.add_argument("--check", action="store_true"); _add_format(q)
+    q = s.add_parser("install"); q.add_argument("--pack", required=True); q.add_argument("--target", required=True); q.add_argument("--apply", action="store_true"); _add_format(q)
+    q = s.add_parser("uninstall"); q.add_argument("--target", required=True); q.add_argument("--apply", action="store_true"); _add_format(q)
+
+    p = sub.add_parser("integration"); s = p.add_subparsers(dest="action", required=True)
+    q = s.add_parser("inspect"); q.add_argument("--integration", required=True); q.add_argument("--source", required=True); _add_format(q)
+    q = s.add_parser("lock"); q.add_argument("--integration", required=True); q.add_argument("--check", action="store_true"); _add_format(q)
+    q = s.add_parser("resolve"); _add_integration_resolution_args(q); q.add_argument("--explain", action="store_true"); _add_format(q)
+    q = s.add_parser("projection"); _add_integration_resolution_args(q); q.add_argument("--check", action="store_true"); _add_format(q)
     p = sub.add_parser("discussion"); s = p.add_subparsers(dest="action", required=True)
     q = s.add_parser("materialize"); _add_resolution_args(q); q.add_argument("--persist"); _add_format(q)
     q = s.add_parser("route-next"); q.add_argument("--project", required=True); q.add_argument("--current-topic", required=True); _add_format(q)
@@ -163,11 +190,61 @@ def main(argv=None) -> int:
             return _emit(promote_candidate(root, args.id, apply=args.apply), fmt=fmt, command=command)
         if args.command == "eval":
             path = record_eval_result(root, _load_yaml(args.result)); return _emit({"location": str(path)}, fmt=fmt, command=command)
-        if args.command == "projection":
+        if args.command == "projection" and args.action == "build":
             if args.check:
                 check = check_projection_freshness(root, Path(args.project), runtime=args.runtime)
                 return _emit({"fresh": check.fresh, "reasons": check.reasons}, fmt=fmt, ok=check.fresh, command=command)
             resolved = _resolve(root, args); return _emit(build_projection_pack(root, Path(args.project), resolved, runtime=args.runtime), fmt=fmt, command=command)
+        if args.command == "projection" and args.action == "install":
+            data = install_projection(root, Path(args.pack), Path(args.target), apply=args.apply)
+            return _emit(data, fmt=fmt, ok=data["gate"] == "PASS", command=command)
+        if args.command == "projection" and args.action == "uninstall":
+            data = uninstall_projection(root, Path(args.target), apply=args.apply)
+            return _emit(data, fmt=fmt, ok=data["gate"] == "PASS", command=command)
+        if args.command == "integration" and args.action == "inspect":
+            from .authority import build_authority_snapshot
+
+            data = build_authority_snapshot(root, Path(args.integration), Path(args.source))
+            return _emit(data, fmt=fmt, ok=data["gate"] == "PASS", command=command)
+        if args.command == "integration" and args.action == "lock":
+            loaded = load_integration(root, Path(args.integration))
+            expected = build_capability_lock(root, loaded["controlPlaneRoot"], write=not args.check)
+            path = loaded["controlPlaneRoot"] / ".agent-evolution/capabilities.lock.yaml"
+            ok = not args.check or (path.exists() and _load_yaml(path) == expected)
+            return _emit(expected, fmt=fmt, ok=ok, command=command)
+        if args.command == "integration" and args.action == "resolve":
+            data = resolve_integration_context(
+                root,
+                Path(args.integration),
+                Path(args.source),
+                intent=args.intent,
+                topic=args.topic,
+                requested_output=args.output,
+                runtime=args.runtime,
+                explicit_stage=args.stage,
+                reopen_signal=args.reopen_signal,
+            )
+            if not args.explain:
+                data = dict(data); data.pop("explain", None)
+            return _emit(data, fmt=fmt, command=command)
+        if args.command == "integration" and args.action == "projection":
+            if args.check:
+                check = check_integration_projection(
+                    root, Path(args.integration), Path(args.source), runtime=args.runtime
+                )
+                return _emit({"fresh": check.fresh, "reasons": check.reasons}, fmt=fmt, ok=check.fresh, command=command)
+            data = build_integration_projection(
+                root,
+                Path(args.integration),
+                Path(args.source),
+                intent=args.intent,
+                topic=args.topic,
+                requested_output=args.output,
+                runtime=args.runtime,
+                explicit_stage=args.stage,
+                reopen_signal=args.reopen_signal,
+            )
+            return _emit(data, fmt=fmt, command=command)
         if args.command == "discussion" and args.action == "materialize":
             resolved = _resolve(root, args); text = materialize_discussion_contract(root, Path(args.project), resolved, persist_path=Path(args.persist) if args.persist else None); return _emit(text, fmt=fmt, command=command)
         if args.command == "discussion" and args.action == "route-next":

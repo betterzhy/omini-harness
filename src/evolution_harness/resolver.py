@@ -78,6 +78,7 @@ def resolve_design_context(
     runtime: str,
     explicit_stage: str | None = None,
     reopen_signal: str | None = None,
+    authority_snapshot: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     root = Path(repository_root)
     project = Path(project_root)
@@ -214,8 +215,10 @@ def resolve_design_context(
         "projectStateHash": state_hash,
         "projectBindingHash": binding_hash,
     }
+    if authority_snapshot is not None:
+        resolution_payload["authoritySnapshotFingerprint"] = authority_snapshot["snapshotFingerprint"]
     resolution_id = "resolution:" + sha256_bytes(canonical_json_bytes(resolution_payload))[:24]
-    return {
+    result = {
         "schemaVersion": "resolved-design-context/v1",
         "resolutionId": resolution_id,
         "project": state["project"],
@@ -240,3 +243,15 @@ def resolve_design_context(
         "semanticSelectionCandidates": [],
         "explain": {"selected": selected, "excluded": excluded},
     }
+    if authority_snapshot is not None:
+        result.update(
+            {
+                "authoritySnapshotFingerprint": authority_snapshot["snapshotFingerprint"],
+                "authoritySourceRevision": authority_snapshot["sourceRevision"],
+                "authorityFacts": authority_snapshot["facts"],
+                "authorityConflicts": authority_snapshot["conflicts"],
+                "authorityGate": authority_snapshot["gate"],
+                "authorityPaths": authority_snapshot["authorities"],
+            }
+        )
+    return result

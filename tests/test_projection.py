@@ -4,6 +4,7 @@ import json
 import shutil
 from pathlib import Path
 
+import pytest
 import yaml
 
 
@@ -143,3 +144,24 @@ def test_projection_pack_preserves_machine_readable_resolved_context(tmp_path: P
     pack = root / "generated/projections/chatgpt/project-fixture"
     stored = json.loads((pack / "resolved-context.json").read_text(encoding="utf-8"))
     assert stored == resolved
+
+
+def test_projection_rebuild_is_atomic_when_materialization_fails(tmp_path: Path, monkeypatch):
+    from evolution_harness import projection
+
+    root, project = _copy_repo(tmp_path)
+    resolved = _resolved(root, project, runtime="CODEX")
+    projection.build_projection_pack(root, project, resolved, runtime="CODEX")
+    pack = root / "generated/projections/codex/project-fixture"
+    before = {path.relative_to(pack).as_posix(): path.read_bytes() for path in pack.rglob("*") if path.is_file()}
+
+    def fail_materialization(*args, **kwargs):
+        raise RuntimeError("injected projection failure")
+
+    monkeypatch.setattr(projection, "materialize_discussion_contract", fail_materialization)
+    with pytest.raises(RuntimeError, match="injected projection failure"):
+        projection.build_projection_pack(root, project, resolved, runtime="CODEX")
+
+    after = {path.relative_to(pack).as_posix(): path.read_bytes() for path in pack.rglob("*") if path.is_file()}
+    assert after == before
+    assert not list(pack.parent.glob(".project-fixture.*"))

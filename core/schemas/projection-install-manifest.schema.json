@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-evolution.local/core/schemas/projection-install-manifest.schema.json",
+  "type": "object",
+  "required": ["schemaVersion", "sourceProjection", "installedFiles"],
+  "properties": {
+    "schemaVersion": {"const": "projection-install-manifest/v1"},
+    "sourceProjection": {
+      "type": "object",
+      "required": [
+        "runtime", "project", "projectionType", "projectionVersion",
+        "sourceResolutionId", "capabilityLockFingerprint"
+      ],
+      "properties": {
+        "runtime": {"enum": ["CHATGPT", "CODEX"]},
+        "project": {"type": "string", "minLength": 1},
+        "projectionType": {"type": "string", "minLength": 1},
+        "projectionVersion": {"type": "string", "minLength": 1},
+        "sourceResolutionId": {"type": "string", "minLength": 1},
+        "capabilityLockFingerprint": {"type": "string", "minLength": 1}
+      },
+      "additionalProperties": false
+    },
+    "installedFiles": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "path", "sourcePath", "sourceSha256", "installedSha256",
+          "capabilityId", "capabilityVersion", "capabilityContentHash"
+        ],
+        "properties": {
+          "path": {"type": "string", "pattern": "^\\.agents/skills/[^/]+/SKILL\\.md$"},
+          "sourcePath": {"type": "string", "pattern": "^skills/[^/]+/SKILL\\.md$"},
+          "sourceSha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+          "installedSha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+          "capabilityId": {"type": "string", "minLength": 1},
+          "capabilityVersion": {"type": "string", "minLength": 1},
+          "capabilityContentHash": {"type": "string", "minLength": 1}
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

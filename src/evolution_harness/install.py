@@ -169,7 +169,7 @@ def _validate_transaction_journal(journal: Any) -> dict[str, Any]:
         "manifest",
     }:
         raise ProjectionInstallError("invalid projection install recovery journal")
-    if journal.get("schemaVersion") != "projection-install-transaction/v1":
+    if journal.get("schemaVersion") != "projection-install-transaction/v2":
         raise ProjectionInstallError("invalid projection install recovery journal")
     if journal.get("operation") not in {"INSTALL", "UNINSTALL"}:
         raise ProjectionInstallError("invalid projection install recovery journal")
@@ -191,7 +191,13 @@ def _validate_transaction_journal(journal: Any) -> dict[str, Any]:
         raise ProjectionInstallError("invalid projection install recovery journal")
     seen: set[str] = set()
     for index, item in enumerate(files):
-        if not isinstance(item, dict) or set(item) != {"path", "existed", "backupPath", "backupSha256"}:
+        if not isinstance(item, dict) or set(item) != {
+            "path",
+            "existed",
+            "backupPath",
+            "backupSha256",
+            "afterSha256",
+        }:
             raise ProjectionInstallError("invalid projection install recovery journal")
         path = item.get("path")
         if not _is_managed_skill_path(path) or path in seen or not isinstance(item.get("existed"), bool):
@@ -203,11 +209,14 @@ def _validate_transaction_journal(journal: Any) -> dict[str, Any]:
             not item["existed"] and backup_hash is not None
         ):
             raise ProjectionInstallError("invalid projection install recovery journal")
+        after_hash = item.get("afterSha256")
+        if after_hash is not None and (not isinstance(after_hash, str) or not re.fullmatch(r"[0-9a-f]{64}", after_hash)):
+            raise ProjectionInstallError("invalid projection install recovery journal")
         seen.add(path)
     manifest = journal.get("manifest")
     if (
         not isinstance(manifest, dict)
-        or set(manifest) != {"existed", "backupPath", "backupSha256"}
+        or set(manifest) != {"existed", "backupPath", "backupSha256", "afterSha256"}
         or not isinstance(manifest.get("existed"), bool)
         or manifest.get("backupPath") != f"{backup_directory}/install-manifest"
     ):
@@ -217,6 +226,11 @@ def _validate_transaction_journal(journal: Any) -> dict[str, Any]:
         manifest["existed"]
         and (not isinstance(manifest_hash, str) or not re.fullmatch(r"[0-9a-f]{64}", manifest_hash))
     ) or (not manifest["existed"] and manifest_hash is not None):
+        raise ProjectionInstallError("invalid projection install recovery journal")
+    manifest_after_hash = manifest.get("afterSha256")
+    if manifest_after_hash is not None and (
+        not isinstance(manifest_after_hash, str) or not re.fullmatch(r"[0-9a-f]{64}", manifest_after_hash)
+    ):
         raise ProjectionInstallError("invalid projection install recovery journal")
     return journal
 
@@ -262,6 +276,7 @@ def _recover_install_transaction_anchored(target: Path, filesystem: AnchoredRoot
 
     if recovery_phase == "PREPARED":
         backup_bytes: dict[str, bytes] = {}
+        current_hashes: dict[str, str | None] = {}
         for item in journal["files"]:
             if item["existed"]:
                 try:
@@ -271,6 +286,16 @@ def _recover_install_transaction_anchored(target: Path, filesystem: AnchoredRoot
                 if sha256_bytes(data) != item["backupSha256"]:
                     raise ProjectionInstallError("trusted recovery backup hash mismatch")
                 backup_bytes[item["backupPath"]] = data
+            if filesystem.exists(item["path"]):
+                if not filesystem.is_file(item["path"]):
+                    raise ProjectionInstallError("managed recovery destination became a directory")
+                current_hash = sha256_bytes(filesystem.read_bytes(item["path"]))
+            else:
+                current_hash = None
+            before_hash = item["backupSha256"] if item["existed"] else None
+            if current_hash not in {before_hash, item["afterSha256"]}:
+                raise ProjectionInstallError("recovery target changed outside the failed transaction")
+            current_hashes[item["path"]] = current_hash
         manifest = journal["manifest"]
         if manifest["existed"]:
             try:
@@ -281,21 +306,32 @@ def _recover_install_transaction_anchored(target: Path, filesystem: AnchoredRoot
                 raise ProjectionInstallError("trusted recovery manifest backup hash mismatch")
             backup_bytes[manifest["backupPath"]] = data
 
+        if filesystem.exists(INSTALL_MANIFEST_PATH):
+            if not filesystem.is_file(INSTALL_MANIFEST_PATH):
+                raise ProjectionInstallError("recovery manifest destination became a directory")
+            current_manifest_hash = sha256_bytes(filesystem.read_bytes(INSTALL_MANIFEST_PATH))
+        else:
+            current_manifest_hash = None
+        manifest_before_hash = manifest["backupSha256"] if manifest["existed"] else None
+        if current_manifest_hash not in {manifest_before_hash, manifest["afterSha256"]}:
+            raise ProjectionInstallError("recovery target changed outside the failed transaction")
+
         for item in journal["files"]:
+            before_hash = item["backupSha256"] if item["existed"] else None
+            if current_hashes[item["path"]] == before_hash:
+                continue
             if item["existed"]:
                 try:
                     filesystem.write_bytes(item["path"], backup_bytes[item["backupPath"]])
                 except AnchoredPathError as exc:
                     raise ProjectionInstallError("anchored recovery write failed") from exc
             elif filesystem.exists(item["path"]):
-                if filesystem.is_dir(item["path"]):
-                    raise ProjectionInstallError("managed recovery destination became a directory")
                 filesystem.unlink(item["path"])
-        manifest = journal["manifest"]
-        if manifest["existed"]:
-            filesystem.write_bytes(INSTALL_MANIFEST_PATH, backup_bytes[manifest["backupPath"]])
-        elif filesystem.exists(INSTALL_MANIFEST_PATH):
-            filesystem.unlink(INSTALL_MANIFEST_PATH)
+        if current_manifest_hash != manifest_before_hash:
+            if manifest["existed"]:
+                filesystem.write_bytes(INSTALL_MANIFEST_PATH, backup_bytes[manifest["backupPath"]])
+            elif filesystem.exists(INSTALL_MANIFEST_PATH):
+                filesystem.unlink(INSTALL_MANIFEST_PATH)
         try:
             write_recovery_attestation(identity, journal_bytes, phase="COMMITTED")
         except ProcessLockError as exc:
@@ -317,13 +353,32 @@ def _begin_transaction(
     destinations: list[Path],
     manifest_path: Path,
     filesystem: AnchoredRoot | None = None,
+    *,
+    after_sha256_by_path: dict[str, str | None],
+    manifest_after_sha256: str | None,
 ) -> dict[str, Any]:
     if filesystem is None:
         try:
             with AnchoredRoot(target) as anchored:
-                return _begin_transaction(target, operation, destinations, manifest_path, anchored)
+                return _begin_transaction(
+                    target,
+                    operation,
+                    destinations,
+                    manifest_path,
+                    anchored,
+                    after_sha256_by_path=after_sha256_by_path,
+                    manifest_after_sha256=manifest_after_sha256,
+                )
         except AnchoredPathError as exc:
             raise ProjectionInstallError(str(exc)) from exc
+    relative_destinations = [destination.relative_to(target).as_posix() for destination in destinations]
+    if len(set(relative_destinations)) != len(relative_destinations) or set(after_sha256_by_path) != set(
+        relative_destinations
+    ):
+        raise ProjectionInstallError("transaction after-image set does not match destinations")
+    for after_hash in [*after_sha256_by_path.values(), manifest_after_sha256]:
+        if after_hash is not None and not re.fullmatch(r"[0-9a-f]{64}", after_hash):
+            raise ProjectionInstallError("transaction after-image hash is invalid")
     token = uuid.uuid4().hex
     backup_relative = f"{INSTALL_BACKUP_ROOT}/{token}"
     try:
@@ -341,7 +396,13 @@ def _begin_transaction(
             filesystem.write_bytes(backup_path, data)
             backup_hash = sha256_bytes(data)
         files.append(
-            {"path": relative, "existed": existed, "backupPath": backup_path, "backupSha256": backup_hash}
+            {
+                "path": relative,
+                "existed": existed,
+                "backupPath": backup_path,
+                "backupSha256": backup_hash,
+                "afterSha256": after_sha256_by_path[relative],
+            }
         )
     manifest_relative = manifest_path.relative_to(target).as_posix()
     manifest_existed = filesystem.is_file(manifest_relative)
@@ -352,7 +413,7 @@ def _begin_transaction(
         filesystem.write_bytes(manifest_backup_path, data)
         manifest_backup_hash = sha256_bytes(data)
     journal = {
-        "schemaVersion": "projection-install-transaction/v1",
+        "schemaVersion": "projection-install-transaction/v2",
         "operation": operation,
         "phase": "PREPARED",
         "backupDirectory": backup_relative,
@@ -361,6 +422,7 @@ def _begin_transaction(
             "existed": manifest_existed,
             "backupPath": manifest_backup_path,
             "backupSha256": manifest_backup_hash,
+            "afterSha256": manifest_after_sha256,
         },
     }
     journal_bytes = deterministic_json_bytes(journal)
@@ -485,11 +547,20 @@ def _install_projection_unlocked(
 
             persistent = _persistent_manifest(projection, inputs)
             SchemaStore(repository).validate("core/schemas/projection-install-manifest.schema.json", persistent)
+            persistent_bytes = deterministic_json_bytes(persistent)
             destinations = [
                 resolve_without_symlinks(target, item["path"], label="skill install target")
                 for item in inputs
             ]
-            journal = _begin_transaction(target, "INSTALL", destinations, install_manifest_path, filesystem)
+            journal = _begin_transaction(
+                target,
+                "INSTALL",
+                destinations,
+                install_manifest_path,
+                filesystem,
+                after_sha256_by_path={item["path"]: item["sourceSha256"] for item in inputs},
+                manifest_after_sha256=sha256_bytes(persistent_bytes),
+            )
             try:
                 for item in inputs:
                     resolve_without_symlinks(target, item["path"], label="skill install target")
@@ -498,7 +569,7 @@ def _install_projection_unlocked(
                         if sha256_bytes(current_bytes) == item["sourceSha256"]:
                             continue
                     filesystem.write_bytes(item["path"], item["_sourceBytes"])
-                filesystem.write_bytes(INSTALL_MANIFEST_PATH, deterministic_json_bytes(persistent))
+                filesystem.write_bytes(INSTALL_MANIFEST_PATH, persistent_bytes)
                 _commit_transaction(target, filesystem, journal)
             except BaseException:
                 _recover_install_transaction_anchored(target, filesystem)
@@ -586,7 +657,15 @@ def _uninstall_projection_unlocked(
             if collisions:
                 raise ProjectionInstallError("managed file drift prevents projection uninstall")
 
-            journal = _begin_transaction(target, "UNINSTALL", destinations, manifest_path, filesystem)
+            journal = _begin_transaction(
+                target,
+                "UNINSTALL",
+                destinations,
+                manifest_path,
+                filesystem,
+                after_sha256_by_path={item["path"]: None for item in manifest["installedFiles"]},
+                manifest_after_sha256=None,
+            )
             try:
                 for item in manifest["installedFiles"]:
                     filesystem.unlink(item["path"])

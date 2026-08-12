@@ -12,8 +12,11 @@ PAY_NEXUS_SHADOW_CODEX_PROJECTION = PASS
 PAY_NEXUS_SHADOW_CLOSED_TOPIC_PROTECTION = PASS
 PAY_NEXUS_SHADOW_PROJECT_AUTHORITY_PRESERVATION = PASS
 PAY_NEXUS_SHADOW_INSTALL_PLAN = PASS_DRY_RUN_ONLY
+PAY_NEXUS_EXISTING_ENGINEERING_COMPATIBILITY = PASS_ZERO_WRITE_BOUNDARY
 PAY_NEXUS_PROJECT_LOCAL_BINDING = NOT_EXECUTED_REQUIRES_SEPARATE_AUTHORITY
+PAY_NEXUS_PROJECT_LOCAL_MATERIALIZATION = NOT_EXECUTED_REQUIRES_SEPARATE_AUTHORITY_AND_MECHANISM
 PAY_NEXUS_PROJECT_LOCAL_FEEDBACK_ENTRY = NOT_EXECUTED_NO_REAL_PILOT_TASK
+PAY_NEXUS_REAL_CODEX_TASK = NOT_EXECUTED
 ```
 
 ## Repository Inventory
@@ -242,6 +245,8 @@ collisions = []
 
 The existing project-owned `pay-nexus-implementation-quality-gate` has a distinct identity and path. No install was applied. Generic installer tests separately prove that a same-path unmanaged Skill collision is `NO_GO` and never overwritten.
 
+Automatic materialization and removal are deliberately disabled. On a disposable empty target, both `projection install --apply` and `projection uninstall --apply` exited `1` before target content access and left the target empty. The dry-run plan is therefore evidence for a proposed write set, not permission or a mechanism to apply it.
+
 ## Baseline and Post-Integration Verification
 
 Pay-Nexus source checks before and after:
@@ -273,7 +278,31 @@ pay-nexus-shadow projection freshness = PASS
 pay-nexus-shadow install plan = PASS / DRY_RUN
 ```
 
-The first fixed candidate, `7d6882bc666ff521e163d9b0bb2e0689b26e2186`, was independently reviewed and rejected as `NO-GO` (`1 P0`, `6 P1`, `2 P2`). A second candidate, `e8903b7b541bdca75846841f1d33d472d1a83d8f`, passed its mechanical Gate but was rejected before acceptance because a negative test proved it did not independently reproduce and verify the saved resolver result. A third candidate, `9706122b7d41bae84ee64092a318b5c8be3d8a27`, was rejected because freshness still consulted untrusted generated-file paths after canonical validation had already failed. A fourth candidate, `61280ab7f50aa06b17a0916dc849d2e5e7b907d2`, closed that path but was rejected when independent review proved embedded authority facts were not compared with the complete live snapshot. A fifth candidate, `4af3112fb61464a038f418c9ef35e6a46b3d0022`, closed the authority gap but was rejected because `sourceHarnessRevision` could be synchronously forged and because concurrent writers were not serialized. A sixth candidate, `eecba56e65ff51311a087227cb93afe8c4d0753b`, closed those findings but was rejected because build and install used different pack-lock domains, automatic recovery accepted an unattested target-owned journal, and path checks were not anchored across the later write. A seventh candidate, `f60161f2aa1d517710b8e8fdefb56ccc0f5b18b3`, closed those three findings but was rejected because PREPARED recovery could delete a project-owned file created after the failed transaction began. An eighth candidate, `bb3975f5d8c0bbed7c1d0935eb2730294ed713cd`, added before/after-image checks but was rejected because comparison and destructive rollback still had a race window. A ninth candidate, `8752ad5c106da18ea14eaea6c5c6248cc310495a`, made recovery non-destructive but was rejected because ordinary APPLY still used compare-then-overwrite/delete semantics. A tenth candidate, `37b1ab63b7b5a54ee0d1c5913b154496ca4e37a4`, restricted writes to no-replace CREATE but was rejected because a multi-skill race could still produce a false successful manifest. All ten are superseded and none is acceptance evidence. The final model retains safe project identities and output boundaries, request-bound freshness, current-resolver reproduction, deterministic projection reconstruction, complete live authority snapshot equality, canonical topic-status reconciliation, reproducible exact-source lock revisions, one-byte authority snapshots, and shared pack/target planner locks. Project installation and removal are now plan-only: `--apply` is disabled, legacy recovery state blocks planning without mutation, and materialization requires a separate project-authorized mechanism. Final acceptance is bound to a later fixed candidate and its separate review receipt.
+The first fixed candidate, `7d6882bc666ff521e163d9b0bb2e0689b26e2186`, was independently reviewed and rejected as `NO-GO` (`1 P0`, `6 P1`, `2 P2`). A second candidate, `e8903b7b541bdca75846841f1d33d472d1a83d8f`, passed its mechanical Gate but was rejected before acceptance because a negative test proved it did not independently reproduce and verify the saved resolver result. A third candidate, `9706122b7d41bae84ee64092a318b5c8be3d8a27`, was rejected because freshness still consulted untrusted generated-file paths after canonical validation had already failed. A fourth candidate, `61280ab7f50aa06b17a0916dc849d2e5e7b907d2`, closed that path but was rejected when independent review proved embedded authority facts were not compared with the complete live snapshot. A fifth candidate, `4af3112fb61464a038f418c9ef35e6a46b3d0022`, closed the authority gap but was rejected because `sourceHarnessRevision` could be synchronously forged and because concurrent writers were not serialized. A sixth candidate, `eecba56e65ff51311a087227cb93afe8c4d0753b`, closed those findings but was rejected because build and install used different pack-lock domains, automatic recovery accepted an unattested target-owned journal, and path checks were not anchored across the later write. A seventh candidate, `f60161f2aa1d517710b8e8fdefb56ccc0f5b18b3`, closed those three findings but was rejected because PREPARED recovery could delete a project-owned file created after the failed transaction began. An eighth candidate, `bb3975f5d8c0bbed7c1d0935eb2730294ed713cd`, added before/after-image checks but was rejected because comparison and destructive rollback still had a race window. A ninth candidate, `8752ad5c106da18ea14eaea6c5c6248cc310495a`, made recovery non-destructive but was rejected because ordinary APPLY still used compare-then-overwrite/delete semantics. A tenth candidate, `37b1ab63b7b5a54ee0d1c5913b154496ca4e37a4`, restricted writes to no-replace CREATE but was rejected because a multi-skill race could still produce a false successful manifest. All ten are superseded and none is acceptance evidence. The accepted model retains safe project identities and output boundaries, request-bound freshness, current-resolver reproduction, deterministic projection reconstruction, complete live authority snapshot equality, canonical topic-status reconciliation, reproducible exact-source lock revisions, one-byte authority snapshots, and shared pack/target planner locks. Project installation and removal are now plan-only: `--apply` is disabled, legacy recovery state blocks planning without mutation, and materialization requires a separate project-authorized mechanism.
+
+## Fixed Candidate Acceptance Receipt
+
+```text
+Candidate = a50e9240c96a6acff6d63fb9d61e3390d143a27f
+Parent    = 37b1ab63b7b5a54ee0d1c5913b154496ca4e37a4
+Tree      = f8c94f1f144ee9e81d9547e4acd26b3fb73c8d5e
+Deep review  = GO (P0=0, P1=0, P2=0)
+Ultra gate   = GO (P0=0, P1=0, P2=0)
+```
+
+Both reviews used new clean detached clones and independently matched the Candidate, Parent and Tree. Their executable evidence included:
+
+- `pytest -q`: 141 passed.
+- Structural validation: PASS, `issues=[]`; `semanticGate=NOT_ASSERTED_BY_CI` remains an explicit limitation.
+- Registry, catalog and engineering doctor freshness: PASS.
+- Project fixture exact lock and CHATGPT/CODEX projection freshness: PASS.
+- Neutral integration exact lock, 2/2 scenarios, projection freshness and dry-run install plan: PASS.
+- Pay-Nexus read-only Shadow exact lock, 5/5 scenarios, projection freshness and dry-run install plan: PASS.
+- Install/uninstall apply probes: disabled before project content access, zero target callbacks and unchanged bytes.
+- Legacy journal/attestation probes: manual-recovery fail closed with project and journal bytes preserved.
+- Projection-pack anchored swap, recovery and shared pack-lock regression coverage: PASS.
+
+This receipt accepts the generic Brownfield adapter and the Pay-Nexus read-only Shadow pilot. It does not accept or authorize Pay-Nexus project-local registration, Skill materialization, a real Pay-Nexus task, project tests, database work, Landing, Wave 0 or push.
 
 ## Deferred Items and Hard Stop
 

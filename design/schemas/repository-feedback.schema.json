@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-evolution.local/design/schemas/repository-feedback.schema.json",
+  "type": "object",
+  "required": ["schemaVersion", "feedbackId", "source", "type", "observedIssue", "impact", "affectedReferences", "evidence", "suggestedDesignReview", "capturedAt"],
+  "properties": {
+    "schemaVersion": {"const": "repository-feedback/v1"},
+    "feedbackId": {"type": "string", "pattern": "^feedback:[A-Za-z0-9._-]+:[A-Za-z0-9._-]+$"},
+    "source": {"$ref": "https://agent-evolution.local/core/schemas/source-reference.schema.json"},
+    "type": {"enum": ["IMPLEMENTATION_FRICTION", "UNVERIFIABLE_INVARIANT", "CONFLICTING_AUTHORITY", "IMPOSSIBLE_LIFECYCLE", "UNEXPECTED_FAILURE_MODE", "AMBIGUOUS_CONTRACT"]},
+    "observedIssue": {"type": "string", "minLength": 1},
+    "impact": {"type": "string", "minLength": 1},
+    "affectedReferences": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    "evidence": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    "suggestedDesignReview": {"type": "string", "minLength": 1},
+    "capturedAt": {"type": "string", "format": "date-time"}
+  },
+  "additionalProperties": false
+}

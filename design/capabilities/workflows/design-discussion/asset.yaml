@@ -1,0 +1,149 @@
+schemaVersion: design-capability/v1
+id: workflow:agent-design:design-discussion
+kind: WORKFLOW
+version: 1.0.0
+title: Design Discussion
+summary: Coordinate design discussion stages while preserving authority and optional
+  stage skipping.
+lifecycle: ACTIVE
+validity: VALID
+scope:
+  intent:
+  - design-discussion
+  stage:
+  - EXPLORATION
+  - FOCUSED_DESIGN
+  - CALIBRATION
+  - BOUNDARY_CLOSURE
+  - BASELINE
+  - ENGINEERING_DESIGN
+  - REPOSITORY_LANDING
+  runtime:
+  - CHATGPT
+  - CODEX
+  - GENERIC_AGENT
+  domain:
+  - agent-design
+  tags:
+  - bootstrap-seed
+modelSensitivity: MODEL_INDEPENDENT
+visibility: SHARED
+provenance:
+- sourceType: PROJECT_ARTIFACT
+  reference: baseline://agent-design-evolution-engineering-implementation/1.0
+  revision: CLOSED
+  visibility: SHARED
+  distillation: Bootstrap seed authorized from the closed Agent Design Evolution engineering
+    baseline.
+relationships:
+  dependsOn:
+  - principle:agent-design:closure-requires-authority
+  - principle:agent-design:project-truth-over-generic-guidance
+  extends: []
+  derivedFrom: []
+  supersedes: []
+  constrainedBy: []
+evalBindings: []
+contentFile: content.md
+lastValidatedAt: '2026-08-10T12:00:00Z'
+revalidationTriggers:
+- authority-change
+- runtime-contract-change
+workflow:
+  stages:
+  - EXPLORATION
+  - FOCUSED_DESIGN
+  - CALIBRATION
+  - BOUNDARY_CLOSURE
+  - BASELINE
+  - ENGINEERING_DESIGN
+  - REPOSITORY_LANDING
+  entryConditions:
+    EXPLORATION: []
+    FOCUSED_DESIGN: []
+    CALIBRATION: []
+    BOUNDARY_CLOSURE: []
+    BASELINE: []
+    ENGINEERING_DESIGN: []
+    REPOSITORY_LANDING: []
+  exitConditions:
+    EXPLORATION:
+    - stage-specific output accepted
+    FOCUSED_DESIGN:
+    - stage-specific output accepted
+    CALIBRATION:
+    - stage-specific output accepted
+    BOUNDARY_CLOSURE:
+    - stage-specific output accepted
+    BASELINE:
+    - stage-specific output accepted
+    ENGINEERING_DESIGN:
+    - stage-specific output accepted
+    REPOSITORY_LANDING:
+    - stage-specific output accepted
+  allowedTransitions:
+    EXPLORATION:
+    - FOCUSED_DESIGN
+    - CALIBRATION
+    FOCUSED_DESIGN:
+    - CALIBRATION
+    - BOUNDARY_CLOSURE
+    CALIBRATION:
+    - BOUNDARY_CLOSURE
+    - BASELINE
+    BOUNDARY_CLOSURE:
+    - BASELINE
+    - ENGINEERING_DESIGN
+    BASELINE:
+    - ENGINEERING_DESIGN
+    - REPOSITORY_LANDING
+    ENGINEERING_DESIGN:
+    - REPOSITORY_LANDING
+    REPOSITORY_LANDING: []
+  optionalStages:
+  - EXPLORATION
+  - CALIBRATION
+  - ENGINEERING_DESIGN
+  humanGates:
+    BOUNDARY_CLOSURE:
+    - closure authority required
+    BASELINE:
+    - baseline authority required
+  requiredSkills:
+    EXPLORATION:
+    - skill:agent-design:architecture-review
+    FOCUSED_DESIGN:
+    - skill:agent-design:architecture-review
+    CALIBRATION:
+    - skill:agent-design:architecture-review
+    BOUNDARY_CLOSURE:
+    - skill:agent-design:design-closure-assessment
+    BASELINE:
+    - skill:agent-design:baseline-finalization
+    ENGINEERING_DESIGN:
+    - skill:agent-design:architecture-review
+    REPOSITORY_LANDING:
+    - skill:agent-design:next-topic-routing
+  artifactsProduced:
+    EXPLORATION:
+    - discussion-contract
+    FOCUSED_DESIGN:
+    - discussion-contract
+    CALIBRATION:
+    - discussion-contract
+    BOUNDARY_CLOSURE:
+    - discussion-contract
+    BASELINE:
+    - discussion-contract
+    ENGINEERING_DESIGN:
+    - discussion-contract
+    REPOSITORY_LANDING:
+    - discussion-contract
+  closureConditions:
+    BOUNDARY_CLOSURE:
+    - authorized closure evidence exists
+    BASELINE:
+    - accepted baseline reference exists
+  routingRules:
+  - rule: closed-topic-do-not-reopen
+  - rule: explicit-project-state-wins

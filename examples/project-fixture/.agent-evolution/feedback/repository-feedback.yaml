@@ -1,0 +1,15 @@
+schemaVersion: repository-feedback/v1
+feedbackId: feedback:project-fixture:UNVERIFIABLE-001
+source:
+  sourceType: PROJECT_ARTIFACT
+  reference: repo://project-fixture/implementation
+  visibility: PROJECT
+type: UNVERIFIABLE_INVARIANT
+observedIssue: A design invariant cannot be mechanically verified from the current repository artifacts.
+impact: Implementation confidence is reduced until design observability is reviewed.
+affectedReferences:
+  - invariant://project-fixture/project-truth-wins
+evidence:
+  - test://project-fixture/unverifiable-invariant
+suggestedDesignReview: Review whether the invariant needs a stronger repository-facing verification obligation.
+capturedAt: '2026-08-11T01:30:00Z'

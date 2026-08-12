@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-evolution.local/core/schemas/design-handoff-input.schema.json",
+  "type": "object",
+  "required": [
+    "schemaVersion", "entityReferences", "invariantReferences", "protectedBoundaryReferences",
+    "externalContractReferences", "implementationConstraints", "openEngineeringQuestions",
+    "verificationObligations", "reopenConditions"
+  ],
+  "properties": {
+    "schemaVersion": {"const": "design-handoff-input/v1"},
+    "entityReferences": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
+    "invariantReferences": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
+    "protectedBoundaryReferences": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
+    "externalContractReferences": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
+    "implementationConstraints": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
+    "openEngineeringQuestions": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
+    "verificationObligations": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
+    "reopenConditions": {
+      "type": "array",
+      "items": {"enum": ["NEW_EVIDENCE", "REQUIREMENT_CHANGE", "INVALIDATED_ASSUMPTION", "IMPLEMENTATION_FEEDBACK", "EXPLICIT_AUTHORITY"]},
+      "uniqueItems": true
+    }
+  },
+  "additionalProperties": false
+}

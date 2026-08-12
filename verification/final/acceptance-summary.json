@@ -1,0 +1,67 @@
+{
+  "catalog-check.json": {
+    "command": "catalog build",
+    "ok": true,
+    "schema": "harness-cli/v1"
+  },
+  "chatgpt-projection-check.json": {
+    "command": "projection build",
+    "ok": true,
+    "schema": "harness-cli/v1"
+  },
+  "codex-projection-check.json": {
+    "command": "projection build",
+    "ok": true,
+    "schema": "harness-cli/v1"
+  },
+  "engineering-catalog-check.json": {
+    "command": null,
+    "ok": true,
+    "schema": "engineering-cli/v1"
+  },
+  "engineering-context.json": {
+    "command": null,
+    "ok": true,
+    "schema": "engineering-cli/v1"
+  },
+  "engineering-doctor.json": {
+    "command": null,
+    "ok": true,
+    "schema": "engineering-cli/v1"
+  },
+  "engineering-registry-check.json": {
+    "command": null,
+    "ok": true,
+    "schema": "engineering-cli/v1"
+  },
+  "engineering-test.json": {
+    "command": null,
+    "ok": true,
+    "schema": "engineering-cli/v1"
+  },
+  "engineering-validate.json": {
+    "command": null,
+    "ok": true,
+    "schema": "engineering-cli/v1"
+  },
+  "handoff-check.json": {
+    "command": "handoff build",
+    "ok": true,
+    "schema": "harness-cli/v1"
+  },
+  "harness-validate.json": {
+    "command": "validate",
+    "ok": true,
+    "schema": "harness-cli/v1"
+  },
+  "lock-check.json": {
+    "command": "project lock",
+    "ok": true,
+    "schema": "harness-cli/v1"
+  },
+  "registry-check.json": {
+    "command": "registry build",
+    "ok": true,
+    "schema": "harness-cli/v1"
+  }
+}

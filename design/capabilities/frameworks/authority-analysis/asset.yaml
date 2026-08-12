@@ -1,0 +1,52 @@
+schemaVersion: design-capability/v1
+id: framework:agent-design:authority-analysis
+kind: FRAMEWORK
+version: 1.0.0
+title: Authority Analysis
+summary: Examine which sources may state, change, approve, or verify design facts.
+lifecycle: ACTIVE
+validity: VALID
+scope:
+  intent:
+  - architecture-review
+  - design-closure
+  runtime:
+  - CHATGPT
+  - CODEX
+  - GENERIC_AGENT
+  domain:
+  - agent-design
+  tags:
+  - bootstrap-seed
+modelSensitivity: MODEL_INDEPENDENT
+visibility: SHARED
+provenance:
+- sourceType: PROJECT_ARTIFACT
+  reference: baseline://agent-design-evolution-engineering-implementation/1.0
+  revision: CLOSED
+  visibility: SHARED
+  distillation: Bootstrap seed authorized from the closed Agent Design Evolution engineering
+    baseline.
+relationships:
+  dependsOn:
+  - principle:agent-design:project-truth-over-generic-guidance
+  extends: []
+  derivedFrom: []
+  supersedes: []
+  constrainedBy: []
+evalBindings: []
+contentFile: content.md
+lastValidatedAt: '2026-08-10T12:00:00Z'
+revalidationTriggers:
+- authority-change
+- runtime-contract-change
+framework:
+  dimensions:
+  - fact authority
+  - decision authority
+  - change authority
+  - verification evidence
+  expectedOutputs:
+  - authority map
+  - conflict list
+  - required human gates

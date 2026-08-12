@@ -1,0 +1,17 @@
+schemaVersion: design-handoff-input/v1
+entityReferences:
+  - entity://project-fixture/resolver
+invariantReferences:
+  - invariant://project-fixture/project-truth-wins
+protectedBoundaryReferences:
+  - boundary://project-fixture/authority
+externalContractReferences:
+  - contract://project-fixture/runtime-pack
+implementationConstraints:
+  - Use deterministic metadata resolution before semantic fallback.
+openEngineeringQuestions:
+  - How should the runtime projection pack be installed in a real project?
+verificationObligations:
+  - Verify exact capability lock and projection freshness before repository work.
+reopenConditions:
+  - IMPLEMENTATION_FEEDBACK

@@ -1,0 +1,5 @@
+schemaVersion: runtime-projection-adapter/v1
+runtime: CHATGPT
+projectionType: CHATGPT_PROJECT_PACK
+projectionVersion: chatgpt-project-pack/1
+skillProjectionVersion: agent-skill-projection/1

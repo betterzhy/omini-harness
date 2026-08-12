@@ -1,0 +1,14 @@
+schema_version: registration/v1
+id: contract:com.company.payment:payment-api
+type: contract
+location:
+  path: contracts/payment/openapi.yaml
+title: Payment API
+lifecycle: ACTIVE
+validity: VALID
+artifact_revision: 1.0.0
+scope:
+  base: scope:com.company.payment:repository
+authority_ref:
+- authority:com.company.payment:repository-governance
+relations: {}

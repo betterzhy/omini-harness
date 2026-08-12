@@ -1,0 +1,22 @@
+schemaVersion: design-eval/v1
+evalId: eval:agent-design:authority-gap-review
+targetCapability: skill:agent-design:authority-gap-review
+scenario: Shared guidance conflicts with an explicit project baseline.
+hiddenRisks:
+- silent authority drift
+expectedReasoningCoverage:
+- authority resolution
+- conflict signal
+expectedQuestions:
+- What is authoritative for this decision?
+forbiddenAssumptions:
+- Reusable guidance is automatically project truth.
+criticalBoundaries:
+- Project truth wins.
+acceptableAlternativeOutcomes:
+- Escalate to human authority when evidence is insufficient.
+regressionCriteria:
+- Project truth is silently overridden.
+transferScope:
+- agent-design
+modelSensitivity: MODEL_INDEPENDENT

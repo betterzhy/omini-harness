@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-evolution.local/core/schemas/relationships.schema.json",
+  "type": "object",
+  "required": ["dependsOn", "extends", "derivedFrom", "supersedes", "constrainedBy"],
+  "properties": {
+    "dependsOn": {"$ref": "#/$defs/ids"},
+    "extends": {"$ref": "#/$defs/ids"},
+    "derivedFrom": {"$ref": "#/$defs/ids"},
+    "supersedes": {"$ref": "#/$defs/ids"},
+    "constrainedBy": {"$ref": "#/$defs/ids"}
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "ids": {
+      "type": "array",
+      "items": {"type": "string", "pattern": "^(principle|framework|skill|workflow):[a-z0-9][a-z0-9._-]*:[a-z0-9][a-z0-9._-]*$"},
+      "uniqueItems": true
+    }
+  }
+}

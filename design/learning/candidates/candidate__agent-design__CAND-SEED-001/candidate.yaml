@@ -1,0 +1,18 @@
+schemaVersion: candidate/v1
+candidateId: candidate:agent-design:CAND-SEED-001
+operation: CREATE
+targetCapability: skill:agent-design:authority-gap-review
+sourceExperiences:
+- experience:agent-design:EXP-SEED-002
+scopeHypothesis: Architecture review where explicit project authority is available.
+expectedImprovement: Reduce silent authority override by shared guidance.
+evidence:
+- sourceType: HUMAN_REVIEW
+  reference: review://bootstrap/authority-gap-review
+  visibility: SHARED
+counterexamples:
+- Exploratory work with no established project truth.
+evalRequirements:
+- eval:agent-design:authority-gap-review
+promotionStatus: DRAFT
+authorityDecision: PENDING

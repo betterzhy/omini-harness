@@ -1,0 +1,72 @@
+{
+  "entries": [
+    {
+      "authorityDecision": "PENDING",
+      "contentHash": "cbf0647e6caac7b119ac304ab229551da7d5aba0bc44c4c947642cf07418174b",
+      "domain": "design-learning",
+      "entryType": "CANDIDATE",
+      "id": "candidate:agent-design:CAND-SEED-001",
+      "location": "design/learning/candidates/candidate__agent-design__CAND-SEED-001",
+      "operation": "CREATE",
+      "promotionStatus": "DRAFT",
+      "sourceExperiences": [
+        "experience:agent-design:EXP-SEED-002"
+      ],
+      "targetCapability": "skill:agent-design:authority-gap-review"
+    },
+    {
+      "authorityDecision": "PENDING",
+      "contentHash": "cbc945c95700907c5f06db982b62d786115eb7e4ac72811a4bea188b9ca78781",
+      "domain": "design-learning",
+      "entryType": "CANDIDATE",
+      "id": "candidate:agent-design:CAND-SEED-002",
+      "location": "design/learning/candidates/candidate__agent-design__CAND-SEED-002",
+      "operation": "BROADEN_SCOPE",
+      "promotionStatus": "DRAFT",
+      "sourceExperiences": [
+        "experience:agent-design:EXP-SEED-001",
+        "experience:agent-design:EXP-SEED-003"
+      ],
+      "targetCapability": "skill:agent-design:architecture-review"
+    },
+    {
+      "contentHash": "935e50428ccd540449627ad6b53c6b8f448bda7ed8358e80abf3325a0a62bd27",
+      "designStage": "BOUNDARY_CLOSURE",
+      "domain": "design-learning",
+      "entryType": "EXPERIENCE",
+      "id": "experience:agent-design:EXP-SEED-001",
+      "location": "design/learning/experiences/experience-seed-001.yaml",
+      "sourceReference": "chatgpt://bootstrap/design-closure-calibration",
+      "triageDecision": "CROSS_PROJECT_CANDIDATE",
+      "triageStatus": "TRIAGED",
+      "visibility": "PRIVATE"
+    },
+    {
+      "contentHash": "3038c76231c9d62ce9fc02b390c061542a17f8c37fab31c7178ba1f8efe14621",
+      "designStage": "CALIBRATION",
+      "domain": "design-learning",
+      "entryType": "EXPERIENCE",
+      "id": "experience:agent-design:EXP-SEED-002",
+      "location": "design/learning/experiences/experience-seed-002.yaml",
+      "sourceReference": "baseline://agent-native-engineering/1.0",
+      "triageDecision": "CROSS_PROJECT_CANDIDATE",
+      "triageStatus": "TRIAGED",
+      "visibility": "SHARED"
+    },
+    {
+      "contentHash": "21239453897e9b37cff9f18a97bdef9deac41e261359fb2f1baac38eb09f8805",
+      "designStage": "BASELINE",
+      "domain": "design-learning",
+      "entryType": "EXPERIENCE",
+      "id": "experience:agent-design:EXP-SEED-003",
+      "location": "design/learning/experiences/experience-seed-003.yaml",
+      "sourceReference": "review://bootstrap/next-topic-routing",
+      "triageDecision": "CROSS_PROJECT_CANDIDATE",
+      "triageStatus": "TRIAGED",
+      "visibility": "SHARED"
+    }
+  ],
+  "generatorVersion": "0.1.0",
+  "schemaVersion": "design-learning-registry/v1",
+  "sourceRevision": "content-sha256:df6f0cd0ca1dd9a4a21620c507bbbe6460ed1d1f3d0e95e937b1f34873f4314c"
+}

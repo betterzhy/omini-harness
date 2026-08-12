@@ -1,0 +1,1 @@
+{"command": "registry build", "data": {"check": true, "counts": {"design": 10, "designLearning": 5, "engineering": 6}}, "ok": true, "schemaVersion": "harness-cli/v1"}

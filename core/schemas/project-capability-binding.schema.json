@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-evolution.local/core/schemas/project-capability-binding.schema.json",
+  "type": "object",
+  "required": ["schemaVersion", "profiles", "capabilities", "extensions", "disabledCapabilities"],
+  "properties": {
+    "schemaVersion": {"const": "project-capability-binding/v1"},
+    "profiles": {"type": "array", "items": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$"}, "uniqueItems": true},
+    "capabilities": {"type": "array", "items": {"type": "string", "pattern": "^(principle|framework|skill|workflow):[a-z0-9][a-z0-9._-]*:[a-z0-9][a-z0-9._-]*$"}, "uniqueItems": true},
+    "extensions": {"type": "array", "items": {"type": "string", "pattern": "^(principle|framework|skill|workflow):[a-z0-9][a-z0-9._-]*:[a-z0-9][a-z0-9._-]*$"}, "uniqueItems": true},
+    "disabledCapabilities": {"type": "array", "items": {"type": "string", "pattern": "^(principle|framework|skill|workflow):[a-z0-9][a-z0-9._-]*:[a-z0-9][a-z0-9._-]*$"}, "uniqueItems": true}
+  },
+  "additionalProperties": false
+}

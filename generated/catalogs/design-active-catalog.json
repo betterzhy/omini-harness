@@ -1,0 +1,463 @@
+{
+  "entries": [
+    {
+      "contentHash": "4fd4857d170c01c8c7672d5e16353be26a2b10897e31952d15172e418eb23f49",
+      "domain": "design",
+      "id": "framework:agent-design:authority-analysis",
+      "kind": "FRAMEWORK",
+      "location": "design/capabilities/frameworks/authority-analysis",
+      "modelSensitivity": "MODEL_INDEPENDENT",
+      "relationships": {
+        "constrainedBy": [],
+        "dependsOn": [
+          "principle:agent-design:project-truth-over-generic-guidance"
+        ],
+        "derivedFrom": [],
+        "extends": [],
+        "supersedes": []
+      },
+      "runtimeCompatibility": [
+        "CHATGPT",
+        "CODEX",
+        "GENERIC_AGENT"
+      ],
+      "scope": {
+        "domain": [
+          "agent-design"
+        ],
+        "intent": [
+          "architecture-review",
+          "design-closure"
+        ],
+        "runtime": [
+          "CHATGPT",
+          "CODEX",
+          "GENERIC_AGENT"
+        ],
+        "tags": [
+          "bootstrap-seed"
+        ]
+      },
+      "summary": "Examine which sources may state, change, approve, or verify design facts.",
+      "title": "Authority Analysis",
+      "version": "1.0.0",
+      "visibility": "SHARED"
+    },
+    {
+      "contentHash": "7a6d87e989ae4e86814fffff078b9a2af686a1e79e98f1831db7abb9ab017a09",
+      "domain": "design",
+      "id": "framework:agent-design:lifecycle-analysis",
+      "kind": "FRAMEWORK",
+      "location": "design/capabilities/frameworks/lifecycle-analysis",
+      "modelSensitivity": "MODEL_INDEPENDENT",
+      "relationships": {
+        "constrainedBy": [],
+        "dependsOn": [
+          "principle:agent-design:project-truth-over-generic-guidance"
+        ],
+        "derivedFrom": [],
+        "extends": [],
+        "supersedes": []
+      },
+      "runtimeCompatibility": [
+        "CHATGPT",
+        "CODEX",
+        "GENERIC_AGENT"
+      ],
+      "scope": {
+        "domain": [
+          "agent-design"
+        ],
+        "intent": [
+          "architecture-review",
+          "design-closure"
+        ],
+        "runtime": [
+          "CHATGPT",
+          "CODEX",
+          "GENERIC_AGENT"
+        ],
+        "tags": [
+          "bootstrap-seed"
+        ]
+      },
+      "summary": "Examine lifecycle states, transitions, terminality, reopen conditions, and ownership.",
+      "title": "Lifecycle Analysis",
+      "version": "1.0.0",
+      "visibility": "SHARED"
+    },
+    {
+      "contentHash": "e124ea2c4b2906bc5d7d8fb2ea37e648442600bdab6bb2bf658861850ea25ee3",
+      "domain": "design",
+      "id": "principle:agent-design:canonical-capability-not-runtime-prompt",
+      "kind": "PRINCIPLE",
+      "location": "design/capabilities/principles/canonical-capability-not-runtime-prompt",
+      "modelSensitivity": "MODEL_INDEPENDENT",
+      "relationships": {
+        "constrainedBy": [],
+        "dependsOn": [],
+        "derivedFrom": [],
+        "extends": [],
+        "supersedes": []
+      },
+      "runtimeCompatibility": [
+        "CHATGPT",
+        "CODEX",
+        "GENERIC_AGENT"
+      ],
+      "scope": {
+        "domain": [
+          "agent-design"
+        ],
+        "intent": [
+          "design-governance"
+        ],
+        "runtime": [
+          "CHATGPT",
+          "CODEX",
+          "GENERIC_AGENT"
+        ],
+        "tags": [
+          "bootstrap-seed"
+        ]
+      },
+      "summary": "Canonical design meaning remains independent from runtime prompt packaging.",
+      "title": "Canonical Capability Is Not A Runtime Prompt",
+      "version": "1.0.0",
+      "visibility": "SHARED"
+    },
+    {
+      "contentHash": "c7bf1c1477f24ad95b0cf6eff47c2fe9a902e33d257b3ffae51f5e92bafc66c0",
+      "domain": "design",
+      "id": "principle:agent-design:closure-requires-authority",
+      "kind": "PRINCIPLE",
+      "location": "design/capabilities/principles/closure-requires-authority",
+      "modelSensitivity": "MODEL_INDEPENDENT",
+      "relationships": {
+        "constrainedBy": [],
+        "dependsOn": [],
+        "derivedFrom": [],
+        "extends": [],
+        "supersedes": []
+      },
+      "runtimeCompatibility": [
+        "CHATGPT",
+        "CODEX",
+        "GENERIC_AGENT"
+      ],
+      "scope": {
+        "domain": [
+          "agent-design"
+        ],
+        "intent": [
+          "design-governance"
+        ],
+        "runtime": [
+          "CHATGPT",
+          "CODEX",
+          "GENERIC_AGENT"
+        ],
+        "tags": [
+          "bootstrap-seed"
+        ]
+      },
+      "summary": "Topic closure is an explicit authority-governed state.",
+      "title": "Closure Requires Authority",
+      "version": "1.0.0",
+      "visibility": "SHARED"
+    },
+    {
+      "contentHash": "fb16ec4b824fea1ccb63c589b314253c56b2cd29992c3008a4dde415532d28ab",
+      "domain": "design",
+      "id": "principle:agent-design:project-truth-over-generic-guidance",
+      "kind": "PRINCIPLE",
+      "location": "design/capabilities/principles/project-truth-over-generic-guidance",
+      "modelSensitivity": "MODEL_INDEPENDENT",
+      "relationships": {
+        "constrainedBy": [],
+        "dependsOn": [],
+        "derivedFrom": [],
+        "extends": [],
+        "supersedes": []
+      },
+      "runtimeCompatibility": [
+        "CHATGPT",
+        "CODEX",
+        "GENERIC_AGENT"
+      ],
+      "scope": {
+        "domain": [
+          "agent-design"
+        ],
+        "intent": [
+          "design-governance"
+        ],
+        "runtime": [
+          "CHATGPT",
+          "CODEX",
+          "GENERIC_AGENT"
+        ],
+        "tags": [
+          "bootstrap-seed"
+        ]
+      },
+      "summary": "Project-specific canonical truth outranks generic shared guidance.",
+      "title": "Project Truth Over Generic Guidance",
+      "version": "1.0.0",
+      "visibility": "SHARED"
+    },
+    {
+      "contentHash": "00094ad3677d968fa101879886d2dc0e14bac5926930ddcfad897c9f8879c834",
+      "domain": "design",
+      "id": "skill:agent-design:architecture-review",
+      "kind": "SKILL",
+      "location": "design/capabilities/skills/architecture-review",
+      "modelSensitivity": "MODEL_INDEPENDENT",
+      "relationships": {
+        "constrainedBy": [],
+        "dependsOn": [
+          "principle:agent-design:project-truth-over-generic-guidance",
+          "framework:agent-design:authority-analysis",
+          "framework:agent-design:lifecycle-analysis"
+        ],
+        "derivedFrom": [],
+        "extends": [],
+        "supersedes": []
+      },
+      "runtimeCompatibility": [
+        "CHATGPT",
+        "CODEX",
+        "GENERIC_AGENT"
+      ],
+      "scope": {
+        "domain": [
+          "agent-design"
+        ],
+        "intent": [
+          "architecture-review"
+        ],
+        "runtime": [
+          "CHATGPT",
+          "CODEX",
+          "GENERIC_AGENT"
+        ],
+        "stage": [
+          "EXPLORATION",
+          "FOCUSED_DESIGN",
+          "CALIBRATION",
+          "BOUNDARY_CLOSURE",
+          "ENGINEERING_DESIGN",
+          "REPOSITORY_LANDING"
+        ],
+        "tags": [
+          "bootstrap-seed"
+        ]
+      },
+      "summary": "Review architecture using explicit authority, lifecycle, scope, and project constraints.",
+      "title": "Architecture Review",
+      "version": "1.0.0",
+      "visibility": "SHARED"
+    },
+    {
+      "contentHash": "7fa3bb06513b3ffb97846c823451cd0832737e55c5960ad3e664f1f83a82e264",
+      "domain": "design",
+      "id": "skill:agent-design:baseline-finalization",
+      "kind": "SKILL",
+      "location": "design/capabilities/skills/baseline-finalization",
+      "modelSensitivity": "MODEL_INDEPENDENT",
+      "relationships": {
+        "constrainedBy": [],
+        "dependsOn": [
+          "principle:agent-design:closure-requires-authority",
+          "principle:agent-design:project-truth-over-generic-guidance"
+        ],
+        "derivedFrom": [],
+        "extends": [],
+        "supersedes": []
+      },
+      "runtimeCompatibility": [
+        "CHATGPT",
+        "CODEX",
+        "GENERIC_AGENT"
+      ],
+      "scope": {
+        "domain": [
+          "agent-design"
+        ],
+        "intent": [
+          "baseline-finalization"
+        ],
+        "runtime": [
+          "CHATGPT",
+          "CODEX",
+          "GENERIC_AGENT"
+        ],
+        "stage": [
+          "BASELINE"
+        ],
+        "tags": [
+          "bootstrap-seed"
+        ]
+      },
+      "summary": "Materialize an accepted design baseline without inventing new decisions.",
+      "title": "Baseline Finalization",
+      "version": "1.0.0",
+      "visibility": "SHARED"
+    },
+    {
+      "contentHash": "ca40a8b7b3e0e350f13f8fc0f5bf92feed371cfc9cf8314c7f5508e857980637",
+      "domain": "design",
+      "id": "skill:agent-design:design-closure-assessment",
+      "kind": "SKILL",
+      "location": "design/capabilities/skills/design-closure-assessment",
+      "modelSensitivity": "MODEL_INDEPENDENT",
+      "relationships": {
+        "constrainedBy": [],
+        "dependsOn": [
+          "principle:agent-design:closure-requires-authority",
+          "framework:agent-design:authority-analysis",
+          "framework:agent-design:lifecycle-analysis"
+        ],
+        "derivedFrom": [],
+        "extends": [],
+        "supersedes": []
+      },
+      "runtimeCompatibility": [
+        "CHATGPT",
+        "CODEX",
+        "GENERIC_AGENT"
+      ],
+      "scope": {
+        "domain": [
+          "agent-design"
+        ],
+        "intent": [
+          "design-closure",
+          "closure-assessment"
+        ],
+        "runtime": [
+          "CHATGPT",
+          "CODEX",
+          "GENERIC_AGENT"
+        ],
+        "stage": [
+          "BOUNDARY_CLOSURE",
+          "BASELINE"
+        ],
+        "tags": [
+          "bootstrap-seed"
+        ]
+      },
+      "summary": "Assess whether a topic has enough accepted authority/evidence to be eligible for closure.",
+      "title": "Design Closure Assessment",
+      "version": "1.0.0",
+      "visibility": "SHARED"
+    },
+    {
+      "contentHash": "a9ae7d5893f27cdcbc4d27fd703d11891469056f723b092ad79ce0d61d19d885",
+      "domain": "design",
+      "id": "skill:agent-design:next-topic-routing",
+      "kind": "SKILL",
+      "location": "design/capabilities/skills/next-topic-routing",
+      "modelSensitivity": "MODEL_INDEPENDENT",
+      "relationships": {
+        "constrainedBy": [],
+        "dependsOn": [
+          "principle:agent-design:project-truth-over-generic-guidance",
+          "framework:agent-design:lifecycle-analysis"
+        ],
+        "derivedFrom": [],
+        "extends": [],
+        "supersedes": []
+      },
+      "runtimeCompatibility": [
+        "CHATGPT",
+        "CODEX",
+        "GENERIC_AGENT"
+      ],
+      "scope": {
+        "domain": [
+          "agent-design"
+        ],
+        "intent": [
+          "next-topic-routing"
+        ],
+        "runtime": [
+          "CHATGPT",
+          "CODEX",
+          "GENERIC_AGENT"
+        ],
+        "stage": [
+          "FOCUSED_DESIGN",
+          "CALIBRATION",
+          "BOUNDARY_CLOSURE",
+          "BASELINE",
+          "ENGINEERING_DESIGN",
+          "REPOSITORY_LANDING"
+        ],
+        "tags": [
+          "bootstrap-seed"
+        ]
+      },
+      "summary": "Select candidate next design topics from explicit project state and workflow metadata.",
+      "title": "Next Topic Routing",
+      "version": "1.0.0",
+      "visibility": "SHARED"
+    },
+    {
+      "contentHash": "783ea0272a87ae3265cbaf07eb03bda949d0627df61ed7160cafc04cd98cce28",
+      "domain": "design",
+      "id": "workflow:agent-design:design-discussion",
+      "kind": "WORKFLOW",
+      "location": "design/capabilities/workflows/design-discussion",
+      "modelSensitivity": "MODEL_INDEPENDENT",
+      "relationships": {
+        "constrainedBy": [],
+        "dependsOn": [
+          "principle:agent-design:closure-requires-authority",
+          "principle:agent-design:project-truth-over-generic-guidance"
+        ],
+        "derivedFrom": [],
+        "extends": [],
+        "supersedes": []
+      },
+      "runtimeCompatibility": [
+        "CHATGPT",
+        "CODEX",
+        "GENERIC_AGENT"
+      ],
+      "scope": {
+        "domain": [
+          "agent-design"
+        ],
+        "intent": [
+          "design-discussion"
+        ],
+        "runtime": [
+          "CHATGPT",
+          "CODEX",
+          "GENERIC_AGENT"
+        ],
+        "stage": [
+          "EXPLORATION",
+          "FOCUSED_DESIGN",
+          "CALIBRATION",
+          "BOUNDARY_CLOSURE",
+          "BASELINE",
+          "ENGINEERING_DESIGN",
+          "REPOSITORY_LANDING"
+        ],
+        "tags": [
+          "bootstrap-seed"
+        ]
+      },
+      "summary": "Coordinate design discussion stages while preserving authority and optional stage skipping.",
+      "title": "Design Discussion",
+      "version": "1.0.0",
+      "visibility": "SHARED"
+    }
+  ],
+  "generatorVersion": "0.1.0",
+  "schemaVersion": "design-active-catalog/v1",
+  "sourceRevision": "content-sha256:5acfd6caed1d11473907ac466014bf6571046578323570a24180cdf80b52849a"
+}

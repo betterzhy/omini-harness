@@ -1,0 +1,217 @@
+{
+  "closedTopics": [
+    {
+      "baselineReference": "baseline://project-fixture/authority-model/1.0",
+      "reopenConditions": [
+        "NEW_EVIDENCE",
+        "REQUIREMENT_CHANGE",
+        "INVALIDATED_ASSUMPTION",
+        "IMPLEMENTATION_FEEDBACK",
+        "EXPLICIT_AUTHORITY"
+      ],
+      "topicId": "authority-model"
+    }
+  ],
+  "conflictSignals": [],
+  "explain": {
+    "excluded": [
+      {
+        "excludedBecause": [
+          "intent-mismatch"
+        ],
+        "id": "principle:agent-design:canonical-capability-not-runtime-prompt"
+      },
+      {
+        "excludedBecause": [
+          "intent-mismatch",
+          "stage-mismatch"
+        ],
+        "id": "skill:agent-design:baseline-finalization"
+      },
+      {
+        "excludedBecause": [
+          "intent-mismatch"
+        ],
+        "id": "skill:agent-design:next-topic-routing"
+      },
+      {
+        "excludedBecause": [
+          "intent-mismatch"
+        ],
+        "id": "workflow:agent-design:design-discussion"
+      }
+    ],
+    "selected": [
+      {
+        "contentHash": "4fd4857d170c01c8c7672d5e16353be26a2b10897e31952d15172e418eb23f49",
+        "id": "framework:agent-design:authority-analysis",
+        "kind": "FRAMEWORK",
+        "selectedBecause": [
+          "dependency-of:skill:agent-design:architecture-review",
+          "dependency-of:skill:agent-design:design-closure-assessment",
+          "explicit-profile",
+          "intent-match",
+          "profile:agent-design-base",
+          "runtime-match"
+        ],
+        "version": "1.0.0"
+      },
+      {
+        "contentHash": "7a6d87e989ae4e86814fffff078b9a2af686a1e79e98f1831db7abb9ab017a09",
+        "id": "framework:agent-design:lifecycle-analysis",
+        "kind": "FRAMEWORK",
+        "selectedBecause": [
+          "dependency-of:skill:agent-design:architecture-review",
+          "dependency-of:skill:agent-design:design-closure-assessment",
+          "explicit-profile",
+          "intent-match",
+          "profile:agent-design-base",
+          "runtime-match"
+        ],
+        "version": "1.0.0"
+      },
+      {
+        "contentHash": "c7bf1c1477f24ad95b0cf6eff47c2fe9a902e33d257b3ffae51f5e92bafc66c0",
+        "id": "principle:agent-design:closure-requires-authority",
+        "kind": "PRINCIPLE",
+        "selectedBecause": [
+          "dependency-of:skill:agent-design:design-closure-assessment"
+        ],
+        "version": "1.0.0"
+      },
+      {
+        "contentHash": "fb16ec4b824fea1ccb63c589b314253c56b2cd29992c3008a4dde415532d28ab",
+        "id": "principle:agent-design:project-truth-over-generic-guidance",
+        "kind": "PRINCIPLE",
+        "selectedBecause": [
+          "dependency-of:framework:agent-design:authority-analysis",
+          "dependency-of:framework:agent-design:lifecycle-analysis",
+          "dependency-of:skill:agent-design:architecture-review"
+        ],
+        "version": "1.0.0"
+      },
+      {
+        "contentHash": "00094ad3677d968fa101879886d2dc0e14bac5926930ddcfad897c9f8879c834",
+        "id": "skill:agent-design:architecture-review",
+        "kind": "SKILL",
+        "selectedBecause": [
+          "explicit-profile",
+          "intent-match",
+          "profile:agent-design-base",
+          "runtime-match",
+          "stage-match"
+        ],
+        "version": "1.0.0"
+      },
+      {
+        "contentHash": "ca40a8b7b3e0e350f13f8fc0f5bf92feed371cfc9cf8314c7f5508e857980637",
+        "id": "skill:agent-design:design-closure-assessment",
+        "kind": "SKILL",
+        "selectedBecause": [
+          "workflow-required",
+          "workflow-stage:BOUNDARY_CLOSURE"
+        ],
+        "version": "1.0.0"
+      }
+    ]
+  },
+  "humanGates": [
+    "closure authority required"
+  ],
+  "intent": "architecture-review",
+  "project": "project-fixture",
+  "projectAuthorityReferences": [
+    "baseline://project-fixture/authority-model/1.0",
+    "decision://project-fixture/project-truth-wins"
+  ],
+  "protectedDecisions": [
+    "decision://project-fixture/project-truth-wins"
+  ],
+  "reopenSignal": null,
+  "requestedOutput": "review findings",
+  "requiredSelfReview": [
+    "Did project truth override generic guidance where applicable?",
+    "Did I avoid mutating closure or promotion state?"
+  ],
+  "resolutionId": "resolution:5226bbfe7a0ab72f70494cb4",
+  "runtime": "CHATGPT",
+  "schemaVersion": "resolved-design-context/v1",
+  "selectedCapabilities": [
+    {
+      "contentHash": "4fd4857d170c01c8c7672d5e16353be26a2b10897e31952d15172e418eb23f49",
+      "id": "framework:agent-design:authority-analysis",
+      "kind": "FRAMEWORK",
+      "selectedBecause": [
+        "dependency-of:skill:agent-design:architecture-review",
+        "dependency-of:skill:agent-design:design-closure-assessment",
+        "explicit-profile",
+        "intent-match",
+        "profile:agent-design-base",
+        "runtime-match"
+      ],
+      "version": "1.0.0"
+    },
+    {
+      "contentHash": "7a6d87e989ae4e86814fffff078b9a2af686a1e79e98f1831db7abb9ab017a09",
+      "id": "framework:agent-design:lifecycle-analysis",
+      "kind": "FRAMEWORK",
+      "selectedBecause": [
+        "dependency-of:skill:agent-design:architecture-review",
+        "dependency-of:skill:agent-design:design-closure-assessment",
+        "explicit-profile",
+        "intent-match",
+        "profile:agent-design-base",
+        "runtime-match"
+      ],
+      "version": "1.0.0"
+    },
+    {
+      "contentHash": "c7bf1c1477f24ad95b0cf6eff47c2fe9a902e33d257b3ffae51f5e92bafc66c0",
+      "id": "principle:agent-design:closure-requires-authority",
+      "kind": "PRINCIPLE",
+      "selectedBecause": [
+        "dependency-of:skill:agent-design:design-closure-assessment"
+      ],
+      "version": "1.0.0"
+    },
+    {
+      "contentHash": "fb16ec4b824fea1ccb63c589b314253c56b2cd29992c3008a4dde415532d28ab",
+      "id": "principle:agent-design:project-truth-over-generic-guidance",
+      "kind": "PRINCIPLE",
+      "selectedBecause": [
+        "dependency-of:framework:agent-design:authority-analysis",
+        "dependency-of:framework:agent-design:lifecycle-analysis",
+        "dependency-of:skill:agent-design:architecture-review"
+      ],
+      "version": "1.0.0"
+    },
+    {
+      "contentHash": "00094ad3677d968fa101879886d2dc0e14bac5926930ddcfad897c9f8879c834",
+      "id": "skill:agent-design:architecture-review",
+      "kind": "SKILL",
+      "selectedBecause": [
+        "explicit-profile",
+        "intent-match",
+        "profile:agent-design-base",
+        "runtime-match",
+        "stage-match"
+      ],
+      "version": "1.0.0"
+    },
+    {
+      "contentHash": "ca40a8b7b3e0e350f13f8fc0f5bf92feed371cfc9cf8314c7f5508e857980637",
+      "id": "skill:agent-design:design-closure-assessment",
+      "kind": "SKILL",
+      "selectedBecause": [
+        "workflow-required",
+        "workflow-stage:BOUNDARY_CLOSURE"
+      ],
+      "version": "1.0.0"
+    }
+  ],
+  "semanticSelectionCandidates": [],
+  "stage": "BOUNDARY_CLOSURE",
+  "topic": "resolver-mvp",
+  "topicGuard": "OPEN_OR_IN_PROGRESS",
+  "workflowStage": "BOUNDARY_CLOSURE"
+}

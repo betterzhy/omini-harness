@@ -1,0 +1,24 @@
+schema_version: repository-manifest/v1
+protocol_version: engineering-repository/v1
+namespace: com.company.payment
+schemas_root: engineering/schemas
+artifact_roots:
+  - path: contracts
+    kinds: [contract]
+  - path: policies
+    kinds: [policy]
+  - path: verification
+    kinds: [validator]
+  - path: skills
+    kinds: [skill]
+registration_roots:
+  - engineering/registrations
+continuous_learning:
+  experiences_root: engineering/continuous-learning/experiences
+  candidates_root: engineering/continuous-learning/candidates
+generated:
+  root: engineering/generated
+  registry: registry.json
+  active_catalog: active-catalog.json
+  capability_inventory: capability-inventory.json
+  commit_discovery_projections: true

@@ -1,0 +1,19 @@
+schemaVersion: experience/v1
+experienceId: experience:agent-design:EXP-SEED-002
+source:
+  sourceType: PROJECT_ARTIFACT
+  reference: baseline://agent-native-engineering/1.0
+  visibility: SHARED
+  distillation: Project authority must override generic reusable design guidance.
+capturedAt: '2026-08-10T12:21:00Z'
+designStage: CALIBRATION
+signal: Generic guidance can conflict with explicit project authority.
+observedBehavior: Reusable reasoning may overreach when project-specific facts are
+  not resolved first.
+humanCorrection: Resolve project authority before applying shared guidance.
+impact: Protects accepted project decisions and boundaries.
+triageStatus: TRIAGED
+triageDecision: CROSS_PROJECT_CANDIDATE
+candidateHints:
+- skill:agent-design:authority-gap-review
+visibility: SHARED

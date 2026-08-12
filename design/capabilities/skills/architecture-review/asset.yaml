@@ -1,0 +1,78 @@
+schemaVersion: design-capability/v1
+id: skill:agent-design:architecture-review
+kind: SKILL
+version: 1.0.0
+title: Architecture Review
+summary: Review architecture using explicit authority, lifecycle, scope, and project
+  constraints.
+lifecycle: ACTIVE
+validity: VALID
+scope:
+  intent:
+  - architecture-review
+  stage:
+  - EXPLORATION
+  - FOCUSED_DESIGN
+  - CALIBRATION
+  - BOUNDARY_CLOSURE
+  - ENGINEERING_DESIGN
+  - REPOSITORY_LANDING
+  runtime:
+  - CHATGPT
+  - CODEX
+  - GENERIC_AGENT
+  domain:
+  - agent-design
+  tags:
+  - bootstrap-seed
+modelSensitivity: MODEL_INDEPENDENT
+visibility: SHARED
+provenance:
+- sourceType: PROJECT_ARTIFACT
+  reference: baseline://agent-design-evolution-engineering-implementation/1.0
+  revision: CLOSED
+  visibility: SHARED
+  distillation: Bootstrap seed authorized from the closed Agent Design Evolution engineering
+    baseline.
+relationships:
+  dependsOn:
+  - principle:agent-design:project-truth-over-generic-guidance
+  - framework:agent-design:authority-analysis
+  - framework:agent-design:lifecycle-analysis
+  extends: []
+  derivedFrom: []
+  supersedes: []
+  constrainedBy: []
+evalBindings: []
+contentFile: content.md
+lastValidatedAt: '2026-08-10T12:00:00Z'
+revalidationTriggers:
+- authority-change
+- runtime-contract-change
+skill:
+  skillRole: LEAF
+  intent:
+  - architecture-review
+  triggers:
+  - architecture review
+  whenNotToUse:
+  - Do not use to override explicit project authority.
+  requiredContext:
+  - project design state
+  - project authority references
+  referencedCapabilities:
+  - principle:agent-design:project-truth-over-generic-guidance
+  - framework:agent-design:authority-analysis
+  - framework:agent-design:lifecycle-analysis
+  humanGates:
+  - preserve explicit decision/closure authority
+  outputContract:
+  - findings
+  - authority conflicts
+  - boundary risks
+  - follow-up questions
+  stopConditions:
+  - requested scope reviewed
+  selfReview:
+  - Did project truth override generic guidance where applicable?
+  - Did I avoid mutating closure or promotion state?

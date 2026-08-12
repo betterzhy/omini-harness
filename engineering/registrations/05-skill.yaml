@@ -1,0 +1,16 @@
+schema_version: registration/v1
+id: skill:com.company.payment:repository-change-review-deprecated
+type: skill
+location:
+  path: skills/repository-change-review-deprecated.md
+title: Repository Change Review Deprecated
+lifecycle: DEPRECATED
+validity: VALID
+artifact_revision: 1.0.0
+scope:
+  base: scope:com.company.payment:repository
+authority_ref:
+- authority:com.company.payment:repository-governance
+relations:
+  superseded_by:
+  - skill:com.company.payment:repository-change-review

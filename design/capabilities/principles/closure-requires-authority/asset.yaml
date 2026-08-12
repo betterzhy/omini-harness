@@ -1,0 +1,46 @@
+schemaVersion: design-capability/v1
+id: principle:agent-design:closure-requires-authority
+kind: PRINCIPLE
+version: 1.0.0
+title: Closure Requires Authority
+summary: Topic closure is an explicit authority-governed state.
+lifecycle: ACTIVE
+validity: VALID
+scope:
+  intent:
+  - design-governance
+  runtime:
+  - CHATGPT
+  - CODEX
+  - GENERIC_AGENT
+  domain:
+  - agent-design
+  tags:
+  - bootstrap-seed
+modelSensitivity: MODEL_INDEPENDENT
+visibility: SHARED
+provenance:
+- sourceType: PROJECT_ARTIFACT
+  reference: baseline://agent-design-evolution-engineering-implementation/1.0
+  revision: CLOSED
+  visibility: SHARED
+  distillation: Bootstrap seed authorized from the closed Agent Design Evolution engineering
+    baseline.
+relationships:
+  dependsOn: []
+  extends: []
+  derivedFrom: []
+  supersedes: []
+  constrainedBy: []
+evalBindings: []
+contentFile: content.md
+lastValidatedAt: '2026-08-10T12:00:00Z'
+revalidationTriggers:
+- authority-change
+- runtime-contract-change
+principle:
+  invariant: A design topic may be treated as CLOSED only when an authorized closure
+    state and baseline reference exist; assessment alone must not mutate closure state.
+  exceptions: []
+  negativeExamples:
+  - Generated prompt becomes canonical truth.

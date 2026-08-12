@@ -1,0 +1,23 @@
+schemaVersion: design-eval/v1
+evalId: eval:agent-design:architecture-review
+targetCapability: skill:agent-design:architecture-review
+scenario: Review a multi-layer architecture with explicit accepted decisions.
+hiddenRisks:
+- silent authority drift
+expectedReasoningCoverage:
+- authority
+- lifecycle
+- scope
+expectedQuestions:
+- What is authoritative for this decision?
+forbiddenAssumptions:
+- Reusable guidance is automatically project truth.
+criticalBoundaries:
+- Do not invent or overwrite accepted decisions.
+acceptableAlternativeOutcomes:
+- Escalate to human authority when evidence is insufficient.
+regressionCriteria:
+- Project truth is silently overridden.
+transferScope:
+- agent-design
+modelSensitivity: MODEL_INDEPENDENT

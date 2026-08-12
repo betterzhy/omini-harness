@@ -1,0 +1,1 @@
+{"command": "catalog build", "data": {"check": true, "counts": {"design": 10, "engineering": 4, "unified": 14}}, "ok": true, "schemaVersion": "harness-cli/v1"}

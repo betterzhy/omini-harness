@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-evolution.local/design/schemas/skill.schema.json",
+  "allOf": [
+    {"$ref": "https://agent-evolution.local/core/schemas/common-capability.schema.json"},
+    {
+      "type": "object",
+      "properties": {
+        "kind": {"const": "SKILL"},
+        "skill": {
+          "type": "object",
+          "required": ["skillRole", "intent", "triggers", "whenNotToUse", "requiredContext", "referencedCapabilities", "humanGates", "outputContract", "stopConditions", "selfReview"],
+          "properties": {
+            "skillRole": {"enum": ["LEAF", "ORCHESTRATION"]},
+            "intent": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
+            "triggers": {"type": "array", "items": {"type": "string", "minLength": 1}},
+            "whenNotToUse": {"type": "array", "items": {"type": "string", "minLength": 1}},
+            "requiredContext": {"type": "array", "items": {"type": "string", "minLength": 1}},
+            "referencedCapabilities": {"type": "array", "items": {"type": "string", "pattern": "^(principle|framework|skill|workflow):[a-z0-9][a-z0-9._-]*:[a-z0-9][a-z0-9._-]*$"}, "uniqueItems": true},
+            "humanGates": {"type": "array", "items": {"type": "string", "minLength": 1}},
+            "outputContract": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+            "stopConditions": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+            "selfReview": {"type": "array", "items": {"type": "string", "minLength": 1}}
+          },
+          "additionalProperties": false
+        }
+      },
+      "required": ["skill"]
+    }
+  ],
+  "unevaluatedProperties": false
+}

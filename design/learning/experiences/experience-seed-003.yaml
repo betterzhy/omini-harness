@@ -1,0 +1,20 @@
+schemaVersion: experience/v1
+experienceId: experience:agent-design:EXP-SEED-003
+source:
+  sourceType: HUMAN_REVIEW
+  reference: review://bootstrap/next-topic-routing
+  visibility: SHARED
+  distillation: Next-topic routing should use project state and dependencies rather
+    than reopen CLOSED topics.
+capturedAt: '2026-08-10T12:22:00Z'
+designStage: BASELINE
+signal: Next-topic routing needs explicit CLOSED-topic awareness.
+observedBehavior: Naive routing can recommend already closed exploration work.
+humanCorrection: Route from open topics, dependencies, and workflow state; never reopen
+  by inference.
+impact: Reduces repetitive design loops and preserves closure.
+triageStatus: TRIAGED
+triageDecision: CROSS_PROJECT_CANDIDATE
+candidateHints:
+- skill:agent-design:next-topic-routing
+visibility: SHARED

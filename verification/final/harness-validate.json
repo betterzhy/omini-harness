@@ -1,0 +1,1 @@
+{"command": "validate", "data": {"candidateCount": 2, "capabilityCount": 10, "evalCount": 7, "experienceCount": 3, "issues": [], "schemaVersion": "structural-validation-report/v1", "semanticGate": "NOT_ASSERTED_BY_CI", "structuralGate": "PASS"}, "ok": true, "schemaVersion": "harness-cli/v1"}

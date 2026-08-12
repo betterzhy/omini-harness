@@ -1,0 +1,75 @@
+schemaVersion: design-capability/v1
+id: skill:agent-design:design-closure-assessment
+kind: SKILL
+version: 1.0.0
+title: Design Closure Assessment
+summary: Assess whether a topic has enough accepted authority/evidence to be eligible
+  for closure.
+lifecycle: ACTIVE
+validity: VALID
+scope:
+  intent:
+  - design-closure
+  - closure-assessment
+  stage:
+  - BOUNDARY_CLOSURE
+  - BASELINE
+  runtime:
+  - CHATGPT
+  - CODEX
+  - GENERIC_AGENT
+  domain:
+  - agent-design
+  tags:
+  - bootstrap-seed
+modelSensitivity: MODEL_INDEPENDENT
+visibility: SHARED
+provenance:
+- sourceType: PROJECT_ARTIFACT
+  reference: baseline://agent-design-evolution-engineering-implementation/1.0
+  revision: CLOSED
+  visibility: SHARED
+  distillation: Bootstrap seed authorized from the closed Agent Design Evolution engineering
+    baseline.
+relationships:
+  dependsOn:
+  - principle:agent-design:closure-requires-authority
+  - framework:agent-design:authority-analysis
+  - framework:agent-design:lifecycle-analysis
+  extends: []
+  derivedFrom: []
+  supersedes: []
+  constrainedBy: []
+evalBindings: []
+contentFile: content.md
+lastValidatedAt: '2026-08-10T12:00:00Z'
+revalidationTriggers:
+- authority-change
+- runtime-contract-change
+skill:
+  skillRole: LEAF
+  intent:
+  - design-closure
+  - closure-assessment
+  triggers:
+  - design closure assessment
+  whenNotToUse:
+  - Do not use to override explicit project authority.
+  requiredContext:
+  - project design state
+  - project authority references
+  referencedCapabilities:
+  - principle:agent-design:closure-requires-authority
+  - framework:agent-design:authority-analysis
+  - framework:agent-design:lifecycle-analysis
+  humanGates:
+  - preserve explicit decision/closure authority
+  outputContract:
+  - closure assessment
+  - blocking gaps
+  - authority gate
+  stopConditions:
+  - assessment produced; no state mutation
+  selfReview:
+  - Did project truth override generic guidance where applicable?
+  - Did I avoid mutating closure or promotion state?

@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-evolution.local/design/schemas/workflow.schema.json",
+  "allOf": [
+    {"$ref": "https://agent-evolution.local/core/schemas/common-capability.schema.json"},
+    {
+      "type": "object",
+      "properties": {
+        "kind": {"const": "WORKFLOW"},
+        "workflow": {
+          "type": "object",
+          "required": ["stages", "allowedTransitions", "optionalStages", "humanGates", "requiredSkills", "artifactsProduced", "closureConditions", "routingRules"],
+          "properties": {
+            "stages": {"type": "array", "minItems": 1, "items": {"enum": ["EXPLORATION", "FOCUSED_DESIGN", "CALIBRATION", "BOUNDARY_CLOSURE", "BASELINE", "ENGINEERING_DESIGN", "REPOSITORY_LANDING"]}, "uniqueItems": true},
+            "entryConditions": {"type": "object", "additionalProperties": {"type": "array", "items": {"type": "string"}}},
+            "exitConditions": {"type": "object", "additionalProperties": {"type": "array", "items": {"type": "string"}}},
+            "allowedTransitions": {"type": "object", "additionalProperties": {"type": "array", "items": {"type": "string"}}},
+            "optionalStages": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+            "humanGates": {"type": "object", "additionalProperties": {"type": "array", "items": {"type": "string"}}},
+            "requiredSkills": {"type": "object", "additionalProperties": {"type": "array", "items": {"type": "string"}}},
+            "artifactsProduced": {"type": "object", "additionalProperties": {"type": "array", "items": {"type": "string"}}},
+            "closureConditions": {"type": "object", "additionalProperties": {"type": "array", "items": {"type": "string"}}},
+            "routingRules": {"type": "array", "items": {"type": "object"}}
+          },
+          "additionalProperties": false
+        }
+      },
+      "required": ["workflow"]
+    }
+  ],
+  "unevaluatedProperties": false
+}

@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-evolution.local/design/schemas/experience.schema.json",
+  "type": "object",
+  "required": [
+    "schemaVersion", "experienceId", "source", "capturedAt", "designStage",
+    "signal", "observedBehavior", "humanCorrection", "impact",
+    "triageStatus", "candidateHints", "visibility"
+  ],
+  "properties": {
+    "schemaVersion": {"const": "experience/v1"},
+    "experienceId": {"type": "string", "pattern": "^experience:[A-Za-z0-9._-]+:[A-Za-z0-9._-]+$"},
+    "source": {"$ref": "https://agent-evolution.local/core/schemas/source-reference.schema.json"},
+    "capturedAt": {"type": "string", "format": "date-time"},
+    "designStage": {"enum": ["EXPLORATION", "FOCUSED_DESIGN", "CALIBRATION", "BOUNDARY_CLOSURE", "BASELINE", "ENGINEERING_DESIGN", "REPOSITORY_LANDING"]},
+    "signal": {"type": "string", "minLength": 1},
+    "observedBehavior": {"type": "string", "minLength": 1},
+    "humanCorrection": {"type": "string", "minLength": 1},
+    "impact": {"type": "string", "minLength": 1},
+    "triageStatus": {"enum": ["UNTRIAGED", "TRIAGED"]},
+    "triageDecision": {"enum": ["IGNORE", "PERSONAL_PREFERENCE", "PROJECT_FACT", "PROJECT_EXPERIENCE", "CROSS_PROJECT_CANDIDATE"]},
+    "candidateHints": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
+    "visibility": {"enum": ["PRIVATE", "PROJECT", "SHARED", "PUBLIC"]}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"triageStatus": {"const": "TRIAGED"}}},
+      "then": {"required": ["triageDecision"]}
+    }
+  ],
+  "additionalProperties": false
+}

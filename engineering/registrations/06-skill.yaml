@@ -1,0 +1,14 @@
+schema_version: registration/v1
+id: skill:com.company.payment:repository-change-review-retired
+type: skill
+location:
+  path: skills/repository-change-review-retired.md
+title: Repository Change Review Retired
+lifecycle: RETIRED
+validity: VALID
+artifact_revision: 1.0.0
+scope:
+  base: scope:com.company.payment:repository
+authority_ref:
+- authority:com.company.payment:repository-governance
+relations: {}

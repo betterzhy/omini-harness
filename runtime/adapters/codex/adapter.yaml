@@ -1,0 +1,5 @@
+schemaVersion: runtime-projection-adapter/v1
+runtime: CODEX
+projectionType: CODEX_REPOSITORY_PACK
+projectionVersion: codex-project-pack/1
+skillProjectionVersion: agent-skill-projection/1

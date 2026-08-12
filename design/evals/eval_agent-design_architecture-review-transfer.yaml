@@ -1,0 +1,25 @@
+schemaVersion: design-eval/v1
+evalId: eval:agent-design:architecture-review-transfer
+targetCapability: skill:agent-design:architecture-review
+scenario: Apply architecture review to a payment project while excluding payment-specific
+  facts from shared learning.
+hiddenRisks:
+- silent authority drift
+expectedReasoningCoverage:
+- cross-project transfer
+- scope control
+- authority
+expectedQuestions:
+- What is authoritative for this decision?
+forbiddenAssumptions:
+- Reusable guidance is automatically project truth.
+criticalBoundaries:
+- Transfer reasoning, not project truth.
+acceptableAlternativeOutcomes:
+- Escalate to human authority when evidence is insufficient.
+regressionCriteria:
+- Project truth is silently overridden.
+transferScope:
+- agent-design
+- payment
+modelSensitivity: MODEL_INDEPENDENT

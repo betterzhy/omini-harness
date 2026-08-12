@@ -1,0 +1,81 @@
+{
+  "entries": [
+    {
+      "contentHash": "c0e1c04917d637d376167654520429fe9ec5dfef1ff217f80a5ab8fddf5ab3fa",
+      "domain": "engineering",
+      "id": "contract:com.company.payment:payment-api",
+      "kind": "CONTRACT",
+      "lifecycle": "ACTIVE",
+      "location": "contracts/payment/openapi.yaml",
+      "registrationLocation": "engineering/registrations/01-contract.yaml",
+      "relationships": {},
+      "scope": {
+        "base": "scope:com.company.payment:repository"
+      },
+      "title": "Payment API",
+      "validity": "VALID",
+      "version": "1.0.0"
+    },
+    {
+      "contentHash": "baaada4a38cb9919d2bf72f191975fa6e3b54a0867b5d83e6ec288258f7998b3",
+      "domain": "engineering",
+      "id": "policy:com.company.payment:generated-projection-integrity",
+      "kind": "POLICY",
+      "lifecycle": "ACTIVE",
+      "location": "policies/generated-projection-integrity/policy.md",
+      "registrationLocation": "engineering/registrations/02-policy.yaml",
+      "relationships": {
+        "constrained_by": []
+      },
+      "scope": {
+        "base": "scope:com.company.payment:repository"
+      },
+      "title": "Generated Projection Integrity",
+      "validity": "VALID",
+      "version": "1.0.0"
+    },
+    {
+      "contentHash": "5f04ea608917c13d63fb618b92e1ef7a494e7a10e8a97babd66bb4842a8436a6",
+      "domain": "engineering",
+      "id": "skill:com.company.payment:repository-change-review",
+      "kind": "SKILL",
+      "lifecycle": "ACTIVE",
+      "location": "skills/repository-change-review.md",
+      "registrationLocation": "engineering/registrations/04-skill.yaml",
+      "relationships": {
+        "depends_on": [
+          "policy:com.company.payment:generated-projection-integrity"
+        ]
+      },
+      "scope": {
+        "base": "scope:com.company.payment:repository"
+      },
+      "title": "Repository Change Review",
+      "validity": "VALID",
+      "version": "1.0.0"
+    },
+    {
+      "contentHash": "35e807cf6d6ac843b5e9d3f82241b271c401b16126c694c730089f0fe5145ed7",
+      "domain": "engineering",
+      "id": "validator:com.company.payment:generated-projection-integrity",
+      "kind": "VALIDATOR",
+      "lifecycle": "ACTIVE",
+      "location": "verification/generated-projection-integrity/check.py",
+      "registrationLocation": "engineering/registrations/03-validator.yaml",
+      "relationships": {
+        "depends_on": [
+          "policy:com.company.payment:generated-projection-integrity"
+        ]
+      },
+      "scope": {
+        "base": "scope:com.company.payment:repository"
+      },
+      "title": "Generated Projection Integrity Check",
+      "validity": "VALID",
+      "version": "1.0.0"
+    }
+  ],
+  "generator_version": "0.1.0",
+  "schema_version": "engineering-active-catalog/v1",
+  "source_revision": "content-sha256:f9bb8c67026ad92b643c4df1274548bf7fb394e582ed821042e829e2182e43a7"
+}

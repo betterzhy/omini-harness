@@ -1,0 +1,6 @@
+schemaVersion: project-capability-binding/v1
+profiles:
+  - agent-design-base
+capabilities: []
+extensions: []
+disabledCapabilities: []

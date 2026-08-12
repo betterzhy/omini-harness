@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-evolution.local/core/schemas/design-handoff.schema.json",
+  "type": "object",
+  "required": [
+    "schemaVersion", "project", "baselineReferences", "decisionReferences", "entityReferences",
+    "authorityReferences", "invariantReferences", "protectedBoundaryReferences", "externalContractReferences",
+    "assumptionReferences", "implementationConstraints", "openEngineeringQuestions", "verificationObligations",
+    "reopenConditions", "sourceRevision", "fieldAuthority"
+  ],
+  "properties": {
+    "schemaVersion": {"const": "design-handoff/v1"},
+    "project": {"type": "string", "minLength": 1},
+    "baselineReferences": {"$ref": "#/$defs/references"},
+    "decisionReferences": {"$ref": "#/$defs/references"},
+    "entityReferences": {"$ref": "#/$defs/references"},
+    "authorityReferences": {"$ref": "#/$defs/references"},
+    "invariantReferences": {"$ref": "#/$defs/references"},
+    "protectedBoundaryReferences": {"$ref": "#/$defs/references"},
+    "externalContractReferences": {"$ref": "#/$defs/references"},
+    "assumptionReferences": {"$ref": "#/$defs/references"},
+    "implementationConstraints": {"$ref": "#/$defs/references"},
+    "openEngineeringQuestions": {"$ref": "#/$defs/references"},
+    "verificationObligations": {"$ref": "#/$defs/references"},
+    "reopenConditions": {
+      "type": "array",
+      "items": {"enum": ["NEW_EVIDENCE", "REQUIREMENT_CHANGE", "INVALIDATED_ASSUMPTION", "IMPLEMENTATION_FEEDBACK", "EXPLICIT_AUTHORITY"]},
+      "uniqueItems": true
+    },
+    "sourceRevision": {"type": "string", "pattern": "^content-sha256:[0-9a-f]{64}$"},
+    "fieldAuthority": {
+      "type": "object",
+      "additionalProperties": {"enum": ["PROJECT_CANONICAL_REFERENCE", "PROJECT_HANDOFF_INPUT", "GENERATED_PROJECTION"]}
+    }
+  },
+  "$defs": {
+    "references": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true}
+  },
+  "additionalProperties": false
+}

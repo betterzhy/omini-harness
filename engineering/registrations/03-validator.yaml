@@ -1,0 +1,16 @@
+schema_version: registration/v1
+id: validator:com.company.payment:generated-projection-integrity
+type: validator
+location:
+  path: verification/generated-projection-integrity/check.py
+title: Generated Projection Integrity Check
+lifecycle: ACTIVE
+validity: VALID
+artifact_revision: 1.0.0
+scope:
+  base: scope:com.company.payment:repository
+authority_ref:
+- authority:com.company.payment:repository-governance
+relations:
+  depends_on:
+  - policy:com.company.payment:generated-projection-integrity

@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-evolution.local/core/schemas/project-design-state.schema.json",
+  "$defs": {
+    "topic": {
+      "type": "object",
+      "required": ["topicId", "status", "scope"],
+      "properties": {
+        "topicId": {"type": "string", "minLength": 1},
+        "status": {"enum": ["OPEN", "IN_PROGRESS", "CLOSED"]},
+        "scope": {"type": "object"},
+        "dependsOn": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
+        "closedAt": {"type": "string", "format": "date-time"},
+        "closedBy": {"type": "string", "minLength": 1},
+        "baselineReference": {"type": "string", "minLength": 1},
+        "reopenConditions": {"type": "array", "minItems": 1, "items": {"enum": ["NEW_EVIDENCE", "REQUIREMENT_CHANGE", "INVALIDATED_ASSUMPTION", "IMPLEMENTATION_FEEDBACK", "EXPLICIT_AUTHORITY"]}, "uniqueItems": true}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"status": {"const": "CLOSED"}}, "required": ["status"]},
+          "then": {"required": ["closedAt", "closedBy", "baselineReference", "reopenConditions"]}
+        }
+      ],
+      "additionalProperties": false
+    },
+    "constraint": {
+      "type": "object",
+      "required": ["reference", "conflictType", "conflictsWithCapabilities"],
+      "properties": {
+        "reference": {"type": "string", "minLength": 1},
+        "conflictType": {"type": "string", "minLength": 1},
+        "conflictsWithCapabilities": {"type": "array", "minItems": 1, "items": {"type": "string", "pattern": "^(principle|framework|skill|workflow):[a-z0-9][a-z0-9._-]*:[a-z0-9][a-z0-9._-]*$"}, "uniqueItems": true}
+      },
+      "additionalProperties": false
+    },
+    "nextTopic": {
+      "type": "object",
+      "required": ["topicId"],
+      "properties": {
+        "topicId": {"type": "string", "minLength": 1},
+        "dependsOn": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
+        "reason": {"type": "string", "minLength": 1}
+      },
+      "additionalProperties": false
+    }
+  },
+  "type": "object",
+  "required": ["schemaVersion", "project", "currentStage", "topics", "baselines", "assumptions", "openDecisions", "nextTopicCandidates", "projectAuthorityReferences", "protectedDecisions", "projectConstraints"],
+  "properties": {
+    "schemaVersion": {"const": "project-design-state/v1"},
+    "project": {"type": "string", "minLength": 1},
+    "currentStage": {"enum": ["EXPLORATION", "FOCUSED_DESIGN", "CALIBRATION", "BOUNDARY_CLOSURE", "BASELINE", "ENGINEERING_DESIGN", "REPOSITORY_LANDING"]},
+    "topics": {"type": "array", "items": {"$ref": "#/$defs/topic"}},
+    "baselines": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
+    "assumptions": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
+    "openDecisions": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
+    "nextTopicCandidates": {"type": "array", "items": {"$ref": "#/$defs/nextTopic"}},
+    "projectAuthorityReferences": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
+    "protectedDecisions": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
+    "projectConstraints": {"type": "array", "items": {"$ref": "#/$defs/constraint"}}
+  },
+  "additionalProperties": false
+}

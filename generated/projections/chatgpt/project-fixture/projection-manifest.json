@@ -1,0 +1,89 @@
+{
+  "generatedFiles": [
+    {
+      "path": "discussion-contract.md",
+      "sha256": "7432a07796d3f85573ab12e3bf77a224a56db2e8f4b418d1042db53fac67ab4d"
+    },
+    {
+      "path": "project-instructions.md",
+      "sha256": "f8d2a90e8d60e3f38cc3c9ef37746fb79777cd3968137ece5638040a62249dbd"
+    },
+    {
+      "path": "resolved-context.json",
+      "sha256": "4af569925be6a3573418d3d33e5d1e7da00a5dcb3968cf44d37ce0698a31bd24"
+    },
+    {
+      "path": "resolved-context.md",
+      "sha256": "1b29f24f63f95ea0e6344916bf0bf05d53aab6acd2d8e1468116039da2c36184"
+    },
+    {
+      "path": "skills/architecture-review/SKILL.md",
+      "sha256": "e0b7c43dcbcfe8a1c8a05c107593431f918404a752524e6572e3b13f266bcc9f"
+    },
+    {
+      "path": "skills/design-closure-assessment/SKILL.md",
+      "sha256": "624531dad6be8ff98b8f08db845b54eacafec4f3291315871c9f26d1c7fa9f6d"
+    }
+  ],
+  "generatedSkills": [
+    {
+      "contentHash": "00094ad3677d968fa101879886d2dc0e14bac5926930ddcfad897c9f8879c834",
+      "id": "skill:agent-design:architecture-review",
+      "path": "skills/architecture-review/SKILL.md",
+      "skillProjectionVersion": "agent-skill-projection/1",
+      "version": "1.0.0"
+    },
+    {
+      "contentHash": "ca40a8b7b3e0e350f13f8fc0f5bf92feed371cfc9cf8314c7f5508e857980637",
+      "id": "skill:agent-design:design-closure-assessment",
+      "path": "skills/design-closure-assessment/SKILL.md",
+      "skillProjectionVersion": "agent-skill-projection/1",
+      "version": "1.0.0"
+    }
+  ],
+  "omittedReferences": [],
+  "project": "project-fixture",
+  "projectionType": "CHATGPT_PROJECT_PACK",
+  "projectionVersion": "chatgpt-project-pack/1",
+  "runtime": "CHATGPT",
+  "schemaVersion": "runtime-projection-manifest/v1",
+  "sourceCapabilities": [
+    {
+      "contentHash": "4fd4857d170c01c8c7672d5e16353be26a2b10897e31952d15172e418eb23f49",
+      "id": "framework:agent-design:authority-analysis",
+      "kind": "FRAMEWORK",
+      "version": "1.0.0"
+    },
+    {
+      "contentHash": "7a6d87e989ae4e86814fffff078b9a2af686a1e79e98f1831db7abb9ab017a09",
+      "id": "framework:agent-design:lifecycle-analysis",
+      "kind": "FRAMEWORK",
+      "version": "1.0.0"
+    },
+    {
+      "contentHash": "c7bf1c1477f24ad95b0cf6eff47c2fe9a902e33d257b3ffae51f5e92bafc66c0",
+      "id": "principle:agent-design:closure-requires-authority",
+      "kind": "PRINCIPLE",
+      "version": "1.0.0"
+    },
+    {
+      "contentHash": "fb16ec4b824fea1ccb63c589b314253c56b2cd29992c3008a4dde415532d28ab",
+      "id": "principle:agent-design:project-truth-over-generic-guidance",
+      "kind": "PRINCIPLE",
+      "version": "1.0.0"
+    },
+    {
+      "contentHash": "00094ad3677d968fa101879886d2dc0e14bac5926930ddcfad897c9f8879c834",
+      "id": "skill:agent-design:architecture-review",
+      "kind": "SKILL",
+      "version": "1.0.0"
+    },
+    {
+      "contentHash": "ca40a8b7b3e0e350f13f8fc0f5bf92feed371cfc9cf8314c7f5508e857980637",
+      "id": "skill:agent-design:design-closure-assessment",
+      "kind": "SKILL",
+      "version": "1.0.0"
+    }
+  ],
+  "sourceResolutionId": "resolution:5226bbfe7a0ab72f70494cb4"
+}

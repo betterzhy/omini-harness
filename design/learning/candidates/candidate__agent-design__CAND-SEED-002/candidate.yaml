@@ -1,0 +1,34 @@
+schemaVersion: candidate/v1
+candidateId: candidate:agent-design:CAND-SEED-002
+operation: BROADEN_SCOPE
+targetCapability: skill:agent-design:architecture-review
+sourceExperiences:
+- experience:agent-design:EXP-SEED-001
+- experience:agent-design:EXP-SEED-003
+scopeHypothesis: Transfer architecture-review reasoning to payment-domain architecture
+  while preserving project authority.
+expectedImprovement: Reuse reviewed reasoning across heterogeneous projects without
+  globalizing project facts.
+evidence:
+- sourceType: PROJECT_ARTIFACT
+  reference: baseline://agent-native-engineering/1.0
+  visibility: SHARED
+counterexamples:
+- Domain-specific compliance decisions remain project/domain facts.
+evalRequirements:
+- eval:agent-design:architecture-review-transfer
+promotionStatus: DRAFT
+authorityDecision: PENDING
+transferEvidence:
+  independentEvidence:
+  - sourceType: PROJECT_ARTIFACT
+    reference: project://agent-native-engineering/pilot
+    visibility: SHARED
+  - sourceType: PROJECT_ARTIFACT
+    reference: project://payment-platform/pilot
+    visibility: PROJECT
+  crossCaseAnalysis: Both cases need authority-first architecture review while retaining
+    different project facts.
+  counterexampleReview: Payment-domain contracts and compliance facts must not be
+    generalized into the shared skill.
+  transferEval: eval:agent-design:architecture-review-transfer

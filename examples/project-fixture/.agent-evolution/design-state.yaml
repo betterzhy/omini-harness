@@ -1,0 +1,49 @@
+schemaVersion: project-design-state/v1
+project: project-fixture
+currentStage: BOUNDARY_CLOSURE
+topics:
+  - topicId: authority-model
+    status: CLOSED
+    scope:
+      domain: agent-design
+      concern: authority
+    closedAt: '2026-08-10T10:00:00Z'
+    closedBy: HUMAN_AUTHORITY
+    baselineReference: baseline://project-fixture/authority-model/1.0
+    reopenConditions:
+      - NEW_EVIDENCE
+      - REQUIREMENT_CHANGE
+      - INVALIDATED_ASSUMPTION
+      - IMPLEMENTATION_FEEDBACK
+      - EXPLICIT_AUTHORITY
+  - topicId: resolver-mvp
+    status: IN_PROGRESS
+    scope:
+      domain: agent-design
+      concern: context-resolution
+    dependsOn:
+      - authority-model
+  - topicId: runtime-projection
+    status: OPEN
+    scope:
+      domain: agent-design
+      concern: runtime-projection
+    dependsOn:
+      - resolver-mvp
+baselines:
+  - baseline://project-fixture/authority-model/1.0
+assumptions:
+  - assumption://project-fixture/metadata-first-resolver
+openDecisions:
+  - decision://project-fixture/projection-pack-installation
+nextTopicCandidates:
+  - topicId: runtime-projection
+    dependsOn:
+      - resolver-mvp
+    reason: Resolve runtime packaging after resolver behavior is stable.
+projectAuthorityReferences:
+  - baseline://project-fixture/authority-model/1.0
+  - decision://project-fixture/project-truth-wins
+protectedDecisions:
+  - decision://project-fixture/project-truth-wins
+projectConstraints: []

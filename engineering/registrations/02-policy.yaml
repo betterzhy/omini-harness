@@ -1,0 +1,15 @@
+schema_version: registration/v1
+id: policy:com.company.payment:generated-projection-integrity
+type: policy
+location:
+  path: policies/generated-projection-integrity/policy.md
+title: Generated Projection Integrity
+lifecycle: ACTIVE
+validity: VALID
+artifact_revision: 1.0.0
+scope:
+  base: scope:com.company.payment:repository
+authority_ref:
+- authority:com.company.payment:repository-governance
+relations:
+  constrained_by: []

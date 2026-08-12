@@ -1,0 +1,20 @@
+schemaVersion: experience/v1
+experienceId: experience:agent-design:EXP-SEED-001
+source:
+  sourceType: CONVERSATION
+  reference: chatgpt://bootstrap/design-closure-calibration
+  visibility: PRIVATE
+  distillation: Repeated discussions needed an explicit closure assessment without
+    changing topic state.
+capturedAt: '2026-08-10T12:20:00Z'
+designStage: BOUNDARY_CLOSURE
+signal: Closure assessment must preserve authority and avoid state mutation.
+observedBehavior: A review can mistakenly treat assessment as authorization to close.
+humanCorrection: Assessment reports readiness; closure remains an explicit authority
+  action.
+impact: Prevents accidental governance mutation during discussion.
+triageStatus: TRIAGED
+triageDecision: CROSS_PROJECT_CANDIDATE
+candidateHints:
+- skill:agent-design:design-closure-assessment
+visibility: PRIVATE

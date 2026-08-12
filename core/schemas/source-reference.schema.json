@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-evolution.local/core/schemas/source-reference.schema.json",
+  "type": "object",
+  "required": ["sourceType", "reference", "visibility"],
+  "properties": {
+    "sourceType": {"enum": ["PROJECT_ARTIFACT", "CONVERSATION", "HUMAN_REVIEW", "EVAL", "EXTERNAL_STANDARD", "DOCUMENTATION", "PAPER", "OTHER"]},
+    "reference": {"type": "string", "minLength": 1},
+    "revision": {"type": "string", "minLength": 1},
+    "visibility": {"enum": ["PRIVATE", "PROJECT", "SHARED", "PUBLIC"]},
+    "retrievedAt": {"type": "string", "format": "date-time"},
+    "publishedVersion": {"type": "string", "minLength": 1},
+    "claimsSupported": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
+    "distillation": {"type": "string", "maxLength": 1000}
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,15 @@
+schemaVersion: bootstrap-baseline/v1
+baselineVersion: 0.1.0
+bootstrapBaselineDate: 2026-08-10
+governanceBeginsAfter: 2026-08-10T12:00:00Z
+authorizedSeeds:
+  - principle:agent-design:canonical-capability-not-runtime-prompt@1.0.0
+  - principle:agent-design:project-truth-over-generic-guidance@1.0.0
+  - principle:agent-design:closure-requires-authority@1.0.0
+  - framework:agent-design:authority-analysis@1.0.0
+  - framework:agent-design:lifecycle-analysis@1.0.0
+  - skill:agent-design:design-closure-assessment@1.0.0
+  - skill:agent-design:baseline-finalization@1.0.0
+  - skill:agent-design:next-topic-routing@1.0.0
+  - skill:agent-design:architecture-review@1.0.0
+  - workflow:agent-design:design-discussion@1.0.0

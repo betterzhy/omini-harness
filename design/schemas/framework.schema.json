@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-evolution.local/design/schemas/framework.schema.json",
+  "allOf": [
+    {"$ref": "https://agent-evolution.local/core/schemas/common-capability.schema.json"},
+    {
+      "type": "object",
+      "properties": {
+        "kind": {"const": "FRAMEWORK"},
+        "framework": {
+          "type": "object",
+          "required": ["dimensions", "expectedOutputs"],
+          "properties": {
+            "dimensions": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+            "expectedOutputs": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}}
+          },
+          "additionalProperties": false
+        }
+      },
+      "required": ["framework"]
+    }
+  ],
+  "unevaluatedProperties": false
+}

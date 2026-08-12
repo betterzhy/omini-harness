@@ -1,0 +1,15 @@
+openapi: 3.1.0
+info:
+  title: Payment API Fixture
+  version: 1.0.0
+paths:
+  /payments/{paymentId}:
+    get:
+      operationId: getPayment
+      parameters:
+        - in: path
+          name: paymentId
+          required: true
+          schema: {type: string}
+      responses:
+        '200': {description: Payment found}

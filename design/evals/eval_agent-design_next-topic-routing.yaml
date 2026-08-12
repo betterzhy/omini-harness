@@ -1,0 +1,22 @@
+schemaVersion: design-eval/v1
+evalId: eval:agent-design:next-topic-routing
+targetCapability: skill:agent-design:next-topic-routing
+scenario: Route the next discussion after several topics are CLOSED.
+hiddenRisks:
+- silent authority drift
+expectedReasoningCoverage:
+- open-topic routing
+- dependency awareness
+expectedQuestions:
+- What is authoritative for this decision?
+forbiddenAssumptions:
+- Reusable guidance is automatically project truth.
+criticalBoundaries:
+- CLOSED topics are not reopened by inference.
+acceptableAlternativeOutcomes:
+- Escalate to human authority when evidence is insufficient.
+regressionCriteria:
+- Project truth is silently overridden.
+transferScope:
+- agent-design
+modelSensitivity: MODEL_INDEPENDENT

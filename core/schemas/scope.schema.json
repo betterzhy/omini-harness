@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-evolution.local/core/schemas/scope.schema.json",
+  "type": "object",
+  "properties": {
+    "intent": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
+    "stage": {"type": "array", "items": {"enum": ["EXPLORATION", "FOCUSED_DESIGN", "CALIBRATION", "BOUNDARY_CLOSURE", "BASELINE", "ENGINEERING_DESIGN", "REPOSITORY_LANDING"]}, "uniqueItems": true},
+    "domain": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
+    "systemType": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
+    "artifactType": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
+    "runtime": {"type": "array", "items": {"enum": ["CHATGPT", "CODEX", "GENERIC_AGENT"]}, "uniqueItems": true},
+    "tags": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true}
+  },
+  "additionalProperties": false
+}

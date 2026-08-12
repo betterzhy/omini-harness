@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-evolution.local/engineering/schemas/registration.schema.json",
+  "type": "object",
+  "required": ["schema_version", "id", "type", "location", "title", "lifecycle", "validity", "scope", "authority_ref", "relations"],
+  "properties": {
+    "schema_version": {"const": "registration/v1"},
+    "id": {"type": "string", "pattern": "^[a-z][a-z0-9._-]*:[a-z0-9][a-z0-9._-]*:[a-z0-9][a-z0-9._-]*$"},
+    "type": {"enum": ["contract", "policy", "validator", "skill"]},
+    "location": {"type": "object", "required": ["path"], "properties": {"path": {"type": "string", "minLength": 1}}, "additionalProperties": false},
+    "title": {"type": "string", "minLength": 1},
+    "lifecycle": {"enum": ["EXPERIMENTAL", "ACTIVE", "DEPRECATED", "RETIRED"]},
+    "validity": {"enum": ["VALID", "QUESTIONED", "INVALID"]},
+    "artifact_revision": {"type": "string", "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"},
+    "scope": {"type": "object"},
+    "authority_ref": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    "relations": {"type": "object"}
+  },
+  "additionalProperties": false
+}

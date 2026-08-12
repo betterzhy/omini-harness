@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-evolution.local/design/schemas/eval-result.schema.json",
+  "type": "object",
+  "required": [
+    "schemaVersion", "evalResultId", "evalId", "capabilityId", "capabilityVersion",
+    "projectionVersion", "runtime", "model", "executedAt", "result", "evidence"
+  ],
+  "properties": {
+    "schemaVersion": {"const": "eval-result/v1"},
+    "evalResultId": {"type": "string", "pattern": "^eval-result:[A-Za-z0-9._-]+:[A-Za-z0-9._-]+$"},
+    "evalId": {"type": "string", "pattern": "^eval:[A-Za-z0-9._-]+:[A-Za-z0-9._-]+$"},
+    "capabilityId": {"type": "string", "pattern": "^(principle|framework|skill|workflow):[a-z0-9][a-z0-9._-]*:[a-z0-9][a-z0-9._-]*$"},
+    "capabilityVersion": {"type": "string", "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"},
+    "projectionVersion": {"type": "string", "minLength": 1},
+    "runtime": {"enum": ["CHATGPT", "CODEX", "GENERIC_AGENT"]},
+    "model": {"type": "string", "minLength": 1},
+    "executedAt": {"type": "string", "format": "date-time"},
+    "result": {"enum": ["PASS", "FAIL", "INCONCLUSIVE"]},
+    "evidence": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}}
+  },
+  "additionalProperties": false
+}

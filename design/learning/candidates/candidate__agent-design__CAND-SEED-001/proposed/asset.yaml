@@ -1,0 +1,61 @@
+schemaVersion: design-capability/v1
+id: skill:agent-design:authority-gap-review
+kind: SKILL
+version: 1.0.0
+title: Authority Gap Review
+summary: Check explicit project authority before applying reusable design guidance.
+lifecycle: ACTIVE
+validity: VALID
+scope:
+  intent:
+  - architecture-review
+  stage:
+  - CALIBRATION
+  - BOUNDARY_CLOSURE
+  runtime:
+  - CHATGPT
+  - CODEX
+  domain:
+  - agent-design
+modelSensitivity: MODEL_INDEPENDENT
+visibility: SHARED
+provenance:
+- sourceType: HUMAN_REVIEW
+  reference: candidate://candidate:agent-design:CAND-SEED-001
+  visibility: SHARED
+  distillation: Bootstrap candidate distilled from repeated authority-conflict corrections.
+relationships:
+  dependsOn:
+  - principle:agent-design:project-truth-over-generic-guidance
+  extends: []
+  derivedFrom:
+  - skill:agent-design:architecture-review
+  supersedes: []
+  constrainedBy: []
+evalBindings:
+- eval:agent-design:authority-gap-review
+contentFile: content.md
+skill:
+  skillRole: LEAF
+  intent:
+  - architecture-review
+  triggers:
+  - authority ambiguity
+  - shared guidance conflicts with project state
+  whenNotToUse:
+  - No project authority surface is available.
+  requiredContext:
+  - project authority references
+  - protected decisions
+  referencedCapabilities:
+  - principle:agent-design:project-truth-over-generic-guidance
+  humanGates:
+  - architecture decision authority
+  outputContract:
+  - authority gaps
+  - conflict references
+  - review recommendation
+  stopConditions:
+  - authority sources resolved
+  selfReview:
+  - Did project truth win over generic guidance?

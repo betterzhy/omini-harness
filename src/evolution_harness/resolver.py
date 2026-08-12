@@ -5,9 +5,8 @@ from typing import Any
 
 import yaml
 
-from .catalog import build_design_active_catalog
-from .hashing import canonical_json_bytes, sha256_bytes
-from .project import load_profile, load_project_binding, load_project_state
+from .hashing import canonical_json_bytes, file_sha256, sha256_bytes
+from .project import load_profile, load_project_binding, load_project_state, verify_capability_lock
 from .registry import build_design_registry
 
 
@@ -84,6 +83,9 @@ def resolve_design_context(
     project = Path(project_root)
     state = load_project_state(root, project)
     binding = load_project_binding(root, project)
+    lock, locked_entries = verify_capability_lock(root, project)
+    state_hash = file_sha256(project / ".agent-evolution/design-state.yaml")
+    binding_hash = file_sha256(project / ".agent-evolution/capabilities.yaml")
     stage = explicit_stage or state["currentStage"]
     topic_state = next((item for item in state["topics"] if item["topicId"] == topic), None)
     closed_topics = [
@@ -101,8 +103,7 @@ def resolve_design_context(
         else:
             topic_guard = "DO_NOT_REOPEN"
 
-    catalog = build_design_active_catalog(root, write=False)
-    active = {entry["id"]: entry for entry in catalog["entries"]}
+    active = locked_entries
     registry = build_design_registry(root, write=False)
     current_registry = {entry["id"]: entry for entry in registry["entries"] if entry["isCurrent"]}
     eligible_current = [entry for entry in current_registry.values() if entry["lifecycle"] == "ACTIVE" and entry["validity"] == "VALID"]
@@ -209,6 +210,9 @@ def resolve_design_context(
         "project": state["project"], "topic": topic, "stage": stage, "intent": intent,
         "runtime": runtime, "selected": [(item["id"], item["version"], item["contentHash"]) for item in selected],
         "topicGuard": topic_guard, "reopenSignal": reopen_signal,
+        "capabilityLockFingerprint": lock["lockFingerprint"],
+        "projectStateHash": state_hash,
+        "projectBindingHash": binding_hash,
     }
     resolution_id = "resolution:" + sha256_bytes(canonical_json_bytes(resolution_payload))[:24]
     return {
@@ -220,6 +224,9 @@ def resolve_design_context(
         "intent": intent,
         "runtime": runtime,
         "requestedOutput": requested_output,
+        "capabilityLockFingerprint": lock["lockFingerprint"],
+        "projectStateHash": state_hash,
+        "projectBindingHash": binding_hash,
         "topicGuard": topic_guard,
         "reopenSignal": reopen_signal,
         "selectedCapabilities": selected,

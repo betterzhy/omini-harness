@@ -6,6 +6,8 @@ from typing import Any
 import yaml
 
 from .catalog import build_design_active_catalog
+from .hashing import canonical_json_bytes, sha256_bytes
+from .registry import build_design_registry
 from .schema import SchemaStore
 
 
@@ -76,15 +78,72 @@ def build_capability_lock(repository_root: Path, project_root: Path, *, write: b
                 "resolvedBecause": reasons[capability_id],
             }
         )
-    result = {
+    result: dict[str, Any] = {
         "schemaVersion": "capability-lock/v1",
         "project": load_project_state(root, project)["project"],
         "sourceHarnessRevision": catalog["sourceRevision"],
         "disabledCapabilities": sorted(binding["disabledCapabilities"]),
         "capabilities": capabilities,
     }
+    result["lockFingerprint"] = capability_lock_fingerprint(result)
+    SchemaStore(root).validate("core/schemas/capability-lock.schema.json", result)
     if write:
         path = project / ".agent-evolution" / "capabilities.lock.yaml"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(yaml.safe_dump(result, sort_keys=False, allow_unicode=True), encoding="utf-8")
     return result
+
+
+def capability_lock_fingerprint(lock: dict[str, Any]) -> str:
+    payload = {key: value for key, value in lock.items() if key != "lockFingerprint"}
+    return "sha256:" + sha256_bytes(canonical_json_bytes(payload))
+
+
+def load_capability_lock(repository_root: Path, project_root: Path) -> dict[str, Any]:
+    root = Path(repository_root)
+    project = Path(project_root)
+    path = project / ".agent-evolution" / "capabilities.lock.yaml"
+    if not path.exists():
+        raise ValueError(f"capability lock missing: {path}")
+    lock = _load_yaml(path)
+    SchemaStore(root).validate("core/schemas/capability-lock.schema.json", lock)
+    if lock["lockFingerprint"] != capability_lock_fingerprint(lock):
+        raise ValueError("capability lock fingerprint mismatch")
+    return lock
+
+
+def verify_capability_lock(
+    repository_root: Path,
+    project_root: Path,
+) -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
+    root = Path(repository_root)
+    project = Path(project_root)
+    lock = load_capability_lock(root, project)
+    state = load_project_state(root, project)
+    binding = load_project_binding(root, project)
+    reasons = bound_capability_reasons(root, project)
+    if lock["project"] != state["project"]:
+        raise ValueError("capability lock project does not match project state")
+    if lock["disabledCapabilities"] != sorted(binding["disabledCapabilities"]):
+        raise ValueError("capability lock binding disabledCapabilities drift")
+    locked_items = {item["capabilityId"]: item for item in lock["capabilities"]}
+    if len(locked_items) != len(lock["capabilities"]):
+        raise ValueError("capability lock contains duplicate capability ids")
+    if set(locked_items) != set(reasons):
+        raise ValueError("capability lock binding capability set drift")
+
+    registry = build_design_registry(root, write=False)
+    by_version = {(entry["id"], entry["version"]): entry for entry in registry["entries"]}
+    verified: dict[str, dict[str, Any]] = {}
+    for capability_id, item in locked_items.items():
+        if sorted(item["resolvedBecause"]) != sorted(reasons[capability_id]):
+            raise ValueError(f"capability lock binding reasons drift: {capability_id}")
+        entry = by_version.get((capability_id, item["resolvedVersion"]))
+        if entry is None:
+            raise ValueError(f"capability lock references missing version: {capability_id}@{item['resolvedVersion']}")
+        if entry["contentHash"] != item["contentHash"]:
+            raise ValueError(f"capability lock content hash drift: {capability_id}")
+        if entry["lifecycle"] in {"DEPRECATED", "RETIRED"} or entry["validity"] != "VALID":
+            raise ValueError(f"capability lock references unusable capability: {capability_id}")
+        verified[capability_id] = entry
+    return lock, verified

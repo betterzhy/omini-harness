@@ -70,6 +70,7 @@ def test_projection_version_is_independent_from_canonical_semver(tmp_path: Path)
 
 def test_projection_visibility_gate_omits_private_referenced_content(tmp_path: Path):
     from evolution_harness.projection import build_projection_pack
+    from evolution_harness.project import build_capability_lock
 
     root, project = _copy_repo(tmp_path)
     asset_path = root / "design/capabilities/frameworks/authority-analysis/asset.yaml"
@@ -78,6 +79,7 @@ def test_projection_visibility_gate_omits_private_referenced_content(tmp_path: P
     asset_path.write_text(yaml.safe_dump(asset, sort_keys=False), encoding="utf-8")
     content_path = root / "design/capabilities/frameworks/authority-analysis/content.md"
     content_path.write_text(content_path.read_text(encoding="utf-8") + "\nSECRET_PRIVATE_GUIDANCE\n", encoding="utf-8")
+    build_capability_lock(root, project, write=True)
     resolved = _resolved(root, project, runtime="CHATGPT")
     manifest = build_projection_pack(root, project, resolved, runtime="CHATGPT")
     text = (root / "generated/projections/chatgpt/project-fixture/skills/architecture-review/SKILL.md").read_text(encoding="utf-8")

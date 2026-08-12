@@ -7,11 +7,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .catalog import build_design_active_catalog
 from .discussion import materialize_discussion_contract
 from .generated import write_generated_json
 from .hashing import file_sha256
 from .loader import load_capabilities
+from .project import verify_capability_lock
 
 AGENT_SKILL_PROJECTION_VERSION = "agent-skill-projection/1"
 CHATGPT_PROJECTION_VERSION = "chatgpt-project-pack/1"
@@ -79,11 +79,9 @@ def _can_materialize(visibility: str, target_visibility: str = "PROJECT") -> boo
     return _VISIBILITY_RANK.get(visibility, -1) >= _VISIBILITY_RANK[target_visibility]
 
 
-def _capability_maps(root: Path) -> tuple[dict[tuple[str, str], Any], dict[str, Any]]:
+def _capability_maps(root: Path) -> dict[tuple[str, str], Any]:
     by_version = {(cap.id, cap.version): cap for cap in load_capabilities(root)}
-    catalog = build_design_active_catalog(root, write=False)
-    active = {entry["id"]: entry for entry in catalog["entries"]}
-    return by_version, active
+    return by_version
 
 
 def _resolved_context_markdown(resolved: dict[str, Any]) -> str:
@@ -189,12 +187,15 @@ def build_projection_pack(
     adapter = _adapter(runtime)
     if resolved_context.get("runtime") != runtime:
         raise ProjectionError("resolved context runtime does not match projection runtime")
-    by_version, active = _capability_maps(root)
+    lock, _ = verify_capability_lock(root, project)
+    if resolved_context.get("capabilityLockFingerprint") != lock["lockFingerprint"]:
+        raise ProjectionError("resolved context capability lock is stale")
+    by_version = _capability_maps(root)
     source_capabilities: list[dict[str, Any]] = []
     selected_index: dict[str, dict[str, Any]] = {}
     for item in sorted(resolved_context.get("selectedCapabilities", []), key=lambda value: value["id"]):
-        current = active.get(item["id"])
-        if current is None or current["version"] != item["version"] or current["contentHash"] != item["contentHash"]:
+        current = by_version.get((item["id"], item["version"]))
+        if current is None or current.content_hash != item["contentHash"]:
             raise ProjectionError(f"resolved context is stale for {item['id']}")
         source = {
             "id": item["id"],
@@ -253,6 +254,9 @@ def build_projection_pack(
         "runtime": runtime,
         "project": resolved_context["project"],
         "sourceResolutionId": resolved_context["resolutionId"],
+        "capabilityLockFingerprint": resolved_context["capabilityLockFingerprint"],
+        "projectStateHash": resolved_context["projectStateHash"],
+        "projectBindingHash": resolved_context["projectBindingHash"],
         "sourceCapabilities": source_capabilities,
         "generatedSkills": generated_skills,
         "omittedReferences": sorted(omitted_references, key=lambda item: (item["id"], item["reason"])),
@@ -280,11 +284,23 @@ def check_projection_freshness(repository_root: Path, project_root: Path, *, run
     reasons: set[str] = set()
     if manifest.get("projectionVersion") != adapter.projection_version:
         reasons.add("projection-version-changed")
-    catalog = build_design_active_catalog(root, write=False)
-    active = {entry["id"]: entry for entry in catalog["entries"]}
+    try:
+        lock, _ = verify_capability_lock(root, project)
+    except Exception:
+        lock = None
+        reasons.add("capability-lock-drift")
+    if lock is not None and manifest.get("capabilityLockFingerprint") != lock["lockFingerprint"]:
+        reasons.add("capability-lock-drift")
+    state_path = project / ".agent-evolution/design-state.yaml"
+    binding_path = project / ".agent-evolution/capabilities.yaml"
+    if not state_path.exists() or manifest.get("projectStateHash") != file_sha256(state_path):
+        reasons.add("project-state-drift")
+    if not binding_path.exists() or manifest.get("projectBindingHash") != file_sha256(binding_path):
+        reasons.add("project-binding-drift")
+    by_version = _capability_maps(root)
     for source in manifest.get("sourceCapabilities", []):
-        current = active.get(source["id"])
-        if current is None or current["version"] != source["version"] or current["contentHash"] != source["contentHash"]:
+        current = by_version.get((source["id"], source["version"]))
+        if current is None or current.content_hash != source["contentHash"]:
             reasons.add("source-capability-hash-changed")
     for item in manifest.get("generatedFiles", []):
         path = pack / item["path"]

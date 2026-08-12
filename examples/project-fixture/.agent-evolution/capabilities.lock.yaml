@@ -63,3 +63,4 @@ capabilities:
   sourceHarnessRevision: content-sha256:5acfd6caed1d11473907ac466014bf6571046578323570a24180cdf80b52849a
   resolvedBecause:
   - profile:agent-design-base
+lockFingerprint: sha256:fff6d30086b4cf36d5653d5df0e489ed01ce268e0443670bb5c2dee2bbf40736

@@ -1,4 +1,5 @@
 {
+  "capabilityLockFingerprint": "sha256:fff6d30086b4cf36d5653d5df0e489ed01ce268e0443670bb5c2dee2bbf40736",
   "generatedFiles": [
     {
       "path": "discussion-contract.md",
@@ -10,11 +11,11 @@
     },
     {
       "path": "resolved-context.json",
-      "sha256": "4734fcd301bff50cd95007e994b8d078aa4758cf965355d522915afeef1660bc"
+      "sha256": "07c48b5253dadad7dbaef1ea4d27a63604041239563c8fd220ca2e1ffdb596d1"
     },
     {
       "path": "resolved-task-context.md",
-      "sha256": "96d8319559d09a3adf3fa7346d2f71767fb7851060dfcc537be44d07c0bd808e"
+      "sha256": "4be3927c433bdab0845ae4598c6f7803a3f6a1d6c3a9f9f0f82e1eb063d9687e"
     },
     {
       "path": "skills/architecture-review/SKILL.md",
@@ -43,6 +44,8 @@
   ],
   "omittedReferences": [],
   "project": "project-fixture",
+  "projectBindingHash": "49f3cc05254afb2e2aa69df0817115bb0f461b16de398e3540abd66e282c1130",
+  "projectStateHash": "1eaeb8b84f3502f18bb4c3e0d8da0010889d452b85acc76a8f28ada91b0793ba",
   "projectionType": "CODEX_REPOSITORY_PACK",
   "projectionVersion": "codex-project-pack/1",
   "runtime": "CODEX",
@@ -85,5 +88,5 @@
       "version": "1.0.0"
     }
   ],
-  "sourceResolutionId": "resolution:0194d3b11bf043803905f299"
+  "sourceResolutionId": "resolution:a5fbe5832ae37540047bffe0"
 }

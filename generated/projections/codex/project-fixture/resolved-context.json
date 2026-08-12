@@ -1,4 +1,5 @@
 {
+  "capabilityLockFingerprint": "sha256:fff6d30086b4cf36d5653d5df0e489ed01ce268e0443670bb5c2dee2bbf40736",
   "closedTopics": [
     {
       "baselineReference": "baseline://project-fixture/authority-model/1.0",
@@ -124,6 +125,8 @@
     "baseline://project-fixture/authority-model/1.0",
     "decision://project-fixture/project-truth-wins"
   ],
+  "projectBindingHash": "49f3cc05254afb2e2aa69df0817115bb0f461b16de398e3540abd66e282c1130",
+  "projectStateHash": "1eaeb8b84f3502f18bb4c3e0d8da0010889d452b85acc76a8f28ada91b0793ba",
   "protectedDecisions": [
     "decision://project-fixture/project-truth-wins"
   ],
@@ -133,7 +136,7 @@
     "Did project truth override generic guidance where applicable?",
     "Did I avoid mutating closure or promotion state?"
   ],
-  "resolutionId": "resolution:0194d3b11bf043803905f299",
+  "resolutionId": "resolution:a5fbe5832ae37540047bffe0",
   "runtime": "CODEX",
   "schemaVersion": "resolved-design-context/v1",
   "selectedCapabilities": [

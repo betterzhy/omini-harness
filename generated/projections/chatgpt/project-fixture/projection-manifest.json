@@ -1,4 +1,5 @@
 {
+  "capabilityLockFingerprint": "sha256:fff6d30086b4cf36d5653d5df0e489ed01ce268e0443670bb5c2dee2bbf40736",
   "generatedFiles": [
     {
       "path": "discussion-contract.md",
@@ -10,11 +11,11 @@
     },
     {
       "path": "resolved-context.json",
-      "sha256": "4af569925be6a3573418d3d33e5d1e7da00a5dcb3968cf44d37ce0698a31bd24"
+      "sha256": "f77334db569828b6866e2bb4c0c1a33e9461aed20996116828c79f892030ad90"
     },
     {
       "path": "resolved-context.md",
-      "sha256": "1b29f24f63f95ea0e6344916bf0bf05d53aab6acd2d8e1468116039da2c36184"
+      "sha256": "4b569b9748281707327d102aba066f6670a4ef346d8feb9d415aa730aa1464b1"
     },
     {
       "path": "skills/architecture-review/SKILL.md",
@@ -43,6 +44,8 @@
   ],
   "omittedReferences": [],
   "project": "project-fixture",
+  "projectBindingHash": "49f3cc05254afb2e2aa69df0817115bb0f461b16de398e3540abd66e282c1130",
+  "projectStateHash": "1eaeb8b84f3502f18bb4c3e0d8da0010889d452b85acc76a8f28ada91b0793ba",
   "projectionType": "CHATGPT_PROJECT_PACK",
   "projectionVersion": "chatgpt-project-pack/1",
   "runtime": "CHATGPT",
@@ -85,5 +88,5 @@
       "version": "1.0.0"
     }
   ],
-  "sourceResolutionId": "resolution:5226bbfe7a0ab72f70494cb4"
+  "sourceResolutionId": "resolution:c40032f72d898948c072a5c8"
 }

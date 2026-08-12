@@ -67,11 +67,14 @@ def test_explicit_reopen_signal_is_represented_but_does_not_mutate_topic_state(t
 
 
 def test_disabled_capability_and_its_selection_are_removed_with_trace(tmp_path: Path):
+    from evolution_harness.project import build_capability_lock
+
     root, project = _copy_repo(tmp_path)
     binding_path = project / ".agent-evolution/capabilities.yaml"
     binding = yaml.safe_load(binding_path.read_text(encoding="utf-8"))
     binding["disabledCapabilities"].append("skill:agent-design:architecture-review")
     binding_path.write_text(yaml.safe_dump(binding, sort_keys=False), encoding="utf-8")
+    build_capability_lock(root, project, write=True)
     result = _resolve(root, project, explicit_stage="FOCUSED_DESIGN")
     ids = {item["id"] for item in result["selectedCapabilities"]}
     assert "skill:agent-design:architecture-review" not in ids
@@ -79,16 +82,16 @@ def test_disabled_capability_and_its_selection_are_removed_with_trace(tmp_path: 
     assert "disabled" in excluded["skill:agent-design:architecture-review"]
 
 
-def test_invalid_current_capability_is_not_selected_and_explained(tmp_path: Path):
+def test_locked_capability_content_or_validity_drift_fails_closed(tmp_path: Path):
+    import pytest
+
     root, project = _copy_repo(tmp_path)
     path = root / "design/capabilities/skills/architecture-review/asset.yaml"
     asset = yaml.safe_load(path.read_text(encoding="utf-8"))
     asset["validity"] = "INVALID"
     path.write_text(yaml.safe_dump(asset, sort_keys=False), encoding="utf-8")
-    result = _resolve(root, project, explicit_stage="FOCUSED_DESIGN")
-    assert "skill:agent-design:architecture-review" not in {item["id"] for item in result["selectedCapabilities"]}
-    excluded = {item["id"]: item["excludedBecause"] for item in result["explain"]["excluded"]}
-    assert "invalid" in excluded["skill:agent-design:architecture-review"]
+    with pytest.raises(ValueError, match="capability lock"):
+        _resolve(root, project, explicit_stage="FOCUSED_DESIGN")
 
 
 def test_project_constraint_generates_project_truth_wins_conflict_signal(tmp_path: Path):

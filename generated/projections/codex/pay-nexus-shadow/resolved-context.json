@@ -170,13 +170,13 @@
       "id": "active-development-projection",
       "path": "docs/architecture/engineering-readiness/machine/active-development-projection-1.0.0.yaml",
       "role": "DERIVED",
-      "sha256": "63b233af9c030e3fc1b85ea85c7e62f797089cde5ab0fee0c6f6fef5ae296fa7"
+      "sha256": "e5851d69f6596e3bf0e4cdb1949fe98923c3132e3ccf13a6cae599ba6a0f3f6c"
     },
     {
       "id": "current-formal-status",
       "path": "current-formal-status.md",
       "role": "CANONICAL",
-      "sha256": "37da3077f9006bf5f0e6cef827e6d1149087e5eba821d2b075763aa7608e86bb"
+      "sha256": "fb0b20e175bcfc8a10c0f86ede26b8471f7dbd88f0c800557597191f9a0e5a36"
     },
     {
       "id": "dev-s01-progress",
@@ -200,16 +200,16 @@
       "id": "repository-agent-guidance",
       "path": "AGENTS.md",
       "role": "GUIDANCE",
-      "sha256": "ae922ff532dbb4a1728b01059d59649a41c569bb74ad1e9aecd287ded8862c4d"
+      "sha256": "d5a60f0382dfa85f154aea6792611a5e43b1bf524c5870817774692af7c9640d"
     }
   ],
-  "authoritySnapshotFingerprint": "sha256:7edd374fdf7cfeadf106ac78fb8f8dcc74ea01de6c34907c235229903a985f52",
+  "authoritySnapshotFingerprint": "sha256:eda768c0ea421009a980b39a46e29e99f9c4585fcf93f47aa8afa5edd4fd67ef",
   "authoritySourceRevision": {
-    "authoritySetDigest": "sha256:f5eeb28b701cb16301064060ae93ecb8f39c88d34c51e7d5c07efea4b9f351c2",
+    "authoritySetDigest": "sha256:15a1b4bb44d0534dc50dd3696d225fa78b12484071830d976e38ef651a0e8356",
     "authoritySetStatus": "CLEAN_FOR_AUTHORITY_SET",
-    "head": "6db5e1efe548abe3a7862c231aba3b2e62b89eab",
+    "head": "6ac4b5cf21eae16a8c662d47e89dea13c5ccb9fc",
     "kind": "GIT",
-    "tree": "831a91f865b674f244d2aa657aab0a4c2811cbb8"
+    "tree": "d27cf9161d9c5a4fc0e339c22381d44b574fd202"
   },
   "capabilityLockFingerprint": "sha256:1b5b5116bbd7b98be65f207b0f849cca0cf16cd541e80bb3f6a93f405d4f6bdb",
   "closedTopics": [
@@ -325,7 +325,7 @@
     "Did project truth override generic guidance where applicable?",
     "Did I avoid mutating closure or promotion state?"
   ],
-  "resolutionId": "resolution:28a772208660adb5bf5b52c1",
+  "resolutionId": "resolution:66f9dde4ff1c908994c4ae6b",
   "runtime": "CODEX",
   "schemaVersion": "resolved-design-context/v1",
   "selectedCapabilities": [

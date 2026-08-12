@@ -2,7 +2,7 @@
 
 ## Conclusion
 
-The read-only Shadow pilot is `PASS`. This is not a claim that repo-local binding has been installed into Pay-Nexus. The source repository remained unchanged, no Pay-Nexus task was executed, and no development, repeat Landing, Wave 0, DDL, database write, production operation, or push authority was inferred.
+The read-only Shadow pilot and the project-local discovery registration are `PASS`. Registration is only a pointer to the Harness-owned sidecar; no generated Skill was materialized into Pay-Nexus. The source repository remained unchanged during this refresh, no Pay-Nexus task was executed, and no development, repeat Landing, Wave 0, DDL, database write, production operation, or push authority was inferred.
 
 ```text
 PAY_NEXUS_SHADOW_AUTHORITY_BINDING = PASS
@@ -13,17 +13,29 @@ PAY_NEXUS_SHADOW_CLOSED_TOPIC_PROTECTION = PASS
 PAY_NEXUS_SHADOW_PROJECT_AUTHORITY_PRESERVATION = PASS
 PAY_NEXUS_SHADOW_INSTALL_PLAN = PASS_DRY_RUN_ONLY
 PAY_NEXUS_EXISTING_ENGINEERING_COMPATIBILITY = PASS_ZERO_WRITE_BOUNDARY
-PAY_NEXUS_PROJECT_LOCAL_BINDING = NOT_EXECUTED_REQUIRES_SEPARATE_AUTHORITY
+PAY_NEXUS_PROJECT_LOCAL_BINDING = PASS_REGISTRATION_ONLY
 PAY_NEXUS_PROJECT_LOCAL_MATERIALIZATION = NOT_EXECUTED_REQUIRES_SEPARATE_AUTHORITY_AND_MECHANISM
 PAY_NEXUS_PROJECT_LOCAL_FEEDBACK_ENTRY = NOT_EXECUTED_NO_REAL_PILOT_TASK
 PAY_NEXUS_REAL_CODEX_TASK = NOT_EXECUTED
 ```
 
+## Registered Source Refresh Receipt — 2026-08-12
+
+- Pay-Nexus source: HEAD `6ac4b5cf21eae16a8c662d47e89dea13c5ccb9fc`, tree `d27cf9161d9c5a4fc0e339c22381d44b574fd202`.
+- Registration discovery: `PASS`, source access `READ_ONLY`, exact lock `sha256:1b5b5116bbd7b98be65f207b0f849cca0cf16cd541e80bb3f6a93f405d4f6bdb`.
+- Pre-refresh projection check: `fresh=false`, reason `projection-integrity-drift`.
+- Live Authority inspection: `PASS`, authority-set status `CLEAN_FOR_AUTHORITY_SET`, snapshot `sha256:eda768c0ea421009a980b39a46e29e99f9c4585fcf93f47aa8afa5edd4fd67ef`.
+- Resolver: `resolution:66f9dde4ff1c908994c4ae6b`; four capabilities selected, `closure-requires-authority` excluded for `intent-mismatch`, project conflict resolved by `PROJECT_TRUTH_WINS`.
+- Scenarios: `5/5 PASS` with no mismatches.
+- Post-refresh projection check: `fresh=true`, no reasons.
+- Install planner: `PASS / DRY_RUN`, one proposed `CREATE`, no collision; no materialization executed.
+- Pay-Nexus HEAD/tree and tracked worktree state were unchanged before and after the refresh; `.agents/skills/architecture-review/SKILL.md` remains absent.
+
 ## Repository Inventory
 
 | Area | Current evidence | Shadow interpretation |
 |---|---|---|
-| Repository | `/Users/yuzhuangzhuang/Projects/pay-nexus` at `6db5e1efe548abe3a7862c231aba3b2e62b89eab` | Read-only source root; revalidated after the original pilot |
+| Repository | `/Users/yuzhuangzhuang/Projects/pay-nexus` at `6ac4b5cf21eae16a8c662d47e89dea13c5ccb9fc` | Read-only source root; refreshed after project-local discovery registration |
 | Global authority | `current-formal-status.md` | Owns global stage and execution permissions |
 | Agent guidance | `AGENTS.md` | Project guidance remains unchanged and outranks generic guidance |
 | Design state | `ArchitectureSemanticStatus=SEALED` | Registered as CLOSED only because explicit evidence exists |
@@ -42,9 +54,10 @@ Product-gap and financial-domain progress authorities were not loaded because th
 - Harness: `/Users/yuzhuangzhuang/Projects/omini-harness`
 - Pay-Nexus: `/Users/yuzhuangzhuang/Projects/pay-nexus`
 - All control-plane, scenario, lock and projection files are under the Harness repository.
-- Pay-Nexus files added: none.
-- Pay-Nexus files modified: none.
-- `AGENTS.md` changes: none.
+- Pay-Nexus contains only the registration pointer `.agent-evolution/registration.yaml` and a minimal discovery section in `AGENTS.md`; both predate and remained unchanged by this refresh.
+- Pay-Nexus files added by this refresh: none.
+- Pay-Nexus files modified by this refresh: none.
+- `AGENTS.md` changes in this refresh: none.
 - Repo-local generated Skill installation: not executed.
 
 ## Files Added in the Harness
@@ -99,11 +112,11 @@ PYTHONPATH=src .venv/bin/python -m evolution_harness.cli --repository-root . \
 Evidence:
 
 ```text
-source HEAD = 6db5e1efe548abe3a7862c231aba3b2e62b89eab
-source tree = 831a91f865b674f244d2aa657aab0a4c2811cbb8
+source HEAD = 6ac4b5cf21eae16a8c662d47e89dea13c5ccb9fc
+source tree = d27cf9161d9c5a4fc0e339c22381d44b574fd202
 authority set status = CLEAN_FOR_AUTHORITY_SET
-authority set digest = sha256:f5eeb28b701cb16301064060ae93ecb8f39c88d34c51e7d5c07efea4b9f351c2
-snapshot = sha256:7edd374fdf7cfeadf106ac78fb8f8dcc74ea01de6c34907c235229903a985f52
+authority set digest = sha256:15a1b4bb44d0534dc50dd3696d225fa78b12484071830d976e38ef651a0e8356
+snapshot = sha256:eda768c0ea421009a980b39a46e29e99f9c4585fcf93f47aa8afa5edd4fd67ef
 authority gate = PASS
 conflicts = []
 missing facts = []
@@ -161,7 +174,7 @@ For `intent=architecture-review`, `topic=harness-shadow-binding`, `runtime=CODEX
 - Excluded: `closure-requires-authority` because of `intent-mismatch`.
 - Project conflict: `architecture-review` vs `current-formal-status.md#current-execution-authority`.
 - Resolution: `PROJECT_TRUTH_WINS`.
-- Resolution ID: `resolution:28a772208660adb5bf5b52c1`.
+- Resolution ID: `resolution:66f9dde4ff1c908994c4ae6b`.
 
 This demonstrates selection before materialization; the lock contains five capabilities, but the runtime context selects only four.
 
@@ -208,9 +221,9 @@ Result:
 ```text
 projection freshness = PASS
 projection version = codex-project-pack/1
-source resolution = resolution:28a772208660adb5bf5b52c1
+source resolution = resolution:66f9dde4ff1c908994c4ae6b
 source lock = sha256:1b5b5116bbd7b98be65f207b0f849cca0cf16cd541e80bb3f6a93f405d4f6bdb
-source authority snapshot = sha256:7edd374fdf7cfeadf106ac78fb8f8dcc74ea01de6c34907c235229903a985f52
+source authority snapshot = sha256:eda768c0ea421009a980b39a46e29e99f9c4585fcf93f47aa8afa5edd4fd67ef
 ```
 
 Generated `architecture-review/SKILL.md` records:
@@ -254,12 +267,12 @@ Pay-Nexus source checks for the original pilot and the later registration-candid
 ```text
 HEAD before = f0bfce7a71314c313a01a518fa3a36f8e9bf659a
 HEAD after  = f0bfce7a71314c313a01a518fa3a36f8e9bf659a
-latest revalidation HEAD before = 6db5e1efe548abe3a7862c231aba3b2e62b89eab
-latest revalidation HEAD after  = 6db5e1efe548abe3a7862c231aba3b2e62b89eab
+latest revalidation HEAD before = 6ac4b5cf21eae16a8c662d47e89dea13c5ccb9fc
+latest revalidation HEAD after  = 6ac4b5cf21eae16a8c662d47e89dea13c5ccb9fc
 latest authority set status before = CLEAN_FOR_AUTHORITY_SET
 latest authority set status after  = CLEAN_FOR_AUTHORITY_SET
 unrelated tracked modifications at latest revalidation = 0 (earlier in-progress changes were preserved and later committed externally)
-.agent-evolution in Pay-Nexus = absent
+.agent-evolution/registration.yaml in Pay-Nexus = present and unchanged during refresh
 .agents/skills/architecture-review in Pay-Nexus = absent
 PAY_NEXUS_SHADOW_ZERO_WRITE = PASS
 ```
@@ -311,8 +324,7 @@ This receipt accepts the generic Brownfield adapter and the Pay-Nexus read-only 
 
 The following require a separate user decision and were not executed:
 
-- Add `.agent-evolution/` to Pay-Nexus.
-- Add an Agent Evolution Harness discovery section to Pay-Nexus `AGENTS.md`.
+- Expand the project-local `.agent-evolution/` control plane beyond the existing registration pointer.
 - Install generated repo-local Skills.
 - Create a project-local design handoff or feedback entry.
 - Execute a real Pay-Nexus Codex task.

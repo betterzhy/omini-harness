@@ -3,7 +3,10 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
+
+import pytest
 
 
 def test_process_lock_rejects_competing_process_and_releases_after_owner_exit(tmp_path: Path):
@@ -37,3 +40,16 @@ except ProcessLockError:
 
     assert blocked.returncode == 23
     assert released.returncode == 0
+
+
+def test_process_lock_rejects_state_directory_with_group_or_other_permissions(tmp_path: Path, monkeypatch):
+    from evolution_harness import process_lock
+
+    monkeypatch.setattr(tempfile, "gettempdir", lambda: str(tmp_path))
+    state = tmp_path / f"agent-evolution-harness-locks-{os.getuid()}"
+    state.mkdir(mode=0o755)
+    state.chmod(0o755)
+
+    with pytest.raises(process_lock.ProcessLockError, match="state directory is unsafe"):
+        with process_lock.exclusive_process_lock("test:unsafe-mode"):
+            pass

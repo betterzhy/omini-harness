@@ -4,8 +4,9 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-from .extractors import extract_values
-from .hashing import canonical_json_bytes, file_sha256, sha256_bytes
+from .anchored_fs import AnchoredPathError, AnchoredRoot
+from .extractors import extract_values_bytes
+from .hashing import canonical_json_bytes, sha256_bytes
 from .integration import load_integration
 from .paths import PathBoundaryError, matches_excluded, resolve_without_symlinks
 from .schema import SchemaStore
@@ -31,7 +32,11 @@ def _normalize(raw: str, selector: dict[str, Any]) -> str:
     return normalization["default"]
 
 
-def _source_revision(source_root: Path, authorities: list[dict[str, str]]) -> dict[str, str]:
+def _source_revision(
+    source_root: Path,
+    authorities: list[dict[str, str]],
+    source_bytes: dict[str, bytes],
+) -> dict[str, str]:
     authority_set_digest = "sha256:" + sha256_bytes(canonical_json_bytes(authorities))
     try:
         git_root = Path(
@@ -49,7 +54,7 @@ def _source_revision(source_root: Path, authorities: list[dict[str, str]]) -> di
             text=True,
         ).stdout.strip()
         tree = subprocess.run(
-            ["git", "-C", str(source_root), "rev-parse", "HEAD^{tree}"],
+            ["git", "-C", str(source_root), "rev-parse", f"{head}^{{tree}}"],
             check=True,
             capture_output=True,
             text=True,
@@ -57,20 +62,20 @@ def _source_revision(source_root: Path, authorities: list[dict[str, str]]) -> di
         clean = True
         for authority in authorities:
             try:
-                path = (source_root / authority["path"]).resolve(strict=True)
+                path = source_root / authority["path"]
                 repository_relative = path.relative_to(git_root).as_posix()
                 committed_blob = subprocess.run(
-                    ["git", "-C", str(git_root), "rev-parse", f"HEAD:{repository_relative}"],
+                    ["git", "-C", str(git_root), "rev-parse", f"{head}:{repository_relative}"],
                     check=True,
                     capture_output=True,
                     text=True,
                 ).stdout.strip()
                 working_blob = subprocess.run(
-                    ["git", "-C", str(git_root), "hash-object", str(path)],
+                    ["git", "-C", str(git_root), "hash-object", "--stdin"],
                     check=True,
                     capture_output=True,
-                    text=True,
-                ).stdout.strip()
+                    input=source_bytes[authority["path"]],
+                ).stdout.decode("utf-8").strip()
             except (OSError, ValueError, subprocess.CalledProcessError):
                 clean = False
                 continue
@@ -127,52 +132,66 @@ def build_authority_snapshot(
     authority_records: list[dict[str, str]] = []
     facts: dict[str, dict[str, str]] = {}
     missing: set[str] = set()
-    for authority in authority_map["authorities"]:
-        relative = authority["path"]
-        try:
-            if matches_excluded(relative, excluded):
-                raise IntegrationAuthorityError(f"authority path is excluded: {relative}")
-            path = resolve_without_symlinks(
-                source, relative, must_exist=False, label="authority source path"
-            )
-            canonical_relative = path.relative_to(source).as_posix()
-            if matches_excluded(canonical_relative, excluded):
-                raise IntegrationAuthorityError(f"authority path is excluded: {relative}")
-        except PathBoundaryError as exc:
-            raise IntegrationAuthorityError(str(exc)) from exc
-        if not path.exists():
-            if authority["required"]:
-                conflicts.append({"type": "MISSING_AUTHORITY", "authorityId": authority["id"], "path": relative})
-                missing.update(authority["owns"])
-            continue
-        if not path.is_file():
-            raise IntegrationAuthorityError(f"authority source is not a file: {relative}")
-        authority_records.append(
-            {"id": authority["id"], "path": relative, "role": authority["role"], "sha256": file_sha256(path)}
-        )
-        selectors = authority["selectors"]
-        extracted = extract_values(path, authority["format"], [item["key"] for item in selectors.values()])
-        for fact_id in authority["owns"]:
-            if len(owners.get(fact_id, [])) != 1:
-                continue
-            selector = selectors[fact_id]
-            values = extracted.get(selector["key"], [])
-            if not values:
-                if selector["required"]:
-                    missing.add(fact_id)
-                continue
-            if len(values) > 1:
-                conflicts.append(
-                    {"type": "CONFLICTING_VALUES", "factId": fact_id, "owner": authority["id"], "values": values}
+    authority_bytes: dict[str, bytes] = {}
+    try:
+        with AnchoredRoot(source) as source_filesystem:
+            for authority in authority_map["authorities"]:
+                relative = authority["path"]
+                try:
+                    if matches_excluded(relative, excluded):
+                        raise IntegrationAuthorityError(f"authority path is excluded: {relative}")
+                    path = resolve_without_symlinks(
+                        source, relative, must_exist=False, label="authority source path"
+                    )
+                    canonical_relative = path.relative_to(source).as_posix()
+                    if matches_excluded(canonical_relative, excluded):
+                        raise IntegrationAuthorityError(f"authority path is excluded: {relative}")
+                except PathBoundaryError as exc:
+                    raise IntegrationAuthorityError(str(exc)) from exc
+                if not source_filesystem.exists(relative):
+                    if authority["required"]:
+                        conflicts.append({"type": "MISSING_AUTHORITY", "authorityId": authority["id"], "path": relative})
+                        missing.update(authority["owns"])
+                    continue
+                if not source_filesystem.is_file(relative):
+                    raise IntegrationAuthorityError(f"authority source is not a file: {relative}")
+                data = source_filesystem.read_bytes(relative)
+                authority_bytes[relative] = data
+                authority_records.append(
+                    {
+                        "id": authority["id"],
+                        "path": relative,
+                        "role": authority["role"],
+                        "sha256": sha256_bytes(data),
+                    }
                 )
-                continue
-            raw = values[0]
-            facts[fact_id] = {
-                "owner": authority["id"],
-                "sourcePath": relative,
-                "rawValue": raw,
-                "normalizedValue": _normalize(raw, selector),
-            }
+                selectors = authority["selectors"]
+                extracted = extract_values_bytes(
+                    data, authority["format"], [item["key"] for item in selectors.values()]
+                )
+                for fact_id in authority["owns"]:
+                    if len(owners.get(fact_id, [])) != 1:
+                        continue
+                    selector = selectors[fact_id]
+                    values = extracted.get(selector["key"], [])
+                    if not values:
+                        if selector["required"]:
+                            missing.add(fact_id)
+                        continue
+                    if len(values) > 1:
+                        conflicts.append(
+                            {"type": "CONFLICTING_VALUES", "factId": fact_id, "owner": authority["id"], "values": values}
+                        )
+                        continue
+                    raw = values[0]
+                    facts[fact_id] = {
+                        "owner": authority["id"],
+                        "sourcePath": relative,
+                        "rawValue": raw,
+                        "normalizedValue": _normalize(raw, selector),
+                    }
+    except AnchoredPathError as exc:
+        raise IntegrationAuthorityError(f"authority source path contains a symlink or changed during snapshot: {exc}") from exc
 
     for fact_id in authority_map["requiredFacts"]:
         if fact_id not in facts:
@@ -181,7 +200,7 @@ def build_authority_snapshot(
         "schemaVersion": "authority-snapshot/v1",
         "integrationId": config["id"],
         "projectId": config["projectId"],
-        "sourceRevision": _source_revision(source, authority_records),
+        "sourceRevision": _source_revision(source, authority_records, authority_bytes),
         "authorities": sorted(authority_records, key=lambda item: item["id"]),
         "facts": {key: facts[key] for key in sorted(facts)},
         "conflicts": sorted(conflicts, key=lambda item: (item["type"], item.get("factId", ""))),

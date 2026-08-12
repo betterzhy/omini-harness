@@ -1,17 +1,16 @@
 from __future__ import annotations
 
 import json
-import os
 import re
-import shutil
 import uuid
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .anchored_fs import AnchoredPathError, AnchoredRoot
 from .discussion import materialize_discussion_contract
-from .generated import deterministic_json_bytes, write_generated_json
+from .generated import deterministic_json_bytes
 from .hashing import file_sha256, sha256_bytes
 from .loader import load_capabilities
 from .paths import PathBoundaryError, resolve_without_symlinks, safe_relative_path
@@ -40,31 +39,6 @@ def _sha256(data: bytes) -> str:
     return sha256_bytes(data)
 
 
-def _fsync_directory(path: Path) -> None:
-    try:
-        descriptor = os.open(path, os.O_RDONLY)
-        try:
-            os.fsync(descriptor)
-        finally:
-            os.close(descriptor)
-    except OSError:
-        pass
-
-
-def _write_atomic(path: Path, data: bytes) -> None:
-    temporary = path.parent / f".{path.name}.tmp-{uuid.uuid4().hex}"
-    try:
-        with temporary.open("wb") as handle:
-            handle.write(data)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, path)
-        _fsync_directory(path.parent)
-    finally:
-        if temporary.exists():
-            temporary.unlink()
-
-
 def _projection_target(root: Path, runtime: str, project_id: str, *, must_exist: bool = False) -> Path:
     return resolve_without_symlinks(
         root,
@@ -72,13 +46,6 @@ def _projection_target(root: Path, runtime: str, project_id: str, *, must_exist:
         must_exist=must_exist,
         label="projection pack path",
     )
-
-
-def _projection_swap_journal_path(target_pack: Path) -> Path:
-    path = target_pack.parent / f".{target_pack.name}.swap-transaction.json"
-    if path.is_symlink():
-        raise ProjectionError("projection swap journal must not be a symlink")
-    return path
 
 
 def _validate_projection_swap_journal(
@@ -115,57 +82,65 @@ def _validate_projection_swap_journal(
     return journal
 
 
-def _remove_projection_directory(path: Path, *, label: str) -> None:
-    if path.is_symlink() or not path.is_dir():
-        raise ProjectionError(f"unsafe {label}")
-    shutil.rmtree(path)
-    _fsync_directory(path.parent)
+def _projection_swap_journal_relative(target_relative: str) -> str:
+    target = Path(target_relative)
+    return (target.parent / f".{target.name}.swap-transaction.json").as_posix()
 
 
-def _recover_projection_swap(target_pack: Path, *, runtime: str, project_id: str) -> None:
-    journal_path = _projection_swap_journal_path(target_pack)
-    if not journal_path.exists():
+def _recover_projection_swap_anchored(
+    filesystem: AnchoredRoot,
+    target_relative: str,
+    *,
+    runtime: str,
+    project_id: str,
+) -> None:
+    journal_relative = _projection_swap_journal_relative(target_relative)
+    if not filesystem.exists(journal_relative):
         return
     try:
-        journal = json.loads(journal_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+        journal = json.loads(filesystem.read_bytes(journal_relative))
+    except (AnchoredPathError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise ProjectionError("invalid projection swap recovery journal") from exc
+    target = Path(target_relative)
     journal = _validate_projection_swap_journal(
-        target_pack,
+        target,
         journal,
         runtime=runtime,
         project_id=project_id,
     )
-    temporary = target_pack.parent / journal["temporaryName"]
-    backup = target_pack.parent / journal["backupName"]
-    for path, label in ((target_pack, "projection target"), (temporary, "projection temporary"), (backup, "projection backup")):
-        if path.is_symlink():
+    temporary_relative = (target.parent / journal["temporaryName"]).as_posix()
+    backup_relative = (target.parent / journal["backupName"]).as_posix()
+
+    for relative, label in (
+        (target_relative, "projection target"),
+        (temporary_relative, "projection temporary"),
+        (backup_relative, "projection backup"),
+    ):
+        if filesystem.exists(relative) and not filesystem.is_dir(relative):
             raise ProjectionError(f"unsafe {label} during recovery")
 
     if journal["phase"] == "COMMITTED":
-        if not target_pack.is_dir() or temporary.exists():
+        if not filesystem.is_dir(target_relative) or filesystem.exists(temporary_relative):
             raise ProjectionError("committed projection swap state is inconsistent")
-        if backup.exists():
-            _remove_projection_directory(backup, label="projection backup")
+        if filesystem.exists(backup_relative):
+            filesystem.remove_tree(backup_relative)
     elif journal["hadTarget"]:
-        if backup.exists():
-            if target_pack.exists():
-                _remove_projection_directory(target_pack, label="projection target")
-            backup.replace(target_pack)
-            _fsync_directory(target_pack.parent)
-        elif not target_pack.is_dir():
+        if filesystem.exists(backup_relative):
+            if filesystem.exists(target_relative):
+                filesystem.remove_tree(target_relative)
+            filesystem.rename(backup_relative, target_relative)
+        elif not filesystem.is_dir(target_relative):
             raise ProjectionError("prepared projection swap cannot restore its original target")
-        if temporary.exists():
-            _remove_projection_directory(temporary, label="projection temporary")
+        if filesystem.exists(temporary_relative):
+            filesystem.remove_tree(temporary_relative)
     else:
-        if backup.exists():
+        if filesystem.exists(backup_relative):
             raise ProjectionError("prepared projection swap has an unexpected backup")
-        if target_pack.exists():
-            _remove_projection_directory(target_pack, label="projection target")
-        if temporary.exists():
-            _remove_projection_directory(temporary, label="projection temporary")
-    journal_path.unlink()
-    _fsync_directory(journal_path.parent)
+        if filesystem.exists(target_relative):
+            filesystem.remove_tree(target_relative)
+        if filesystem.exists(temporary_relative):
+            filesystem.remove_tree(temporary_relative)
+    filesystem.unlink(journal_relative)
 
 
 class ProjectionAdapter(ABC):
@@ -433,115 +408,126 @@ def _build_projection_pack_unlocked(
         target_pack = _projection_target(root.resolve(), runtime, project_identity.as_posix())
     except PathBoundaryError as exc:
         raise ProjectionError("projection output path contains a symlink") from exc
-    target_pack.parent.mkdir(parents=True, exist_ok=True)
-    _recover_projection_swap(
-        target_pack,
-        runtime=runtime,
-        project_id=project_identity.as_posix(),
-    )
-    token = uuid.uuid4().hex
-    pack = target_pack.parent / f".{target_pack.name}.tmp-{token}"
-    backup = target_pack.parent / f".{target_pack.name}.backup-{token}"
-    journal_path = _projection_swap_journal_path(target_pack)
-    pack.mkdir()
-
     try:
-        stable_name = "project-instructions.md" if runtime == "CHATGPT" else "repository-guidance.md"
-        (pack / stable_name).write_text(adapter.stable_guidance(root), encoding="utf-8")
-        (pack / adapter.context_filename()).write_text(_resolved_context_markdown(resolved_context), encoding="utf-8")
-        write_generated_json(pack / "resolved-context.json", resolved_context)
-        (pack / "discussion-contract.md").write_text(
-            materialize_discussion_contract(root, project, resolved_context), encoding="utf-8"
-        )
-
-        omitted_references: list[dict[str, str]] = []
-        generated_skills: list[dict[str, str]] = []
-        for source in source_capabilities:
-            if source["kind"] != "SKILL":
-                continue
-            capability = by_version[(source["id"], source["version"])]
-            if not _can_materialize(capability.asset.get("visibility", "PRIVATE")):
-                marker = {"id": source["id"], "reason": "visibility-gate"}
-                if marker not in omitted_references:
-                    omitted_references.append(marker)
-                continue
-            name = source["id"].rsplit(":", 1)[-1]
-            target = pack / "skills" / name / "SKILL.md"
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(_render_skill(capability, selected_index, by_version, omitted_references), encoding="utf-8")
-            generated_skills.append(
-                {
-                    "id": source["id"],
-                    "version": source["version"],
-                    "contentHash": source["contentHash"],
-                    "skillProjectionVersion": AGENT_SKILL_PROJECTION_VERSION,
-                    "path": target.relative_to(pack).as_posix(),
-                }
-            )
-
-        generated_files: list[dict[str, str]] = []
-        for path in sorted(p for p in pack.rglob("*") if p.is_file()):
-            generated_files.append({"path": path.relative_to(pack).as_posix(), "sha256": file_sha256(path)})
-        manifest = {
-            "schemaVersion": "runtime-projection-manifest/v1",
-            "projectionType": adapter.projection_type,
-            "projectionVersion": adapter.projection_version,
-            "runtime": runtime,
-            "project": resolved_context["project"],
-            "sourceResolutionId": resolved_context["resolutionId"],
-            "capabilityLockFingerprint": resolved_context["capabilityLockFingerprint"],
-            "projectStateHash": resolved_context["projectStateHash"],
-            "projectBindingHash": resolved_context["projectBindingHash"],
-            "sourceCapabilities": source_capabilities,
-            "generatedSkills": generated_skills,
-            "omittedReferences": sorted(omitted_references, key=lambda item: (item["id"], item["reason"])),
-            "generatedFiles": generated_files,
-        }
-        if "authoritySnapshotFingerprint" in resolved_context:
-            manifest.update(
-                {
-                    "authoritySnapshotFingerprint": resolved_context["authoritySnapshotFingerprint"],
-                    "authoritySourceRevision": resolved_context["authoritySourceRevision"],
-                    "authorityGate": resolved_context["authorityGate"],
-                }
-            )
-        write_generated_json(pack / "projection-manifest.json", manifest)
-
-        journal = {
-            "schemaVersion": "projection-swap-transaction/v1",
-            "phase": "PREPARED",
-            "runtime": runtime,
-            "project": project_identity.as_posix(),
-            "token": token,
-            "hadTarget": target_pack.exists(),
-            "temporaryName": pack.name,
-            "backupName": backup.name,
-        }
-        _write_atomic(journal_path, deterministic_json_bytes(journal))
-        if journal["hadTarget"]:
-            if target_pack.is_symlink() or not target_pack.is_dir():
-                raise ProjectionError("unsafe projection target before swap")
-            target_pack.replace(backup)
-            _fsync_directory(target_pack.parent)
-        pack.replace(target_pack)
-        _fsync_directory(target_pack.parent)
-        journal["phase"] = "COMMITTED"
-        _write_atomic(journal_path, deterministic_json_bytes(journal))
-        if backup.exists():
-            _remove_projection_directory(backup, label="projection backup")
-        journal_path.unlink()
-        _fsync_directory(journal_path.parent)
-        return manifest
-    except BaseException:
-        if journal_path.exists():
-            _recover_projection_swap(
-                target_pack,
+        target_relative = target_pack.relative_to(root.resolve()).as_posix()
+        target_relative_path = Path(target_relative)
+        parent_relative = target_relative_path.parent.as_posix()
+        token = uuid.uuid4().hex
+        pack_relative = (target_relative_path.parent / f".{target_pack.name}.tmp-{token}").as_posix()
+        backup_relative = (target_relative_path.parent / f".{target_pack.name}.backup-{token}").as_posix()
+        journal_relative = _projection_swap_journal_relative(target_relative)
+        with AnchoredRoot(root.resolve()) as filesystem:
+            filesystem.mkdirs(parent_relative)
+            _recover_projection_swap_anchored(
+                filesystem,
+                target_relative,
                 runtime=runtime,
                 project_id=project_identity.as_posix(),
             )
-        elif pack.exists():
-            _remove_projection_directory(pack, label="projection temporary")
-        raise
+            filesystem.mkdir_new(pack_relative)
+            try:
+                stable_name = "project-instructions.md" if runtime == "CHATGPT" else "repository-guidance.md"
+                generated_payloads: dict[str, bytes] = {
+                    stable_name: adapter.stable_guidance(root).encode("utf-8"),
+                    adapter.context_filename(): _resolved_context_markdown(resolved_context).encode("utf-8"),
+                    "resolved-context.json": deterministic_json_bytes(resolved_context),
+                    "discussion-contract.md": materialize_discussion_contract(
+                        root, project, resolved_context
+                    ).encode("utf-8"),
+                }
+
+                omitted_references: list[dict[str, str]] = []
+                generated_skills: list[dict[str, str]] = []
+                for source in source_capabilities:
+                    if source["kind"] != "SKILL":
+                        continue
+                    capability = by_version[(source["id"], source["version"])]
+                    if not _can_materialize(capability.asset.get("visibility", "PRIVATE")):
+                        marker = {"id": source["id"], "reason": "visibility-gate"}
+                        if marker not in omitted_references:
+                            omitted_references.append(marker)
+                        continue
+                    name = source["id"].rsplit(":", 1)[-1]
+                    relative = f"skills/{name}/SKILL.md"
+                    generated_payloads[relative] = _render_skill(
+                        capability, selected_index, by_version, omitted_references
+                    ).encode("utf-8")
+                    generated_skills.append(
+                        {
+                            "id": source["id"],
+                            "version": source["version"],
+                            "contentHash": source["contentHash"],
+                            "skillProjectionVersion": AGENT_SKILL_PROJECTION_VERSION,
+                            "path": relative,
+                        }
+                    )
+
+                generated_files = [
+                    {"path": relative, "sha256": _sha256(data)}
+                    for relative, data in sorted(generated_payloads.items())
+                ]
+                manifest = {
+                    "schemaVersion": "runtime-projection-manifest/v1",
+                    "projectionType": adapter.projection_type,
+                    "projectionVersion": adapter.projection_version,
+                    "runtime": runtime,
+                    "project": resolved_context["project"],
+                    "sourceResolutionId": resolved_context["resolutionId"],
+                    "capabilityLockFingerprint": resolved_context["capabilityLockFingerprint"],
+                    "projectStateHash": resolved_context["projectStateHash"],
+                    "projectBindingHash": resolved_context["projectBindingHash"],
+                    "sourceCapabilities": source_capabilities,
+                    "generatedSkills": generated_skills,
+                    "omittedReferences": sorted(omitted_references, key=lambda item: (item["id"], item["reason"])),
+                    "generatedFiles": generated_files,
+                }
+                if "authoritySnapshotFingerprint" in resolved_context:
+                    manifest.update(
+                        {
+                            "authoritySnapshotFingerprint": resolved_context["authoritySnapshotFingerprint"],
+                            "authoritySourceRevision": resolved_context["authoritySourceRevision"],
+                            "authorityGate": resolved_context["authorityGate"],
+                        }
+                    )
+                generated_payloads["projection-manifest.json"] = deterministic_json_bytes(manifest)
+                for relative, data in sorted(generated_payloads.items()):
+                    filesystem.write_bytes(f"{pack_relative}/{relative}", data)
+
+                journal = {
+                    "schemaVersion": "projection-swap-transaction/v1",
+                    "phase": "PREPARED",
+                    "runtime": runtime,
+                    "project": project_identity.as_posix(),
+                    "token": token,
+                    "hadTarget": filesystem.exists(target_relative),
+                    "temporaryName": Path(pack_relative).name,
+                    "backupName": Path(backup_relative).name,
+                }
+                filesystem.write_bytes(journal_relative, deterministic_json_bytes(journal))
+                if journal["hadTarget"]:
+                    if not filesystem.is_dir(target_relative):
+                        raise ProjectionError("unsafe projection target before swap")
+                    filesystem.rename(target_relative, backup_relative)
+                filesystem.rename(pack_relative, target_relative)
+                journal["phase"] = "COMMITTED"
+                filesystem.write_bytes(journal_relative, deterministic_json_bytes(journal))
+                if filesystem.exists(backup_relative):
+                    filesystem.remove_tree(backup_relative)
+                filesystem.unlink(journal_relative)
+                return manifest
+            except BaseException:
+                if filesystem.exists(journal_relative):
+                    _recover_projection_swap_anchored(
+                        filesystem,
+                        target_relative,
+                        runtime=runtime,
+                        project_id=project_identity.as_posix(),
+                    )
+                elif filesystem.exists(pack_relative):
+                    filesystem.remove_tree(pack_relative)
+                raise
+    except (ValueError, AnchoredPathError) as exc:
+        raise ProjectionError("projection output path contains a symlink or escaped its anchored root") from exc
 
 
 def build_projection_pack(
@@ -554,7 +540,7 @@ def build_projection_pack(
 ) -> dict[str, Any]:
     project_id = resolved_context.get("project", "invalid-project")
     target = Path(repository_root).resolve() / "generated" / "projections" / runtime.lower() / str(project_id)
-    identity = process_lock_identity("projection-build", target)
+    identity = process_lock_identity("projection-pack", target)
     try:
         with exclusive_process_lock(identity):
             return _build_projection_pack_unlocked(

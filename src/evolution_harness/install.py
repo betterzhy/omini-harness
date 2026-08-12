@@ -1,18 +1,26 @@
 from __future__ import annotations
 
 import json
-import os
 import re
-import shutil
 import uuid
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from .anchored_fs import AnchoredPathError, AnchoredRoot
 from .generated import deterministic_json_bytes
-from .hashing import file_sha256
-from .paths import PathBoundaryError, resolve_without_symlinks, resolve_within, safe_relative_path
+from .hashing import sha256_bytes
+from .paths import PathBoundaryError, resolve_without_symlinks, safe_relative_path
 from .projection import validate_projection_pack
-from .process_lock import ProcessLockError, exclusive_process_lock, process_lock_identity
+from .process_lock import (
+    ProcessLockError,
+    exclusive_process_lock,
+    exclusive_process_locks,
+    process_lock_identity,
+    recovery_attestation_phase,
+    remove_recovery_attestation,
+    verify_recovery_attestation,
+    write_recovery_attestation,
+)
 from .schema import SchemaStore
 
 
@@ -26,15 +34,18 @@ class ProjectionInstallError(RuntimeError):
     pass
 
 
-def _load_json(path: Path) -> dict[str, Any]:
-    return json.loads(path.read_text(encoding="utf-8"))
-
-
-def _managed_manifest(repository_root: Path, target_root: Path) -> tuple[Path, dict[str, Any] | None]:
+def _managed_manifest(
+    repository_root: Path,
+    target_root: Path,
+    filesystem: AnchoredRoot,
+) -> tuple[Path, dict[str, Any] | None]:
     path = resolve_without_symlinks(target_root, INSTALL_MANIFEST_PATH, label="install manifest path")
-    if not path.exists():
+    if not filesystem.exists(INSTALL_MANIFEST_PATH):
         return path, None
-    manifest = _load_json(path)
+    try:
+        manifest = json.loads(filesystem.read_bytes(INSTALL_MANIFEST_PATH))
+    except (AnchoredPathError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ProjectionInstallError("install manifest is unsafe or invalid") from exc
     SchemaStore(repository_root).validate("core/schemas/projection-install-manifest.schema.json", manifest)
     return path, manifest
 
@@ -89,12 +100,13 @@ def _projection_inputs(
             raise ProjectionInstallError(f"unsafe projected skill path: {raw_path}") from exc
         if len(relative.parts) != 3 or relative.parts[0] != "skills" or relative.parts[2] != "SKILL.md":
             raise ProjectionInstallError(f"unsafe projected skill path: {raw_path}")
-        try:
-            source = resolve_within(pack, relative.as_posix(), must_exist=True, label="projected skill path")
-        except (PathBoundaryError, FileNotFoundError) as exc:
-            raise ProjectionInstallError(f"unsafe projected skill path: {raw_path}") from exc
         expected_hash = file_hashes.get(relative.as_posix())
-        if not expected_hash or file_sha256(source) != expected_hash:
+        try:
+            with AnchoredRoot(pack) as pack_filesystem:
+                source_bytes = pack_filesystem.read_bytes(relative.as_posix())
+        except AnchoredPathError as exc:
+            raise ProjectionInstallError(f"unsafe projected skill path: {raw_path}") from exc
+        if not expected_hash or sha256_bytes(source_bytes) != expected_hash:
             raise ProjectionInstallError(f"projected skill hash mismatch: {raw_path}")
         target_path = PurePosixPath(".agents", "skills", relative.parts[1], "SKILL.md").as_posix()
         inputs.append(
@@ -106,7 +118,7 @@ def _projection_inputs(
                 "capabilityId": skill["id"],
                 "capabilityVersion": skill["version"],
                 "capabilityContentHash": skill["contentHash"],
-                "_source": source,
+                "_sourceBytes": source_bytes,
             }
         )
     manifest["_validatedResolvedContext"] = resolved
@@ -126,49 +138,10 @@ def _persistent_manifest(projection: dict[str, Any], inputs: list[dict[str, Any]
             "capabilityLockFingerprint": projection["capabilityLockFingerprint"],
         },
         "installedFiles": [
-            {key: value for key, value in item.items() if key != "_source"}
+            {key: value for key, value in item.items() if not key.startswith("_")}
             for item in sorted(inputs, key=lambda value: value["path"])
         ],
     }
-
-
-def _write_atomic(path: Path, data: bytes) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.parent / f".{path.name}.tmp-{uuid.uuid4().hex}"
-    try:
-        with temporary.open("wb") as handle:
-            handle.write(data)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, path)
-        _fsync_directory(path.parent)
-    finally:
-        if temporary.exists():
-            temporary.unlink()
-
-
-def _fsync_directory(path: Path) -> None:
-    try:
-        descriptor = os.open(path, os.O_RDONLY)
-        try:
-            os.fsync(descriptor)
-        finally:
-            os.close(descriptor)
-    except OSError:
-        pass
-
-
-def _lexical_managed_path(target: Path, relative: str, *, allow_leaf_symlink: bool = False) -> Path:
-    rel = safe_relative_path(relative, label="managed transaction path")
-    current = target
-    for part in rel.parts[:-1]:
-        current = current / part
-        if current.is_symlink():
-            raise ProjectionInstallError(f"managed transaction parent contains symlink: {relative}")
-    destination = current / rel.parts[-1]
-    if destination.is_symlink() and not allow_leaf_symlink:
-        raise ProjectionInstallError(f"managed transaction path contains symlink: {relative}")
-    return destination
 
 
 def _is_managed_skill_path(value: Any) -> bool:
@@ -200,7 +173,7 @@ def _validate_transaction_journal(journal: Any) -> dict[str, Any]:
         raise ProjectionInstallError("invalid projection install recovery journal")
     if journal.get("operation") not in {"INSTALL", "UNINSTALL"}:
         raise ProjectionInstallError("invalid projection install recovery journal")
-    if journal.get("phase") not in {"PREPARED", "COMMITTED"}:
+    if journal.get("phase") != "PREPARED":
         raise ProjectionInstallError("invalid projection install recovery journal")
     backup_directory = journal.get("backupDirectory")
     if not isinstance(backup_directory, str):
@@ -218,77 +191,124 @@ def _validate_transaction_journal(journal: Any) -> dict[str, Any]:
         raise ProjectionInstallError("invalid projection install recovery journal")
     seen: set[str] = set()
     for index, item in enumerate(files):
-        if not isinstance(item, dict) or set(item) != {"path", "existed", "backupPath"}:
+        if not isinstance(item, dict) or set(item) != {"path", "existed", "backupPath", "backupSha256"}:
             raise ProjectionInstallError("invalid projection install recovery journal")
         path = item.get("path")
         if not _is_managed_skill_path(path) or path in seen or not isinstance(item.get("existed"), bool):
             raise ProjectionInstallError("invalid projection install recovery journal")
         if item.get("backupPath") != f"{backup_directory}/file-{index}":
             raise ProjectionInstallError("invalid projection install recovery journal")
+        backup_hash = item.get("backupSha256")
+        if (item["existed"] and (not isinstance(backup_hash, str) or not re.fullmatch(r"[0-9a-f]{64}", backup_hash))) or (
+            not item["existed"] and backup_hash is not None
+        ):
+            raise ProjectionInstallError("invalid projection install recovery journal")
         seen.add(path)
     manifest = journal.get("manifest")
     if (
         not isinstance(manifest, dict)
-        or set(manifest) != {"existed", "backupPath"}
+        or set(manifest) != {"existed", "backupPath", "backupSha256"}
         or not isinstance(manifest.get("existed"), bool)
         or manifest.get("backupPath") != f"{backup_directory}/install-manifest"
     ):
         raise ProjectionInstallError("invalid projection install recovery journal")
+    manifest_hash = manifest.get("backupSha256")
+    if (
+        manifest["existed"]
+        and (not isinstance(manifest_hash, str) or not re.fullmatch(r"[0-9a-f]{64}", manifest_hash))
+    ) or (not manifest["existed"] and manifest_hash is not None):
+        raise ProjectionInstallError("invalid projection install recovery journal")
     return journal
 
 
-def _cleanup_transaction(target: Path, journal: dict[str, Any]) -> None:
+def _cleanup_transaction(
+    target: Path,
+    filesystem: AnchoredRoot,
+    journal: dict[str, Any],
+    *,
+    identity: str,
+) -> None:
     journal = _validate_transaction_journal(journal)
-    backup_directory = resolve_without_symlinks(
-        target, journal["backupDirectory"], must_exist=False, label="transaction backup directory"
-    )
-    if backup_directory.exists():
-        if not backup_directory.is_dir():
+    backup_directory = journal["backupDirectory"]
+    if filesystem.exists(backup_directory):
+        if not filesystem.is_dir(backup_directory):
             raise ProjectionInstallError("transaction backup path is not a directory")
-        shutil.rmtree(backup_directory)
-    journal_path = _lexical_managed_path(target, INSTALL_TRANSACTION_PATH)
-    if journal_path.exists():
-        journal_path.unlink()
-    backup_root = resolve_without_symlinks(
-        target, INSTALL_BACKUP_ROOT, must_exist=False, label="transaction backup root"
-    )
-    if backup_root.is_dir() and not any(backup_root.iterdir()):
-        backup_root.rmdir()
+        filesystem.remove_tree(backup_directory)
+    filesystem.unlink(INSTALL_TRANSACTION_PATH, missing_ok=True)
+    filesystem.rmdir_if_empty(INSTALL_BACKUP_ROOT)
+    remove_recovery_attestation(identity, missing_ok=True)
+
+
+def _recover_install_transaction_anchored(target: Path, filesystem: AnchoredRoot) -> None:
+    identity = process_lock_identity("projection-install", target)
+    if not filesystem.exists(INSTALL_TRANSACTION_PATH):
+        try:
+            orphan_phase = recovery_attestation_phase(identity)
+            if orphan_phase == "PREPARED":
+                raise ProjectionInstallError("trusted PREPARED recovery attestation has no journal")
+            remove_recovery_attestation(identity, missing_ok=True)
+        except ProcessLockError as exc:
+            raise ProjectionInstallError(str(exc)) from exc
+        return
+    try:
+        journal_bytes = filesystem.read_bytes(INSTALL_TRANSACTION_PATH)
+        recovery_phase = verify_recovery_attestation(identity, journal_bytes)
+    except (AnchoredPathError, ProcessLockError) as exc:
+        raise ProjectionInstallError(f"trusted recovery attestation failed: {exc}") from exc
+    try:
+        journal = _validate_transaction_journal(json.loads(journal_bytes))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ProjectionInstallError("invalid projection install recovery journal") from exc
+
+    if recovery_phase == "PREPARED":
+        backup_bytes: dict[str, bytes] = {}
+        for item in journal["files"]:
+            if item["existed"]:
+                try:
+                    data = filesystem.read_bytes(item["backupPath"])
+                except AnchoredPathError as exc:
+                    raise ProjectionInstallError("trusted recovery backup is missing or unsafe") from exc
+                if sha256_bytes(data) != item["backupSha256"]:
+                    raise ProjectionInstallError("trusted recovery backup hash mismatch")
+                backup_bytes[item["backupPath"]] = data
+        manifest = journal["manifest"]
+        if manifest["existed"]:
+            try:
+                data = filesystem.read_bytes(manifest["backupPath"])
+            except AnchoredPathError as exc:
+                raise ProjectionInstallError("trusted recovery manifest backup is missing or unsafe") from exc
+            if sha256_bytes(data) != manifest["backupSha256"]:
+                raise ProjectionInstallError("trusted recovery manifest backup hash mismatch")
+            backup_bytes[manifest["backupPath"]] = data
+
+        for item in journal["files"]:
+            if item["existed"]:
+                try:
+                    filesystem.write_bytes(item["path"], backup_bytes[item["backupPath"]])
+                except AnchoredPathError as exc:
+                    raise ProjectionInstallError("anchored recovery write failed") from exc
+            elif filesystem.exists(item["path"]):
+                if filesystem.is_dir(item["path"]):
+                    raise ProjectionInstallError("managed recovery destination became a directory")
+                filesystem.unlink(item["path"])
+        manifest = journal["manifest"]
+        if manifest["existed"]:
+            filesystem.write_bytes(INSTALL_MANIFEST_PATH, backup_bytes[manifest["backupPath"]])
+        elif filesystem.exists(INSTALL_MANIFEST_PATH):
+            filesystem.unlink(INSTALL_MANIFEST_PATH)
+        try:
+            write_recovery_attestation(identity, journal_bytes, phase="COMMITTED")
+        except ProcessLockError as exc:
+            raise ProjectionInstallError(str(exc)) from exc
+    _cleanup_transaction(target, filesystem, journal, identity=identity)
 
 
 def _recover_install_transaction(target: Path) -> None:
-    journal_path = _lexical_managed_path(target, INSTALL_TRANSACTION_PATH)
-    if not journal_path.exists():
-        return
-    journal = _validate_transaction_journal(_load_json(journal_path))
-    if journal["phase"] == "PREPARED":
-        for item in journal["files"]:
-            destination = _lexical_managed_path(target, item["path"], allow_leaf_symlink=True)
-            if item["existed"]:
-                backup = resolve_without_symlinks(
-                    target, item["backupPath"], must_exist=True, label="transaction file backup"
-                )
-                if destination.exists() or destination.is_symlink():
-                    if destination.is_dir() and not destination.is_symlink():
-                        raise ProjectionInstallError("managed recovery destination became a directory")
-                    destination.unlink()
-                _write_atomic(destination, backup.read_bytes())
-            elif destination.exists() or destination.is_symlink():
-                if destination.is_dir() and not destination.is_symlink():
-                    raise ProjectionInstallError("managed recovery destination became a directory")
-                destination.unlink()
-        manifest = journal["manifest"]
-        manifest_path = _lexical_managed_path(target, INSTALL_MANIFEST_PATH, allow_leaf_symlink=True)
-        if manifest["existed"]:
-            backup = resolve_without_symlinks(
-                target, manifest["backupPath"], must_exist=True, label="transaction manifest backup"
-            )
-            if manifest_path.exists() or manifest_path.is_symlink():
-                manifest_path.unlink()
-            _write_atomic(manifest_path, backup.read_bytes())
-        elif manifest_path.exists() or manifest_path.is_symlink():
-            manifest_path.unlink()
-    _cleanup_transaction(target, journal)
+    try:
+        with AnchoredRoot(target) as filesystem:
+            _recover_install_transaction_anchored(target, filesystem)
+    except AnchoredPathError as exc:
+        raise ProjectionInstallError(str(exc)) from exc
 
 
 def _begin_transaction(
@@ -296,51 +316,71 @@ def _begin_transaction(
     operation: str,
     destinations: list[Path],
     manifest_path: Path,
+    filesystem: AnchoredRoot | None = None,
 ) -> dict[str, Any]:
+    if filesystem is None:
+        try:
+            with AnchoredRoot(target) as anchored:
+                return _begin_transaction(target, operation, destinations, manifest_path, anchored)
+        except AnchoredPathError as exc:
+            raise ProjectionInstallError(str(exc)) from exc
     token = uuid.uuid4().hex
     backup_relative = f"{INSTALL_BACKUP_ROOT}/{token}"
-    backup_directory = resolve_without_symlinks(
-        target, backup_relative, must_exist=False, label="transaction backup directory"
-    )
-    backup_directory.mkdir(parents=True)
-    _fsync_directory(backup_directory)
-    _fsync_directory(backup_directory.parent)
+    try:
+        filesystem.mkdir_new(backup_relative)
+    except AnchoredPathError as exc:
+        raise ProjectionInstallError("cannot create anchored transaction backup") from exc
     files: list[dict[str, Any]] = []
     for index, destination in enumerate(destinations):
         relative = destination.relative_to(target).as_posix()
-        existed = destination.is_file()
+        existed = filesystem.is_file(relative)
         backup_path = f"{backup_relative}/file-{index}"
+        backup_hash = None
         if existed:
-            backup = resolve_without_symlinks(
-                target, backup_path, must_exist=False, label="transaction file backup"
-            )
-            _write_atomic(backup, destination.read_bytes())
-        files.append({"path": relative, "existed": existed, "backupPath": backup_path})
-    manifest_existed = manifest_path.is_file()
-    manifest_backup_path = f"{backup_relative}/install-manifest"
-    if manifest_existed:
-        backup = resolve_without_symlinks(
-            target, manifest_backup_path, must_exist=False, label="transaction manifest backup"
+            data = filesystem.read_bytes(relative)
+            filesystem.write_bytes(backup_path, data)
+            backup_hash = sha256_bytes(data)
+        files.append(
+            {"path": relative, "existed": existed, "backupPath": backup_path, "backupSha256": backup_hash}
         )
-        _write_atomic(backup, manifest_path.read_bytes())
+    manifest_relative = manifest_path.relative_to(target).as_posix()
+    manifest_existed = filesystem.is_file(manifest_relative)
+    manifest_backup_path = f"{backup_relative}/install-manifest"
+    manifest_backup_hash = None
+    if manifest_existed:
+        data = filesystem.read_bytes(manifest_relative)
+        filesystem.write_bytes(manifest_backup_path, data)
+        manifest_backup_hash = sha256_bytes(data)
     journal = {
         "schemaVersion": "projection-install-transaction/v1",
         "operation": operation,
         "phase": "PREPARED",
         "backupDirectory": backup_relative,
         "files": files,
-        "manifest": {"existed": manifest_existed, "backupPath": manifest_backup_path},
+        "manifest": {
+            "existed": manifest_existed,
+            "backupPath": manifest_backup_path,
+            "backupSha256": manifest_backup_hash,
+        },
     }
-    journal_path = _lexical_managed_path(target, INSTALL_TRANSACTION_PATH)
-    _write_atomic(journal_path, deterministic_json_bytes(journal))
+    journal_bytes = deterministic_json_bytes(journal)
+    filesystem.write_bytes(INSTALL_TRANSACTION_PATH, journal_bytes)
+    identity = process_lock_identity("projection-install", target)
+    try:
+        write_recovery_attestation(identity, journal_bytes, phase="PREPARED")
+    except ProcessLockError as exc:
+        raise ProjectionInstallError(str(exc)) from exc
     return journal
 
 
-def _commit_transaction(target: Path, journal: dict[str, Any]) -> None:
-    journal["phase"] = "COMMITTED"
-    journal_path = _lexical_managed_path(target, INSTALL_TRANSACTION_PATH)
-    _write_atomic(journal_path, deterministic_json_bytes(journal))
-    _cleanup_transaction(target, journal)
+def _commit_transaction(target: Path, filesystem: AnchoredRoot, journal: dict[str, Any]) -> None:
+    journal_bytes = deterministic_json_bytes(journal)
+    identity = process_lock_identity("projection-install", target)
+    try:
+        write_recovery_attestation(identity, journal_bytes, phase="COMMITTED")
+    except ProcessLockError as exc:
+        raise ProjectionInstallError(str(exc)) from exc
+    _cleanup_transaction(target, filesystem, journal, identity=identity)
 
 
 def _install_projection_unlocked(
@@ -351,108 +391,121 @@ def _install_projection_unlocked(
     apply: bool = False,
 ) -> dict[str, Any]:
     repository = Path(repository_root).resolve()
-    target = Path(target_root).resolve()
+    target_input = Path(target_root)
+    if target_input.is_symlink():
+        raise ProjectionInstallError("install target must not be a symlink")
+    target = target_input.resolve()
     if not target.is_dir():
         raise ProjectionInstallError("install target must be an existing directory")
-    transaction_path = _lexical_managed_path(target, INSTALL_TRANSACTION_PATH)
-    if transaction_path.exists():
-        if not apply:
-            raise ProjectionInstallError("pending projection transaction recovery requires explicit --apply")
-        _recover_install_transaction(target)
-    projection, inputs = _projection_inputs(repository, pack_root, target)
-    resolved = projection.pop("_validatedResolvedContext")
-    integration_root_value = projection.pop("_validatedIntegrationRoot")
-    if integration_root_value is not None:
-        from .integration import check_integration_projection
-
-        freshness = check_integration_projection(
-            repository,
-            Path(integration_root_value),
-            target,
-            runtime=projection["runtime"],
-            intent=resolved["intent"],
-            topic=resolved["topic"],
-            requested_output=resolved["requestedOutput"],
-            explicit_stage=resolved["stage"],
-            reopen_signal=resolved.get("reopenSignal"),
-        )
-        if not freshness.fresh:
-            raise ProjectionInstallError(
-                "projection pack is stale for integration source: " + ", ".join(freshness.reasons)
-            )
-    install_manifest_path, current_manifest = _managed_manifest(repository, target)
-    current_by_path = {
-        item["path"]: item for item in (current_manifest or {}).get("installedFiles", [])
-    }
-    desired_paths = {item["path"] for item in inputs}
-    if set(current_by_path) - desired_paths:
-        raise ProjectionInstallError("managed skill set changed; uninstall before installing a different set")
-
-    collisions: list[dict[str, str]] = []
-    actions: list[dict[str, str]] = []
-    for item in inputs:
-        try:
-            destination = resolve_without_symlinks(target, item["path"], label="skill install target")
-        except PathBoundaryError as exc:
-            raise ProjectionInstallError(str(exc)) from exc
-        managed = current_by_path.get(item["path"])
-        if destination.exists():
-            if managed is None:
-                collisions.append({"path": item["path"], "reason": "unmanaged-target-exists"})
-                continue
-            if not destination.is_file() or file_sha256(destination) != managed["installedSha256"]:
-                collisions.append({"path": item["path"], "reason": "managed-target-drift"})
-                continue
-            operation = "UNCHANGED" if file_sha256(destination) == item["sourceSha256"] else "UPDATE"
-        elif managed is not None:
-            collisions.append({"path": item["path"], "reason": "managed-target-missing"})
-            continue
-        else:
-            operation = "CREATE"
-        actions.append(
-            {
-                "operation": operation,
-                "source": item["sourcePath"],
-                "target": item["path"],
-                "sha256": item["sourceSha256"],
-            }
-        )
-
-    result = {
-        "schemaVersion": "projection-install-plan/v1",
-        "mode": "APPLY" if apply else "DRY_RUN",
-        "gate": "PASS" if not collisions else "NO_GO",
-        "project": projection["project"],
-        "runtime": projection["runtime"],
-        "actions": actions,
-        "collisions": collisions,
-        "manifestPath": INSTALL_MANIFEST_PATH,
-    }
-    if not apply:
-        return result
-    if collisions:
-        raise ProjectionInstallError("skill collision prevents projection install")
-
-    persistent = _persistent_manifest(projection, inputs)
-    SchemaStore(repository).validate("core/schemas/projection-install-manifest.schema.json", persistent)
-    destinations = [
-        resolve_without_symlinks(target, item["path"], label="skill install target")
-        for item in inputs
-    ]
-    journal = _begin_transaction(target, "INSTALL", destinations, install_manifest_path)
     try:
-        for item in inputs:
-            destination = resolve_without_symlinks(target, item["path"], label="skill install target")
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            if destination.exists() and file_sha256(destination) == item["sourceSha256"]:
-                continue
-            _write_atomic(destination, item["_source"].read_bytes())
-        _write_atomic(install_manifest_path, deterministic_json_bytes(persistent))
-        _commit_transaction(target, journal)
-    except BaseException:
-        _recover_install_transaction(target)
-        raise
-    return result
+        with AnchoredRoot(target) as filesystem:
+            recovery_identity = process_lock_identity("projection-install", target)
+            pending_recovery = filesystem.exists(INSTALL_TRANSACTION_PATH) or recovery_attestation_phase(
+                recovery_identity
+            ) is not None
+            if pending_recovery:
+                if not apply:
+                    raise ProjectionInstallError("pending projection transaction recovery requires explicit --apply")
+                _recover_install_transaction_anchored(target, filesystem)
+            projection, inputs = _projection_inputs(repository, pack_root, target)
+            resolved = projection.pop("_validatedResolvedContext")
+            integration_root_value = projection.pop("_validatedIntegrationRoot")
+            if integration_root_value is not None:
+                from .integration import check_integration_projection
+
+                freshness = check_integration_projection(
+                    repository,
+                    Path(integration_root_value),
+                    target,
+                    runtime=projection["runtime"],
+                    intent=resolved["intent"],
+                    topic=resolved["topic"],
+                    requested_output=resolved["requestedOutput"],
+                    explicit_stage=resolved["stage"],
+                    reopen_signal=resolved.get("reopenSignal"),
+                )
+                if not freshness.fresh:
+                    raise ProjectionInstallError(
+                        "projection pack is stale for integration source: " + ", ".join(freshness.reasons)
+                    )
+            install_manifest_path, current_manifest = _managed_manifest(repository, target, filesystem)
+            current_by_path = {
+                item["path"]: item for item in (current_manifest or {}).get("installedFiles", [])
+            }
+            desired_paths = {item["path"] for item in inputs}
+            if set(current_by_path) - desired_paths:
+                raise ProjectionInstallError("managed skill set changed; uninstall before installing a different set")
+
+            collisions: list[dict[str, str]] = []
+            actions: list[dict[str, str]] = []
+            for item in inputs:
+                try:
+                    resolve_without_symlinks(target, item["path"], label="skill install target")
+                    present = filesystem.exists(item["path"])
+                    current_bytes = filesystem.read_bytes(item["path"]) if filesystem.is_file(item["path"]) else None
+                except (PathBoundaryError, AnchoredPathError) as exc:
+                    raise ProjectionInstallError(f"skill install target contains a symlink or unsafe path: {item['path']}") from exc
+                managed = current_by_path.get(item["path"])
+                if present:
+                    if managed is None:
+                        collisions.append({"path": item["path"], "reason": "unmanaged-target-exists"})
+                        continue
+                    if current_bytes is None or sha256_bytes(current_bytes) != managed["installedSha256"]:
+                        collisions.append({"path": item["path"], "reason": "managed-target-drift"})
+                        continue
+                    operation = "UNCHANGED" if sha256_bytes(current_bytes) == item["sourceSha256"] else "UPDATE"
+                elif managed is not None:
+                    collisions.append({"path": item["path"], "reason": "managed-target-missing"})
+                    continue
+                else:
+                    operation = "CREATE"
+                actions.append(
+                    {
+                        "operation": operation,
+                        "source": item["sourcePath"],
+                        "target": item["path"],
+                        "sha256": item["sourceSha256"],
+                    }
+                )
+
+            result = {
+                "schemaVersion": "projection-install-plan/v1",
+                "mode": "APPLY" if apply else "DRY_RUN",
+                "gate": "PASS" if not collisions else "NO_GO",
+                "project": projection["project"],
+                "runtime": projection["runtime"],
+                "actions": actions,
+                "collisions": collisions,
+                "manifestPath": INSTALL_MANIFEST_PATH,
+            }
+            if not apply:
+                return result
+            if collisions:
+                raise ProjectionInstallError("skill collision prevents projection install")
+
+            persistent = _persistent_manifest(projection, inputs)
+            SchemaStore(repository).validate("core/schemas/projection-install-manifest.schema.json", persistent)
+            destinations = [
+                resolve_without_symlinks(target, item["path"], label="skill install target")
+                for item in inputs
+            ]
+            journal = _begin_transaction(target, "INSTALL", destinations, install_manifest_path, filesystem)
+            try:
+                for item in inputs:
+                    resolve_without_symlinks(target, item["path"], label="skill install target")
+                    if filesystem.is_file(item["path"]):
+                        current_bytes = filesystem.read_bytes(item["path"])
+                        if sha256_bytes(current_bytes) == item["sourceSha256"]:
+                            continue
+                    filesystem.write_bytes(item["path"], item["_sourceBytes"])
+                filesystem.write_bytes(INSTALL_MANIFEST_PATH, deterministic_json_bytes(persistent))
+                _commit_transaction(target, filesystem, journal)
+            except BaseException:
+                _recover_install_transaction_anchored(target, filesystem)
+                raise
+            return result
+    except AnchoredPathError as exc:
+        raise ProjectionInstallError(f"anchored install path failed: {exc}") from exc
 
 
 def install_projection(
@@ -462,14 +515,13 @@ def install_projection(
     *,
     apply: bool = False,
 ) -> dict[str, Any]:
-    if not apply:
-        return _install_projection_unlocked(repository_root, pack_root, target_root, apply=False)
-    identity = process_lock_identity("projection-install", Path(target_root))
+    target_identity = process_lock_identity("projection-install", Path(target_root))
+    pack_identity = process_lock_identity("projection-pack", Path(pack_root))
     try:
-        with exclusive_process_lock(identity):
-            return _install_projection_unlocked(repository_root, pack_root, target_root, apply=True)
+        with exclusive_process_locks([pack_identity, target_identity]):
+            return _install_projection_unlocked(repository_root, pack_root, target_root, apply=apply)
     except ProcessLockError as exc:
-        raise ProjectionInstallError(f"concurrent projection install rejected: {exc}") from exc
+        raise ProjectionInstallError(f"concurrent projection install or projection pack access rejected: {exc}") from exc
 
 
 def _uninstall_projection_unlocked(
@@ -479,68 +531,75 @@ def _uninstall_projection_unlocked(
     apply: bool = False,
 ) -> dict[str, Any]:
     repository = Path(repository_root).resolve()
-    target = Path(target_root).resolve()
+    target_input = Path(target_root)
+    if target_input.is_symlink():
+        raise ProjectionInstallError("uninstall target must not be a symlink")
+    target = target_input.resolve()
     if not target.is_dir():
         raise ProjectionInstallError("uninstall target must be an existing directory")
-    transaction_path = _lexical_managed_path(target, INSTALL_TRANSACTION_PATH)
-    if transaction_path.exists():
-        if not apply:
-            raise ProjectionInstallError("pending projection transaction recovery requires explicit --apply")
-        _recover_install_transaction(target)
-    manifest_path, manifest = _managed_manifest(repository, target)
-    if manifest is None:
-        result = {
-            "schemaVersion": "projection-uninstall-plan/v1",
-            "mode": "APPLY" if apply else "DRY_RUN",
-            "gate": "NO_GO",
-            "actions": [],
-            "collisions": [{"path": INSTALL_MANIFEST_PATH, "reason": "install-manifest-missing"}],
-        }
-        if apply:
-            raise ProjectionInstallError("projection install manifest is missing")
-        return result
-
-    collisions: list[dict[str, str]] = []
-    actions: list[dict[str, str]] = []
-    destinations: list[Path] = []
-    for item in manifest["installedFiles"]:
-        try:
-            destination = resolve_without_symlinks(target, item["path"], label="managed skill path")
-        except PathBoundaryError as exc:
-            raise ProjectionInstallError(f"managed skill path contains symlink: {item['path']}") from exc
-        destinations.append(destination)
-        if not destination.is_file() or file_sha256(destination) != item["installedSha256"]:
-            collisions.append({"path": item["path"], "reason": "managed-file-drift"})
-        else:
-            actions.append({"operation": "REMOVE", "target": item["path"], "sha256": item["installedSha256"]})
-    result = {
-        "schemaVersion": "projection-uninstall-plan/v1",
-        "mode": "APPLY" if apply else "DRY_RUN",
-        "gate": "PASS" if not collisions else "NO_GO",
-        "actions": actions,
-        "collisions": collisions,
-    }
-    if not apply:
-        return result
-    if collisions:
-        raise ProjectionInstallError("managed file drift prevents projection uninstall")
-
-    journal = _begin_transaction(target, "UNINSTALL", destinations, manifest_path)
     try:
-        for destination in destinations:
-            destination.unlink()
-            _fsync_directory(destination.parent)
-        manifest_path.unlink()
-        _fsync_directory(manifest_path.parent)
-        _commit_transaction(target, journal)
-    except BaseException:
-        _recover_install_transaction(target)
-        raise
-    for destination in destinations:
-        parent = destination.parent
-        if parent.is_dir() and not any(parent.iterdir()):
-            parent.rmdir()
-    return result
+        with AnchoredRoot(target) as filesystem:
+            recovery_identity = process_lock_identity("projection-install", target)
+            pending_recovery = filesystem.exists(INSTALL_TRANSACTION_PATH) or recovery_attestation_phase(
+                recovery_identity
+            ) is not None
+            if pending_recovery:
+                if not apply:
+                    raise ProjectionInstallError("pending projection transaction recovery requires explicit --apply")
+                _recover_install_transaction_anchored(target, filesystem)
+            manifest_path, manifest = _managed_manifest(repository, target, filesystem)
+            if manifest is None:
+                result = {
+                    "schemaVersion": "projection-uninstall-plan/v1",
+                    "mode": "APPLY" if apply else "DRY_RUN",
+                    "gate": "NO_GO",
+                    "actions": [],
+                    "collisions": [{"path": INSTALL_MANIFEST_PATH, "reason": "install-manifest-missing"}],
+                }
+                if apply:
+                    raise ProjectionInstallError("projection install manifest is missing")
+                return result
+
+            collisions: list[dict[str, str]] = []
+            actions: list[dict[str, str]] = []
+            destinations: list[Path] = []
+            for item in manifest["installedFiles"]:
+                try:
+                    destination = resolve_without_symlinks(target, item["path"], label="managed skill path")
+                    current_bytes = filesystem.read_bytes(item["path"]) if filesystem.is_file(item["path"]) else None
+                except (PathBoundaryError, AnchoredPathError) as exc:
+                    raise ProjectionInstallError(f"managed skill path contains symlink: {item['path']}") from exc
+                destinations.append(destination)
+                if current_bytes is None or sha256_bytes(current_bytes) != item["installedSha256"]:
+                    collisions.append({"path": item["path"], "reason": "managed-file-drift"})
+                else:
+                    actions.append({"operation": "REMOVE", "target": item["path"], "sha256": item["installedSha256"]})
+            result = {
+                "schemaVersion": "projection-uninstall-plan/v1",
+                "mode": "APPLY" if apply else "DRY_RUN",
+                "gate": "PASS" if not collisions else "NO_GO",
+                "actions": actions,
+                "collisions": collisions,
+            }
+            if not apply:
+                return result
+            if collisions:
+                raise ProjectionInstallError("managed file drift prevents projection uninstall")
+
+            journal = _begin_transaction(target, "UNINSTALL", destinations, manifest_path, filesystem)
+            try:
+                for item in manifest["installedFiles"]:
+                    filesystem.unlink(item["path"])
+                filesystem.unlink(INSTALL_MANIFEST_PATH)
+                _commit_transaction(target, filesystem, journal)
+            except BaseException:
+                _recover_install_transaction_anchored(target, filesystem)
+                raise
+            for item in manifest["installedFiles"]:
+                filesystem.rmdir_if_empty(PurePosixPath(item["path"]).parent.as_posix())
+            return result
+    except AnchoredPathError as exc:
+        raise ProjectionInstallError(f"anchored uninstall path failed: {exc}") from exc
 
 
 def uninstall_projection(
@@ -549,11 +608,9 @@ def uninstall_projection(
     *,
     apply: bool = False,
 ) -> dict[str, Any]:
-    if not apply:
-        return _uninstall_projection_unlocked(repository_root, target_root, apply=False)
     identity = process_lock_identity("projection-install", Path(target_root))
     try:
         with exclusive_process_lock(identity):
-            return _uninstall_projection_unlocked(repository_root, target_root, apply=True)
+            return _uninstall_projection_unlocked(repository_root, target_root, apply=apply)
     except ProcessLockError as exc:
         raise ProjectionInstallError(f"concurrent projection uninstall rejected: {exc}") from exc

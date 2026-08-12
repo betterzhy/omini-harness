@@ -30,10 +30,10 @@ def _nested(value: Any, dotted: str) -> list[str]:
     return [_stringify(current)]
 
 
-def _markdown_values(path: Path, keys: list[str]) -> dict[str, list[str]]:
+def _markdown_values(text: str, keys: list[str]) -> dict[str, list[str]]:
     wanted = set(keys)
     found = {key: [] for key in keys}
-    for raw_line in path.read_text(encoding="utf-8").splitlines():
+    for raw_line in text.splitlines():
         line = raw_line.strip()
         if line.startswith(">"):
             line = line[1:].strip()
@@ -47,13 +47,18 @@ def _markdown_values(path: Path, keys: list[str]) -> dict[str, list[str]]:
     return found
 
 
-def extract_values(path: Path, source_format: str, keys: list[str]) -> dict[str, list[str]]:
+def extract_values_bytes(data: bytes, source_format: str, keys: list[str]) -> dict[str, list[str]]:
+    text = data.decode("utf-8")
     if source_format == "MARKDOWN_KV":
-        return _markdown_values(path, keys)
+        return _markdown_values(text, keys)
     if source_format == "YAML":
-        value = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        value = yaml.safe_load(text) or {}
     elif source_format == "JSON":
-        value = json.loads(path.read_text(encoding="utf-8"))
+        value = json.loads(text)
     else:
         raise ValueError(f"unsupported authority source format: {source_format}")
     return {key: _nested(value, key) for key in keys}
+
+
+def extract_values(path: Path, source_format: str, keys: list[str]) -> dict[str, list[str]]:
+    return extract_values_bytes(path.read_bytes(), source_format, keys)

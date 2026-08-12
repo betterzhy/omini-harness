@@ -277,7 +277,10 @@ def test_projection_reentry_recovers_interrupted_directory_swap(tmp_path: Path):
         "backupName": backup.name,
     }
     journal_path = target.parent / ".project-fixture.swap-transaction.json"
-    projection._write_atomic(journal_path, projection.deterministic_json_bytes(journal))
+    from evolution_harness.anchored_fs import AnchoredRoot
+
+    with AnchoredRoot(root) as filesystem:
+        filesystem.write_bytes(journal_path.relative_to(root).as_posix(), projection.deterministic_json_bytes(journal))
 
     projection.build_projection_pack(root, project, resolved, runtime="CODEX")
     assert target.is_dir()
@@ -295,7 +298,7 @@ def test_projection_rejects_second_writer_for_same_pack(tmp_path: Path):
     projection.build_projection_pack(root, project, resolved, runtime="CODEX")
     target = root / "generated/projections/codex/project-fixture"
     before = {path.relative_to(target).as_posix(): path.read_bytes() for path in target.rglob("*") if path.is_file()}
-    identity = process_lock_identity("projection-build", target)
+    identity = process_lock_identity("projection-pack", target)
 
     with exclusive_process_lock(identity):
         with pytest.raises(projection.ProjectionError, match="concurrent projection build rejected"):
@@ -316,5 +319,33 @@ def test_projection_rejects_symlinked_generated_output_parent(tmp_path: Path):
 
     with pytest.raises(ProjectionError, match="output path contains a symlink"):
         build_projection_pack(root, project, resolved, runtime="CODEX")
+
+    assert not any(outside.iterdir())
+
+
+def test_projection_build_cannot_follow_output_symlink_inserted_after_path_check(tmp_path: Path, monkeypatch):
+    from evolution_harness import projection
+
+    root, project = _copy_repo(tmp_path)
+    resolved = _resolved(root, project, runtime="CODEX")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    original_target = projection._projection_target
+    inserted = False
+
+    def insert_symlink_after_check(*args, **kwargs):
+        nonlocal inserted
+        result = original_target(*args, **kwargs)
+        if not inserted:
+            inserted = True
+            runtime_root = root / "generated/projections/codex"
+            runtime_root.parent.mkdir(parents=True)
+            runtime_root.symlink_to(outside, target_is_directory=True)
+        return result
+
+    monkeypatch.setattr(projection, "_projection_target", insert_symlink_after_check)
+
+    with pytest.raises(projection.ProjectionError, match="symlink|anchored"):
+        projection.build_projection_pack(root, project, resolved, runtime="CODEX")
 
     assert not any(outside.iterdir())

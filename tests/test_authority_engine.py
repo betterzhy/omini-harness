@@ -212,3 +212,32 @@ def test_git_source_revision_marks_dirty_authority_set(tmp_path: Path):
     assert dirty["sourceRevision"]["authoritySetStatus"] == "DIRTY_AUTHORITY_SET"
     assert dirty["sourceRevision"]["head"] == clean["sourceRevision"]["head"]
     assert dirty["sourceRevision"]["authoritySetDigest"] != clean["sourceRevision"]["authoritySetDigest"]
+
+
+def test_authority_hash_and_extracted_facts_come_from_one_byte_snapshot(tmp_path: Path, monkeypatch):
+    from evolution_harness import authority
+    from evolution_harness.anchored_fs import AnchoredRoot
+    from evolution_harness.hashing import sha256_bytes
+
+    root, integration, source = _fixture(tmp_path)
+    status = source / "status.md"
+    before = status.read_bytes()
+    after = b"CurrentStage = READY\nExecutionAllowed = YES_EXPLICIT\n"
+    original_read = AnchoredRoot.read_bytes
+    changed = False
+
+    def change_after_read(self, relative: str) -> bytes:
+        nonlocal changed
+        data = original_read(self, relative)
+        if self.root == source and relative == "status.md" and not changed:
+            changed = True
+            status.write_bytes(after)
+        return data
+
+    monkeypatch.setattr(AnchoredRoot, "read_bytes", change_after_read)
+    snapshot = authority.build_authority_snapshot(root, integration, source)
+    raw = snapshot["facts"]["permission.execute"]["rawValue"]
+    authority_hash = next(item["sha256"] for item in snapshot["authorities"] if item["id"] == "global-status")
+    expected_bytes = before if raw.startswith("NO") else after
+
+    assert authority_hash == sha256_bytes(expected_bytes)

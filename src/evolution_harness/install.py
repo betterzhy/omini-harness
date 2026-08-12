@@ -41,6 +41,7 @@ def _managed_manifest(repository_root: Path, target_root: Path) -> tuple[Path, d
 def _projection_inputs(
     repository_root: Path,
     pack_root: Path,
+    source_root: Path | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     repository = Path(repository_root).resolve()
     pack = Path(pack_root).resolve()
@@ -60,8 +61,21 @@ def _projection_inputs(
     project = integration_control if integration_control.is_dir() else example_project
     if not project.is_dir():
         raise ProjectionInstallError("projection pack project control plane is not registered")
+    authority_snapshot = None
+    if integration_control.is_dir():
+        if source_root is None:
+            raise ProjectionInstallError("integration projection validation requires its live source")
+        from .authority import build_authority_snapshot
+
+        authority_snapshot = build_authority_snapshot(repository, integration_root, source_root)
     try:
-        manifest, resolved = validate_projection_pack(repository, project, pack, runtime=runtime)
+        manifest, resolved = validate_projection_pack(
+            repository,
+            project,
+            pack,
+            runtime=runtime,
+            authority_snapshot=authority_snapshot,
+        )
     except Exception as exc:
         raise ProjectionInstallError(f"projection pack is not a canonical projection: {exc}") from exc
     file_hashes = {item["path"]: item["sha256"] for item in manifest.get("generatedFiles", [])}
@@ -344,7 +358,7 @@ def install_projection(
         if not apply:
             raise ProjectionInstallError("pending projection transaction recovery requires explicit --apply")
         _recover_install_transaction(target)
-    projection, inputs = _projection_inputs(repository, pack_root)
+    projection, inputs = _projection_inputs(repository, pack_root, target)
     resolved = projection.pop("_validatedResolvedContext")
     integration_root_value = projection.pop("_validatedIntegrationRoot")
     if integration_root_value is not None:

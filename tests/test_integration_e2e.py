@@ -128,7 +128,31 @@ def test_integration_projection_freshness_detects_authority_drift(tmp_path: Path
     )
     freshness = check_integration_projection(root, integration, source, runtime="CODEX")
     assert not freshness.fresh
-    assert "authority-snapshot-drift" in freshness.reasons
+    assert freshness.reasons == ("projection-integrity-drift",)
+
+
+def test_integration_projection_rejects_forged_authority_facts_with_unchanged_identity(tmp_path: Path):
+    from evolution_harness.authority import build_authority_snapshot
+    from evolution_harness.integration import check_integration_projection
+    from evolution_harness.projection import ProjectionError, build_projection_pack
+
+    root, integration, source = _fixture(tmp_path)
+    resolved = _resolve(root, integration, source)
+    snapshot = build_authority_snapshot(root, integration, source)
+    resolved["authorityFacts"]["permission.execute"]["normalizedValue"] = "ALLOW"
+    control = integration / "control-plane"
+
+    with pytest.raises(ProjectionError, match="live snapshot"):
+        build_projection_pack(
+            root,
+            control,
+            resolved,
+            runtime="CODEX",
+            authority_snapshot=snapshot,
+        )
+
+    assert not (root / "generated/projections/codex/sample-shadow").exists()
+    assert not check_integration_projection(root, integration, source, runtime="CODEX").fresh
 
 
 def test_integration_projection_check_binds_requested_context(tmp_path: Path):

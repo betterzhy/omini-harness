@@ -100,6 +100,7 @@ def build_integration_projection(
     explicit_stage: str | None = None,
     reopen_signal: str | None = None,
 ) -> dict[str, Any]:
+    from .authority import build_authority_snapshot
     from .projection import build_projection_pack
 
     loaded = load_integration(repository_root, integration_root)
@@ -114,11 +115,13 @@ def build_integration_projection(
         explicit_stage=explicit_stage,
         reopen_signal=reopen_signal,
     )
+    snapshot = build_authority_snapshot(repository_root, integration_root, source_root)
     return build_projection_pack(
         repository_root,
         loaded["controlPlaneRoot"],
         resolved,
         runtime=runtime,
+        authority_snapshot=snapshot,
     )
 
 

@@ -219,7 +219,7 @@ def test_install_reentry_recovers_prepared_journal_after_process_loss(tmp_path: 
     root, _, pack = _pack(tmp_path)
     target = tmp_path / "target"
     target.mkdir()
-    _, inputs = install._projection_inputs(root, pack)
+    _, inputs = install._projection_inputs(root, pack, target)
     source = inputs[0]["_source"]
     destination = target / inputs[0]["path"]
     manifest_path = target / install.INSTALL_MANIFEST_PATH

@@ -243,9 +243,26 @@ def _verify_resolved_context(
     resolved: dict[str, Any],
     *,
     runtime: str,
+    authority_snapshot: dict[str, Any] | None = None,
 ) -> None:
     from .resolver import resolve_design_context
 
+    embedded_snapshot = _authority_snapshot_from_resolved(resolved)
+    if embedded_snapshot is not None:
+        if authority_snapshot is None:
+            raise ProjectionError("live authority snapshot is required for this resolved context")
+        live_snapshot = {
+            "snapshotFingerprint": authority_snapshot.get("snapshotFingerprint"),
+            "sourceRevision": authority_snapshot.get("sourceRevision"),
+            "facts": authority_snapshot.get("facts"),
+            "conflicts": authority_snapshot.get("conflicts"),
+            "gate": authority_snapshot.get("gate"),
+            "authorities": authority_snapshot.get("authorities"),
+        }
+        if embedded_snapshot != live_snapshot:
+            raise ProjectionError("resolved context authority metadata does not match the live snapshot")
+    elif authority_snapshot is not None:
+        raise ProjectionError("resolved context is missing the supplied live authority snapshot")
     try:
         expected = resolve_design_context(
             repository_root,
@@ -256,7 +273,7 @@ def _verify_resolved_context(
             runtime=runtime,
             explicit_stage=resolved["stage"],
             reopen_signal=resolved.get("reopenSignal"),
-            authority_snapshot=_authority_snapshot_from_resolved(resolved),
+            authority_snapshot=authority_snapshot,
         )
     except (KeyError, TypeError, ValueError) as exc:
         raise ProjectionError("resolved context is invalid for the current resolver") from exc
@@ -370,6 +387,7 @@ def build_projection_pack(
     resolved_context: dict[str, Any],
     *,
     runtime: str,
+    authority_snapshot: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     root = Path(repository_root)
     project = Path(project_root)
@@ -381,7 +399,13 @@ def build_projection_pack(
         raise ProjectionError("resolved context capability lock is stale")
     if resolved_context.get("project") != lock["project"]:
         raise ProjectionError("resolved context project does not match capability lock")
-    _verify_resolved_context(root, project, resolved_context, runtime=runtime)
+    _verify_resolved_context(
+        root,
+        project,
+        resolved_context,
+        runtime=runtime,
+        authority_snapshot=authority_snapshot,
+    )
     try:
         project_identity = safe_relative_path(resolved_context["project"], label="projection project")
     except (KeyError, PathBoundaryError) as exc:
@@ -525,6 +549,7 @@ def validate_projection_pack(
     pack_root: Path,
     *,
     runtime: str,
+    authority_snapshot: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     root = Path(repository_root).resolve()
     project = Path(project_root)
@@ -557,7 +582,13 @@ def validate_projection_pack(
         raise ProjectionError("canonical projection manifest identity mismatch")
     if manifest.get("capabilityLockFingerprint") != lock["lockFingerprint"]:
         raise ProjectionError("canonical projection manifest lock mismatch")
-    _verify_resolved_context(root, project, resolved, runtime=runtime)
+    _verify_resolved_context(
+        root,
+        project,
+        resolved,
+        runtime=runtime,
+        authority_snapshot=authority_snapshot,
+    )
     state_path = project / ".agent-evolution/design-state.yaml"
     binding_path = project / ".agent-evolution/capabilities.yaml"
     if resolved.get("projectStateHash") != file_sha256(state_path) or resolved.get("projectBindingHash") != file_sha256(binding_path):
@@ -661,7 +692,13 @@ def check_projection_freshness(
     if not manifest_path.exists():
         return ProjectionFreshness(False, ("projection-missing",))
     try:
-        manifest, _ = validate_projection_pack(root, project, pack, runtime=runtime)
+        manifest, _ = validate_projection_pack(
+            root,
+            project,
+            pack,
+            runtime=runtime,
+            authority_snapshot=authority_snapshot,
+        )
     except Exception:
         return ProjectionFreshness(False, ("projection-integrity-drift",))
     reasons: set[str] = set()

@@ -1,0 +1,60 @@
+schemaVersion: project-design-state/v1
+project: pay-nexus-shadow
+currentStage: CALIBRATION
+topics:
+  - topicId: payment-platform-v1.13-architecture
+    status: CLOSED
+    scope:
+      domain: pay-nexus
+      concern: architecture-semantics
+    closedAt: '2026-08-11T16:45:00+08:00'
+    closedBy: PAY_NEXUS_FORMAL_AUTHORITY
+    baselineReference: current-formal-status.md#architecturesemanticstatus
+    reopenConditions:
+      - NEW_EVIDENCE
+      - REQUIREMENT_CHANGE
+      - INVALIDATED_ASSUMPTION
+      - EXPLICIT_AUTHORITY
+  - topicId: dev-s01-local-landing
+    status: CLOSED
+    scope:
+      domain: pay-nexus
+      concern: repository-landing
+    closedAt: '2026-08-11T16:45:00+08:00'
+    closedBy: PAY_NEXUS_SLICE_AUTHORITY
+    baselineReference: docs/architecture/engineering-readiness/dev-s01-cpc-query-reference-slice-progress.md
+    reopenConditions:
+      - NEW_EVIDENCE
+      - REQUIREMENT_CHANGE
+      - IMPLEMENTATION_FEEDBACK
+      - EXPLICIT_AUTHORITY
+  - topicId: harness-shadow-binding
+    status: IN_PROGRESS
+    scope:
+      domain: agent-integration
+      concern: read-only-pilot
+    dependsOn:
+      - payment-platform-v1.13-architecture
+      - dev-s01-local-landing
+baselines:
+  - current-formal-status.md#architecturesemanticstatus
+  - docs/architecture/engineering-readiness/dev-s01-cpc-query-reference-slice-progress.md
+assumptions: []
+openDecisions:
+  - decision://pay-nexus/harness-project-local-install-not-authorized
+nextTopicCandidates: []
+projectAuthorityReferences:
+  - current-formal-status.md
+  - AGENTS.md
+  - docs/architecture/engineering-readiness/development-control-plane-progress.md
+  - docs/architecture/engineering-readiness/development-entry-admission-progress.md
+  - docs/architecture/engineering-readiness/dev-s01-cpc-query-reference-slice-progress.md
+protectedDecisions:
+  - PaymentPlatformV1.13
+  - DEV-S01 Stage 5 local landing authorization is consumed
+  - Wave 0, DDL, database writes, repeat landing, production operations, and push require separate authority
+projectConstraints:
+  - reference: current-formal-status.md#current-execution-authority
+    conflictType: PROJECT_EXECUTION_AUTHORITY_OVERRIDES_GENERIC_REVIEW
+    conflictsWithCapabilities:
+      - skill:agent-design:architecture-review

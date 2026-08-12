@@ -1,0 +1,383 @@
+{
+  "authorityConflicts": [],
+  "authorityFacts": {
+    "architecture.semantic-status": {
+      "normalizedValue": "SEALED",
+      "owner": "current-formal-status",
+      "rawValue": "SEALED",
+      "sourcePath": "current-formal-status.md"
+    },
+    "assessment.final-closure-status": {
+      "normalizedValue": "CLOSED_REVIEWED_GO_P0_0_P1_0_P2_0_ASSESSMENT_ONLY",
+      "owner": "development-entry-assessment",
+      "rawValue": "CLOSED_REVIEWED_GO_P0_0_P1_0_P2_0_ASSESSMENT_ONLY",
+      "sourcePath": "docs/architecture/engineering-readiness/development-entry-admission-progress.md"
+    },
+    "assessment.status": {
+      "normalizedValue": "FINAL_CLOSURE_REVIEWED_GO_STABLE_ASSESSMENT_RECEIPT",
+      "owner": "development-entry-assessment",
+      "rawValue": "FINAL_CLOSURE_REVIEWED_GO_STABLE_ASSESSMENT_RECEIPT",
+      "sourcePath": "docs/architecture/engineering-readiness/development-entry-admission-progress.md"
+    },
+    "governance.er05.current-gate": {
+      "normalizedValue": "NONE_ER05_CLOSED",
+      "owner": "development-control-plane-progress",
+      "rawValue": "NONE_ER05_CLOSED",
+      "sourcePath": "docs/architecture/engineering-readiness/development-control-plane-progress.md"
+    },
+    "governance.er05.next-gate": {
+      "normalizedValue": "NONE_ER05_CLOSED",
+      "owner": "development-control-plane-progress",
+      "rawValue": "NONE_ER05_CLOSED",
+      "sourcePath": "docs/architecture/engineering-readiness/development-control-plane-progress.md"
+    },
+    "governance.er05.status": {
+      "normalizedValue": "FINAL_CLOSURE_REVIEWED_GO_STABLE_REGISTRATION",
+      "owner": "development-control-plane-progress",
+      "rawValue": "FINAL_CLOSURE_REVIEWED_GO_STABLE_REGISTRATION",
+      "sourcePath": "docs/architecture/engineering-readiness/development-control-plane-progress.md"
+    },
+    "permission.database-write": {
+      "normalizedValue": "DENY",
+      "owner": "current-formal-status",
+      "rawValue": "NO",
+      "sourcePath": "current-formal-status.md"
+    },
+    "permission.ddl": {
+      "normalizedValue": "DENY",
+      "owner": "current-formal-status",
+      "rawValue": "NO",
+      "sourcePath": "current-formal-status.md"
+    },
+    "permission.development": {
+      "normalizedValue": "DENY",
+      "owner": "current-formal-status",
+      "rawValue": "NO_DEV_S01_STAGE5_LOCAL_LANDING_COMPLETE",
+      "sourcePath": "current-formal-status.md"
+    },
+    "permission.git-push": {
+      "normalizedValue": "DENY",
+      "owner": "current-formal-status",
+      "rawValue": "NO",
+      "sourcePath": "current-formal-status.md"
+    },
+    "permission.landing-preflight": {
+      "normalizedValue": "CONSUMED",
+      "owner": "current-formal-status",
+      "rawValue": "YES_READ_ONLY_AND_PROJECTION_ONLY_CONSUMED",
+      "sourcePath": "current-formal-status.md"
+    },
+    "permission.local-landing": {
+      "normalizedValue": "CONSUMED",
+      "owner": "current-formal-status",
+      "rawValue": "EXPLICIT_USER_AUTHORIZATION_CONSUMED_LOCAL_ONLY",
+      "sourcePath": "current-formal-status.md"
+    },
+    "permission.repository-landing": {
+      "normalizedValue": "DENY",
+      "owner": "current-formal-status",
+      "rawValue": "NO",
+      "sourcePath": "current-formal-status.md"
+    },
+    "permission.stage4-closure-projection": {
+      "normalizedValue": "CONSUMED",
+      "owner": "current-formal-status",
+      "rawValue": "YES_GOVERNANCE_ONLY_CONSUMED",
+      "sourcePath": "current-formal-status.md"
+    },
+    "permission.wave0": {
+      "normalizedValue": "DENY",
+      "owner": "current-formal-status",
+      "rawValue": "NO",
+      "sourcePath": "current-formal-status.md"
+    },
+    "project.current-stage": {
+      "normalizedValue": "DEV_S01_STAGE5_LOCAL_REPOSITORY_LANDING_COMPLETED",
+      "owner": "current-formal-status",
+      "rawValue": "DEV_S01_STAGE5_LOCAL_REPOSITORY_LANDING_COMPLETED",
+      "sourcePath": "current-formal-status.md"
+    },
+    "slice.dev-s01.allowed-future-write": {
+      "normalizedValue": "CLOSED_DEV_S01_NO_FURTHER_EXECUTION_AUTHORIZED",
+      "owner": "dev-s01-progress",
+      "rawValue": "CLOSED_DEV_S01_NO_FURTHER_EXECUTION_AUTHORIZED",
+      "sourcePath": "docs/architecture/engineering-readiness/dev-s01-cpc-query-reference-slice-progress.md"
+    },
+    "slice.dev-s01.current-gate": {
+      "normalizedValue": "DEV_S01_STAGE5_LOCAL_REPOSITORY_LANDING_COMPLETED",
+      "owner": "dev-s01-progress",
+      "rawValue": "DEV_S01_STAGE5_LOCAL_REPOSITORY_LANDING_COMPLETED",
+      "sourcePath": "docs/architecture/engineering-readiness/dev-s01-cpc-query-reference-slice-progress.md"
+    },
+    "slice.dev-s01.landing-preflight": {
+      "normalizedValue": "CONSUMED",
+      "owner": "dev-s01-progress",
+      "rawValue": "CONSUMED_BY_LOCAL_LANDING_25_CREATE_17_UPDATE_0_CONFLICT",
+      "sourcePath": "docs/architecture/engineering-readiness/dev-s01-cpc-query-reference-slice-progress.md"
+    },
+    "slice.dev-s01.next-action": {
+      "normalizedValue": "AWAIT_SEPARATE_WAVE0_OR_NEXT_SLICE_AUTHORIZATION",
+      "owner": "dev-s01-progress",
+      "rawValue": "AWAIT_SEPARATE_WAVE0_OR_NEXT_SLICE_AUTHORIZATION",
+      "sourcePath": "docs/architecture/engineering-readiness/dev-s01-cpc-query-reference-slice-progress.md"
+    },
+    "slice.dev-s01.next-gate": {
+      "normalizedValue": "NONE_DEV_S01_STAGE5_LOCAL_LANDING_CLOSED",
+      "owner": "dev-s01-progress",
+      "rawValue": "NONE_DEV_S01_STAGE5_LOCAL_LANDING_CLOSED",
+      "sourcePath": "docs/architecture/engineering-readiness/dev-s01-cpc-query-reference-slice-progress.md"
+    },
+    "slice.dev-s01.stage1-authorization": {
+      "normalizedValue": "CONSUMED",
+      "owner": "dev-s01-progress",
+      "rawValue": "EXPLICIT_USER_AUTHORIZATION_CONSUMED_TOOLCHAIN_ONLY",
+      "sourcePath": "docs/architecture/engineering-readiness/dev-s01-cpc-query-reference-slice-progress.md"
+    },
+    "slice.dev-s01.stage3-authorization": {
+      "normalizedValue": "CONSUMED",
+      "owner": "dev-s01-progress",
+      "rawValue": "EXPLICIT_USER_AUTHORIZATION_CONSUMED_CPC_QUERY_TDD_COMPLETE",
+      "sourcePath": "docs/architecture/engineering-readiness/dev-s01-cpc-query-reference-slice-progress.md"
+    },
+    "slice.dev-s01.stage4-authorization": {
+      "normalizedValue": "CONSUMED",
+      "owner": "dev-s01-progress",
+      "rawValue": "EXPLICIT_USER_AUTHORIZATION_CONSUMED",
+      "sourcePath": "docs/architecture/engineering-readiness/dev-s01-cpc-query-reference-slice-progress.md"
+    },
+    "slice.dev-s01.stage4-review": {
+      "normalizedValue": "GO_P0_0_P1_0_P2_0_ULTRA_GATEKEEPER",
+      "owner": "dev-s01-progress",
+      "rawValue": "GO_P0_0_P1_0_P2_0_ULTRA_GATEKEEPER",
+      "sourcePath": "docs/architecture/engineering-readiness/dev-s01-cpc-query-reference-slice-progress.md"
+    },
+    "slice.dev-s01.stage5-authorization": {
+      "normalizedValue": "CONSUMED",
+      "owner": "dev-s01-progress",
+      "rawValue": "EXPLICIT_USER_AUTHORIZATION_CONSUMED_LOCAL_ONLY",
+      "sourcePath": "docs/architecture/engineering-readiness/dev-s01-cpc-query-reference-slice-progress.md"
+    },
+    "slice.dev-s01.status": {
+      "normalizedValue": "STAGE5_LOCAL_REPOSITORY_LANDING_COMPLETED_WAVE0_NOT_AUTHORIZED",
+      "owner": "dev-s01-progress",
+      "rawValue": "STAGE5_LOCAL_REPOSITORY_LANDING_COMPLETED_WAVE0_NOT_AUTHORIZED",
+      "sourcePath": "docs/architecture/engineering-readiness/dev-s01-cpc-query-reference-slice-progress.md"
+    }
+  },
+  "authorityGate": "PASS",
+  "authorityPaths": [
+    {
+      "id": "active-development-projection",
+      "path": "docs/architecture/engineering-readiness/machine/active-development-projection-1.0.0.yaml",
+      "role": "DERIVED",
+      "sha256": "63b233af9c030e3fc1b85ea85c7e62f797089cde5ab0fee0c6f6fef5ae296fa7"
+    },
+    {
+      "id": "current-formal-status",
+      "path": "current-formal-status.md",
+      "role": "CANONICAL",
+      "sha256": "f62e3a4da01c40c639239e22a498c7dc64b407ba08e61db636c4f7822a112f2a"
+    },
+    {
+      "id": "dev-s01-progress",
+      "path": "docs/architecture/engineering-readiness/dev-s01-cpc-query-reference-slice-progress.md",
+      "role": "SPECIALIZED",
+      "sha256": "a8544a7a0edcf2c2591d2a25fcd641b847afa85ff76ebf921bddd04e18e5be61"
+    },
+    {
+      "id": "development-control-plane-progress",
+      "path": "docs/architecture/engineering-readiness/development-control-plane-progress.md",
+      "role": "SPECIALIZED",
+      "sha256": "67e8b1f7334c58f8e50a6bc2539834a3ea95ae06aa633d6402e29de3c7718c6c"
+    },
+    {
+      "id": "development-entry-assessment",
+      "path": "docs/architecture/engineering-readiness/development-entry-admission-progress.md",
+      "role": "SPECIALIZED",
+      "sha256": "231780891994bfaf2a44251e16b7c881ec081fc83844a0e3dbfd5b54787d1068"
+    },
+    {
+      "id": "repository-agent-guidance",
+      "path": "AGENTS.md",
+      "role": "GUIDANCE",
+      "sha256": "ae922ff532dbb4a1728b01059d59649a41c569bb74ad1e9aecd287ded8862c4d"
+    }
+  ],
+  "authoritySnapshotFingerprint": "sha256:547bbadf19c353eaa9b25071b61046f55b1ba06d5da1514ad948ab35279dc205",
+  "authoritySourceRevision": {
+    "head": "f0bfce7a71314c313a01a518fa3a36f8e9bf659a",
+    "kind": "GIT",
+    "tree": "e5c5479192504e303461ea9e5e0784efd1361a8c"
+  },
+  "capabilityLockFingerprint": "sha256:2e412ecccc93e4b9e310088464a76c9a155b3b55d4c085aacbfca2a80e4e45c0",
+  "closedTopics": [
+    {
+      "baselineReference": "current-formal-status.md#architecturesemanticstatus",
+      "reopenConditions": [
+        "NEW_EVIDENCE",
+        "REQUIREMENT_CHANGE",
+        "INVALIDATED_ASSUMPTION",
+        "EXPLICIT_AUTHORITY"
+      ],
+      "topicId": "payment-platform-v1.13-architecture"
+    },
+    {
+      "baselineReference": "docs/architecture/engineering-readiness/dev-s01-cpc-query-reference-slice-progress.md",
+      "reopenConditions": [
+        "NEW_EVIDENCE",
+        "REQUIREMENT_CHANGE",
+        "IMPLEMENTATION_FEEDBACK",
+        "EXPLICIT_AUTHORITY"
+      ],
+      "topicId": "dev-s01-local-landing"
+    }
+  ],
+  "conflictSignals": [
+    {
+      "conflictType": "PROJECT_EXECUTION_AUTHORITY_OVERRIDES_GENERIC_REVIEW",
+      "projectReference": "current-formal-status.md#current-execution-authority",
+      "resolutionRule": "PROJECT_TRUTH_WINS",
+      "reviewRecommended": true,
+      "sharedCapability": "skill:agent-design:architecture-review"
+    }
+  ],
+  "explain": {
+    "excluded": [
+      {
+        "excludedBecause": [
+          "intent-mismatch"
+        ],
+        "id": "principle:agent-design:closure-requires-authority"
+      }
+    ],
+    "selected": [
+      {
+        "contentHash": "4fd4857d170c01c8c7672d5e16353be26a2b10897e31952d15172e418eb23f49",
+        "id": "framework:agent-design:authority-analysis",
+        "kind": "FRAMEWORK",
+        "selectedBecause": [
+          "dependency-of:skill:agent-design:architecture-review",
+          "explicit-binding",
+          "intent-match",
+          "runtime-match"
+        ],
+        "version": "1.0.0"
+      },
+      {
+        "contentHash": "7a6d87e989ae4e86814fffff078b9a2af686a1e79e98f1831db7abb9ab017a09",
+        "id": "framework:agent-design:lifecycle-analysis",
+        "kind": "FRAMEWORK",
+        "selectedBecause": [
+          "dependency-of:skill:agent-design:architecture-review",
+          "explicit-binding",
+          "intent-match",
+          "runtime-match"
+        ],
+        "version": "1.0.0"
+      },
+      {
+        "contentHash": "fb16ec4b824fea1ccb63c589b314253c56b2cd29992c3008a4dde415532d28ab",
+        "id": "principle:agent-design:project-truth-over-generic-guidance",
+        "kind": "PRINCIPLE",
+        "selectedBecause": [
+          "dependency-of:framework:agent-design:authority-analysis",
+          "dependency-of:framework:agent-design:lifecycle-analysis",
+          "dependency-of:skill:agent-design:architecture-review"
+        ],
+        "version": "1.0.0"
+      },
+      {
+        "contentHash": "00094ad3677d968fa101879886d2dc0e14bac5926930ddcfad897c9f8879c834",
+        "id": "skill:agent-design:architecture-review",
+        "kind": "SKILL",
+        "selectedBecause": [
+          "explicit-binding",
+          "intent-match",
+          "runtime-match",
+          "stage-match"
+        ],
+        "version": "1.0.0"
+      }
+    ]
+  },
+  "humanGates": [],
+  "intent": "architecture-review",
+  "project": "pay-nexus-shadow",
+  "projectAuthorityReferences": [
+    "current-formal-status.md",
+    "AGENTS.md",
+    "docs/architecture/engineering-readiness/development-control-plane-progress.md",
+    "docs/architecture/engineering-readiness/development-entry-admission-progress.md",
+    "docs/architecture/engineering-readiness/dev-s01-cpc-query-reference-slice-progress.md"
+  ],
+  "projectBindingHash": "caa604a50553d850d05fa6303f300406a3643805bf26f33b18c7e65bfa5e205c",
+  "projectStateHash": "bb020b4bee00345b1d4ef362f166be052169ffee4877bac5ab71c123756d0a0a",
+  "protectedDecisions": [
+    "PaymentPlatformV1.13",
+    "DEV-S01 Stage 5 local landing authorization is consumed",
+    "Wave 0, DDL, database writes, repeat landing, production operations, and push require separate authority"
+  ],
+  "reopenSignal": null,
+  "requestedOutput": "read-only authority review",
+  "requiredSelfReview": [
+    "Did project truth override generic guidance where applicable?",
+    "Did I avoid mutating closure or promotion state?"
+  ],
+  "resolutionId": "resolution:298ba4ff28c866c1b539dfd9",
+  "runtime": "CODEX",
+  "schemaVersion": "resolved-design-context/v1",
+  "selectedCapabilities": [
+    {
+      "contentHash": "4fd4857d170c01c8c7672d5e16353be26a2b10897e31952d15172e418eb23f49",
+      "id": "framework:agent-design:authority-analysis",
+      "kind": "FRAMEWORK",
+      "selectedBecause": [
+        "dependency-of:skill:agent-design:architecture-review",
+        "explicit-binding",
+        "intent-match",
+        "runtime-match"
+      ],
+      "version": "1.0.0"
+    },
+    {
+      "contentHash": "7a6d87e989ae4e86814fffff078b9a2af686a1e79e98f1831db7abb9ab017a09",
+      "id": "framework:agent-design:lifecycle-analysis",
+      "kind": "FRAMEWORK",
+      "selectedBecause": [
+        "dependency-of:skill:agent-design:architecture-review",
+        "explicit-binding",
+        "intent-match",
+        "runtime-match"
+      ],
+      "version": "1.0.0"
+    },
+    {
+      "contentHash": "fb16ec4b824fea1ccb63c589b314253c56b2cd29992c3008a4dde415532d28ab",
+      "id": "principle:agent-design:project-truth-over-generic-guidance",
+      "kind": "PRINCIPLE",
+      "selectedBecause": [
+        "dependency-of:framework:agent-design:authority-analysis",
+        "dependency-of:framework:agent-design:lifecycle-analysis",
+        "dependency-of:skill:agent-design:architecture-review"
+      ],
+      "version": "1.0.0"
+    },
+    {
+      "contentHash": "00094ad3677d968fa101879886d2dc0e14bac5926930ddcfad897c9f8879c834",
+      "id": "skill:agent-design:architecture-review",
+      "kind": "SKILL",
+      "selectedBecause": [
+        "explicit-binding",
+        "intent-match",
+        "runtime-match",
+        "stage-match"
+      ],
+      "version": "1.0.0"
+    }
+  ],
+  "semanticSelectionCandidates": [],
+  "stage": "CALIBRATION",
+  "topic": "harness-shadow-binding",
+  "topicGuard": "OPEN_OR_IN_PROGRESS",
+  "workflowStage": null
+}

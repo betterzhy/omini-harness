@@ -1,0 +1,210 @@
+schemaVersion: project-authority-map/v1
+authorities:
+  - id: current-formal-status
+    path: current-formal-status.md
+    format: MARKDOWN_KV
+    role: CANONICAL
+    required: true
+    owns:
+      - architecture.semantic-status
+      - project.current-stage
+      - permission.development
+      - permission.repository-landing
+      - permission.ddl
+      - permission.database-write
+      - permission.wave0
+      - permission.git-push
+      - permission.stage4-closure-projection
+      - permission.landing-preflight
+      - permission.local-landing
+    selectors:
+      architecture.semantic-status:
+        key: ArchitectureSemanticStatus
+        required: true
+      project.current-stage:
+        key: CurrentStage
+        required: true
+      permission.development:
+        key: DevelopmentExecutionAllowed
+        required: true
+        normalization: &execution_permission
+          rules:
+            - operator: CONTAINS
+              expected: CONSUMED
+              value: CONSUMED
+            - operator: PREFIX
+              expected: 'YES'
+              value: ALLOW
+            - operator: PREFIX
+              expected: 'NO'
+              value: DENY
+          default: UNKNOWN
+      permission.repository-landing:
+        key: RepositoryLandingAllowed
+        required: true
+        normalization: *execution_permission
+      permission.ddl:
+        key: ExecutableDdlAllowed
+        required: true
+        normalization: *execution_permission
+      permission.database-write:
+        key: FormalDatabaseWriteAllowed
+        required: true
+        normalization: *execution_permission
+      permission.wave0:
+        key: Wave0ExecutionAllowed
+        required: true
+        normalization: *execution_permission
+      permission.git-push:
+        key: GitPushAllowed
+        required: true
+        normalization: *execution_permission
+      permission.stage4-closure-projection:
+        key: Stage4ClosureProjectionAllowed
+        required: true
+        normalization: *execution_permission
+      permission.landing-preflight:
+        key: RepositoryLandingPreflightAllowed
+        required: true
+        normalization: *execution_permission
+      permission.local-landing:
+        key: RepositoryLandingLocalAuthorization
+        required: true
+        normalization: *execution_permission
+  - id: development-control-plane-progress
+    path: docs/architecture/engineering-readiness/development-control-plane-progress.md
+    format: MARKDOWN_KV
+    role: SPECIALIZED
+    required: true
+    owns:
+      - governance.er05.status
+      - governance.er05.current-gate
+      - governance.er05.next-gate
+    selectors:
+      governance.er05.status:
+        key: Status
+        required: true
+      governance.er05.current-gate:
+        key: CurrentGate
+        required: true
+      governance.er05.next-gate:
+        key: NextGate
+        required: true
+  - id: development-entry-assessment
+    path: docs/architecture/engineering-readiness/development-entry-admission-progress.md
+    format: MARKDOWN_KV
+    role: SPECIALIZED
+    required: true
+    owns:
+      - assessment.status
+      - assessment.final-closure-status
+    selectors:
+      assessment.status:
+        key: AssessmentStatus
+        required: true
+      assessment.final-closure-status:
+        key: FinalClosureStatus
+        required: true
+  - id: dev-s01-progress
+    path: docs/architecture/engineering-readiness/dev-s01-cpc-query-reference-slice-progress.md
+    format: MARKDOWN_KV
+    role: SPECIALIZED
+    required: true
+    owns:
+      - slice.dev-s01.status
+      - slice.dev-s01.current-gate
+      - slice.dev-s01.allowed-future-write
+      - slice.dev-s01.stage1-authorization
+      - slice.dev-s01.stage3-authorization
+      - slice.dev-s01.stage4-authorization
+      - slice.dev-s01.stage5-authorization
+      - slice.dev-s01.stage4-review
+      - slice.dev-s01.landing-preflight
+      - slice.dev-s01.next-action
+      - slice.dev-s01.next-gate
+    selectors:
+      slice.dev-s01.status:
+        key: Status
+        required: true
+      slice.dev-s01.current-gate:
+        key: CurrentGate
+        required: true
+      slice.dev-s01.allowed-future-write:
+        key: AllowedFutureWriteEnvelope
+        required: true
+      slice.dev-s01.stage1-authorization:
+        key: Stage1Authorization
+        required: true
+        normalization: &consumption_state
+          rules:
+            - operator: CONTAINS
+              expected: CONSUMED
+              value: CONSUMED
+          default: NOT_CONSUMED
+      slice.dev-s01.stage3-authorization:
+        key: Stage3Authorization
+        required: true
+        normalization: *consumption_state
+      slice.dev-s01.stage4-authorization:
+        key: Stage4ClosureProjectionAndLandingPreflightAuthorization
+        required: true
+        normalization: *consumption_state
+      slice.dev-s01.stage5-authorization:
+        key: Stage5RepositoryLandingAuthorization
+        required: true
+        normalization: *consumption_state
+      slice.dev-s01.stage4-review:
+        key: Stage4ReviewStatus
+        required: true
+      slice.dev-s01.landing-preflight:
+        key: LandingPreflightStatus
+        required: true
+        normalization: *consumption_state
+      slice.dev-s01.next-action:
+        key: NextRequiredAction
+        required: true
+      slice.dev-s01.next-gate:
+        key: NextGate
+        required: true
+  - id: active-development-projection
+    path: docs/architecture/engineering-readiness/machine/active-development-projection-1.0.0.yaml
+    format: YAML
+    role: DERIVED
+    required: false
+    owns: []
+    selectors: {}
+  - id: repository-agent-guidance
+    path: AGENTS.md
+    format: MARKDOWN_KV
+    role: GUIDANCE
+    required: true
+    owns: []
+    selectors: {}
+requiredFacts:
+  - architecture.semantic-status
+  - project.current-stage
+  - permission.development
+  - permission.repository-landing
+  - permission.ddl
+  - permission.database-write
+  - permission.wave0
+  - permission.git-push
+  - permission.stage4-closure-projection
+  - permission.landing-preflight
+  - permission.local-landing
+  - governance.er05.status
+  - governance.er05.current-gate
+  - governance.er05.next-gate
+  - assessment.status
+  - assessment.final-closure-status
+  - slice.dev-s01.status
+  - slice.dev-s01.current-gate
+  - slice.dev-s01.allowed-future-write
+  - slice.dev-s01.stage1-authorization
+  - slice.dev-s01.stage3-authorization
+  - slice.dev-s01.stage4-authorization
+  - slice.dev-s01.stage5-authorization
+  - slice.dev-s01.stage4-review
+  - slice.dev-s01.landing-preflight
+  - slice.dev-s01.next-action
+  - slice.dev-s01.next-gate

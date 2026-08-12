@@ -37,7 +37,7 @@ def test_structural_validation_separates_mechanical_gate_from_semantic_quality(t
     assert report["structuralGate"] == "PASS"
     assert report["semanticGate"] == "NOT_ASSERTED_BY_CI"
     assert report["issues"] == []
-    assert report["integrationCount"] == 1
+    assert report["integrationCount"] == 2
 
 
 def test_structural_validation_detects_generated_registry_drift(tmp_path: Path):

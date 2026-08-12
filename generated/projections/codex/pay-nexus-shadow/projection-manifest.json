@@ -1,0 +1,76 @@
+{
+  "authorityGate": "PASS",
+  "authoritySnapshotFingerprint": "sha256:547bbadf19c353eaa9b25071b61046f55b1ba06d5da1514ad948ab35279dc205",
+  "authoritySourceRevision": {
+    "head": "f0bfce7a71314c313a01a518fa3a36f8e9bf659a",
+    "kind": "GIT",
+    "tree": "e5c5479192504e303461ea9e5e0784efd1361a8c"
+  },
+  "capabilityLockFingerprint": "sha256:2e412ecccc93e4b9e310088464a76c9a155b3b55d4c085aacbfca2a80e4e45c0",
+  "generatedFiles": [
+    {
+      "path": "discussion-contract.md",
+      "sha256": "f386732e3c9a1fed09f78c7122f8ae718909a4e93536a9a424cbd6c14bd4ef64"
+    },
+    {
+      "path": "repository-guidance.md",
+      "sha256": "07746167936eb39d12a8d465beaf8355744bd7eebbe5895db81fd76c41acfe54"
+    },
+    {
+      "path": "resolved-context.json",
+      "sha256": "26cabc2eb86aafde8bb8e4ae1a49673353f08b91b25ceb13bc1f6a70069ad147"
+    },
+    {
+      "path": "resolved-task-context.md",
+      "sha256": "90e96b5660298471d7d6df6c9e4d551dbb27c2954beb8536881653b172043f0f"
+    },
+    {
+      "path": "skills/architecture-review/SKILL.md",
+      "sha256": "e0b7c43dcbcfe8a1c8a05c107593431f918404a752524e6572e3b13f266bcc9f"
+    }
+  ],
+  "generatedSkills": [
+    {
+      "contentHash": "00094ad3677d968fa101879886d2dc0e14bac5926930ddcfad897c9f8879c834",
+      "id": "skill:agent-design:architecture-review",
+      "path": "skills/architecture-review/SKILL.md",
+      "skillProjectionVersion": "agent-skill-projection/1",
+      "version": "1.0.0"
+    }
+  ],
+  "omittedReferences": [],
+  "project": "pay-nexus-shadow",
+  "projectBindingHash": "caa604a50553d850d05fa6303f300406a3643805bf26f33b18c7e65bfa5e205c",
+  "projectStateHash": "bb020b4bee00345b1d4ef362f166be052169ffee4877bac5ab71c123756d0a0a",
+  "projectionType": "CODEX_REPOSITORY_PACK",
+  "projectionVersion": "codex-project-pack/1",
+  "runtime": "CODEX",
+  "schemaVersion": "runtime-projection-manifest/v1",
+  "sourceCapabilities": [
+    {
+      "contentHash": "4fd4857d170c01c8c7672d5e16353be26a2b10897e31952d15172e418eb23f49",
+      "id": "framework:agent-design:authority-analysis",
+      "kind": "FRAMEWORK",
+      "version": "1.0.0"
+    },
+    {
+      "contentHash": "7a6d87e989ae4e86814fffff078b9a2af686a1e79e98f1831db7abb9ab017a09",
+      "id": "framework:agent-design:lifecycle-analysis",
+      "kind": "FRAMEWORK",
+      "version": "1.0.0"
+    },
+    {
+      "contentHash": "fb16ec4b824fea1ccb63c589b314253c56b2cd29992c3008a4dde415532d28ab",
+      "id": "principle:agent-design:project-truth-over-generic-guidance",
+      "kind": "PRINCIPLE",
+      "version": "1.0.0"
+    },
+    {
+      "contentHash": "00094ad3677d968fa101879886d2dc0e14bac5926930ddcfad897c9f8879c834",
+      "id": "skill:agent-design:architecture-review",
+      "kind": "SKILL",
+      "version": "1.0.0"
+    }
+  ],
+  "sourceResolutionId": "resolution:298ba4ff28c866c1b539dfd9"
+}

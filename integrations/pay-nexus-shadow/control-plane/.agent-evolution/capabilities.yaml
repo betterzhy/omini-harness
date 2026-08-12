@@ -1,0 +1,10 @@
+schemaVersion: project-capability-binding/v1
+profiles: []
+capabilities:
+  - principle:agent-design:project-truth-over-generic-guidance
+  - principle:agent-design:closure-requires-authority
+  - framework:agent-design:authority-analysis
+  - framework:agent-design:lifecycle-analysis
+  - skill:agent-design:architecture-review
+extensions: []
+disabledCapabilities: []

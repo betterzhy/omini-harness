@@ -208,12 +208,12 @@ def test_install_keyboard_interrupt_rolls_back_using_persistent_journal(tmp_path
         return original_write(self, relative, data, **kwargs)
 
     monkeypatch.setattr(AnchoredRoot, "write_bytes", interrupt_manifest)
-    with pytest.raises(KeyboardInterrupt):
+    with pytest.raises(install.ProjectionInstallError, match="manual recovery"):
         install.install_projection(root, pack, target, apply=True)
 
-    assert not (target / ".agents/skills/architecture-review/SKILL.md").exists()
+    assert (target / ".agents/skills/architecture-review/SKILL.md").exists()
     assert not (target / ".agent-evolution/projection-install-manifest.json").exists()
-    assert not (target / ".agent-evolution/projection-install-transaction.json").exists()
+    assert (target / ".agent-evolution/projection-install-transaction.json").exists()
 
 
 def test_install_reentry_recovers_prepared_journal_after_process_loss(tmp_path: Path):
@@ -225,7 +225,6 @@ def test_install_reentry_recovers_prepared_journal_after_process_loss(tmp_path: 
     target = tmp_path / "target"
     target.mkdir()
     projection, inputs = install._projection_inputs(root, pack, target)
-    source_bytes = inputs[0]["_sourceBytes"]
     destination = target / inputs[0]["path"]
     manifest_path = target / install.INSTALL_MANIFEST_PATH
     persistent = install._persistent_manifest(projection, inputs)
@@ -237,14 +236,9 @@ def test_install_reentry_recovers_prepared_journal_after_process_loss(tmp_path: 
         after_sha256_by_path={inputs[0]["path"]: inputs[0]["sourceSha256"]},
         manifest_after_sha256=sha256_bytes(deterministic_json_bytes(persistent)),
     )
-    from evolution_harness.anchored_fs import AnchoredRoot
-
-    with AnchoredRoot(target) as filesystem:
-        filesystem.write_bytes(destination.relative_to(target).as_posix(), source_bytes)
-
     with pytest.raises(install.ProjectionInstallError, match="explicit --apply"):
         install.install_projection(root, pack, target)
-    assert destination.exists()
+    assert not destination.exists()
 
     result = install.install_projection(root, pack, target, apply=True)
 
@@ -252,6 +246,37 @@ def test_install_reentry_recovers_prepared_journal_after_process_loss(tmp_path: 
     assert destination.exists()
     assert manifest_path.exists()
     assert not (target / install.INSTALL_TRANSACTION_PATH).exists()
+
+
+def test_install_recovery_keeps_transaction_after_image_for_manual_recovery(tmp_path: Path):
+    from evolution_harness import install
+    from evolution_harness.anchored_fs import AnchoredRoot
+    from evolution_harness.generated import deterministic_json_bytes
+    from evolution_harness.hashing import sha256_bytes
+
+    root, _, pack = _pack(tmp_path)
+    target = tmp_path / "target"
+    target.mkdir()
+    projection, inputs = install._projection_inputs(root, pack, target)
+    destination = target / inputs[0]["path"]
+    manifest_path = target / install.INSTALL_MANIFEST_PATH
+    persistent = install._persistent_manifest(projection, inputs)
+    install._begin_transaction(
+        target,
+        "INSTALL",
+        [destination],
+        manifest_path,
+        after_sha256_by_path={inputs[0]["path"]: inputs[0]["sourceSha256"]},
+        manifest_after_sha256=sha256_bytes(deterministic_json_bytes(persistent)),
+    )
+    with AnchoredRoot(target) as filesystem:
+        filesystem.write_bytes(inputs[0]["path"], inputs[0]["_sourceBytes"])
+
+    with pytest.raises(install.ProjectionInstallError, match="manual recovery"):
+        install.install_projection(root, pack, target, apply=True)
+
+    assert destination.read_bytes() == inputs[0]["_sourceBytes"]
+    assert (target / install.INSTALL_TRANSACTION_PATH).exists()
 
 
 def test_install_recovery_refuses_file_created_after_prepared_transaction(tmp_path: Path):
@@ -279,12 +304,49 @@ def test_install_recovery_refuses_file_created_after_prepared_transaction(tmp_pa
     destination.parent.mkdir(parents=True)
     destination.write_bytes(project_owned_bytes)
 
-    with pytest.raises(install.ProjectionInstallError, match="changed outside the failed transaction"):
+    with pytest.raises(install.ProjectionInstallError, match="manual recovery"):
         install.install_projection(root, pack, target, apply=True)
 
     assert destination.read_bytes() == project_owned_bytes
     assert not manifest_path.exists()
     assert (target / install.INSTALL_TRANSACTION_PATH).exists()
+
+
+def test_install_recovery_does_not_remove_file_created_after_before_image_check(tmp_path: Path, monkeypatch):
+    from evolution_harness import install
+    from evolution_harness.generated import deterministic_json_bytes
+    from evolution_harness.hashing import sha256_bytes
+
+    root, _, pack = _pack(tmp_path)
+    target = tmp_path / "target"
+    target.mkdir()
+    projection, inputs = install._projection_inputs(root, pack, target)
+    destination = target / inputs[0]["path"]
+    manifest_path = target / install.INSTALL_MANIFEST_PATH
+    persistent = install._persistent_manifest(projection, inputs)
+    install._begin_transaction(
+        target,
+        "INSTALL",
+        [destination],
+        manifest_path,
+        after_sha256_by_path={inputs[0]["path"]: inputs[0]["sourceSha256"]},
+        manifest_after_sha256=sha256_bytes(deterministic_json_bytes(persistent)),
+    )
+    project_owned_bytes = b"project-owned during recovery\n"
+    original_cleanup = install._cleanup_transaction
+
+    def insert_project_file_before_metadata_cleanup(*args, **kwargs):
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(project_owned_bytes)
+        return original_cleanup(*args, **kwargs)
+
+    monkeypatch.setattr(install, "_cleanup_transaction", insert_project_file_before_metadata_cleanup)
+
+    with pytest.raises(install.ProjectionInstallError, match="skill collision"):
+        install.install_projection(root, pack, target, apply=True)
+
+    assert destination.read_bytes() == project_owned_bytes
+    assert not (target / install.INSTALL_TRANSACTION_PATH).exists()
 
 
 def test_install_recovery_rejects_forged_backup_directory_without_deleting_it(tmp_path: Path):

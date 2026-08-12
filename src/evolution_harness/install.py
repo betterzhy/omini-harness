@@ -275,8 +275,6 @@ def _recover_install_transaction_anchored(target: Path, filesystem: AnchoredRoot
         raise ProjectionInstallError("invalid projection install recovery journal") from exc
 
     if recovery_phase == "PREPARED":
-        backup_bytes: dict[str, bytes] = {}
-        current_hashes: dict[str, str | None] = {}
         for item in journal["files"]:
             if item["existed"]:
                 try:
@@ -285,7 +283,6 @@ def _recover_install_transaction_anchored(target: Path, filesystem: AnchoredRoot
                     raise ProjectionInstallError("trusted recovery backup is missing or unsafe") from exc
                 if sha256_bytes(data) != item["backupSha256"]:
                     raise ProjectionInstallError("trusted recovery backup hash mismatch")
-                backup_bytes[item["backupPath"]] = data
             if filesystem.exists(item["path"]):
                 if not filesystem.is_file(item["path"]):
                     raise ProjectionInstallError("managed recovery destination became a directory")
@@ -293,9 +290,10 @@ def _recover_install_transaction_anchored(target: Path, filesystem: AnchoredRoot
             else:
                 current_hash = None
             before_hash = item["backupSha256"] if item["existed"] else None
-            if current_hash not in {before_hash, item["afterSha256"]}:
-                raise ProjectionInstallError("recovery target changed outside the failed transaction")
-            current_hashes[item["path"]] = current_hash
+            if current_hash != before_hash:
+                raise ProjectionInstallError(
+                    "partial projection transaction requires manual recovery; target paths were preserved"
+                )
         manifest = journal["manifest"]
         if manifest["existed"]:
             try:
@@ -304,7 +302,6 @@ def _recover_install_transaction_anchored(target: Path, filesystem: AnchoredRoot
                 raise ProjectionInstallError("trusted recovery manifest backup is missing or unsafe") from exc
             if sha256_bytes(data) != manifest["backupSha256"]:
                 raise ProjectionInstallError("trusted recovery manifest backup hash mismatch")
-            backup_bytes[manifest["backupPath"]] = data
 
         if filesystem.exists(INSTALL_MANIFEST_PATH):
             if not filesystem.is_file(INSTALL_MANIFEST_PATH):
@@ -313,25 +310,10 @@ def _recover_install_transaction_anchored(target: Path, filesystem: AnchoredRoot
         else:
             current_manifest_hash = None
         manifest_before_hash = manifest["backupSha256"] if manifest["existed"] else None
-        if current_manifest_hash not in {manifest_before_hash, manifest["afterSha256"]}:
-            raise ProjectionInstallError("recovery target changed outside the failed transaction")
-
-        for item in journal["files"]:
-            before_hash = item["backupSha256"] if item["existed"] else None
-            if current_hashes[item["path"]] == before_hash:
-                continue
-            if item["existed"]:
-                try:
-                    filesystem.write_bytes(item["path"], backup_bytes[item["backupPath"]])
-                except AnchoredPathError as exc:
-                    raise ProjectionInstallError("anchored recovery write failed") from exc
-            elif filesystem.exists(item["path"]):
-                filesystem.unlink(item["path"])
         if current_manifest_hash != manifest_before_hash:
-            if manifest["existed"]:
-                filesystem.write_bytes(INSTALL_MANIFEST_PATH, backup_bytes[manifest["backupPath"]])
-            elif filesystem.exists(INSTALL_MANIFEST_PATH):
-                filesystem.unlink(INSTALL_MANIFEST_PATH)
+            raise ProjectionInstallError(
+                "partial projection transaction requires manual recovery; target paths were preserved"
+            )
         try:
             write_recovery_attestation(identity, journal_bytes, phase="COMMITTED")
         except ProcessLockError as exc:

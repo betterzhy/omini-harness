@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-evolution.local/core/schemas/project-integration.schema.json",
+  "type": "object",
+  "required": [
+    "schemaVersion", "id", "projectId", "sourceAccess", "controlPlanePath",
+    "authorityMapPath", "runtime", "excludedPaths"
+  ],
+  "properties": {
+    "schemaVersion": {"const": "project-integration/v1"},
+    "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$"},
+    "projectId": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$"},
+    "sourceAccess": {"const": "READ_ONLY"},
+    "controlPlanePath": {"type": "string", "minLength": 1},
+    "authorityMapPath": {"type": "string", "minLength": 1},
+    "runtime": {"enum": ["CHATGPT", "CODEX"]},
+    "excludedPaths": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1},
+      "uniqueItems": true
+    }
+  },
+  "additionalProperties": false
+}

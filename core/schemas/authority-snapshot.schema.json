@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-evolution.local/core/schemas/authority-snapshot.schema.json",
+  "type": "object",
+  "required": [
+    "schemaVersion", "integrationId", "projectId", "sourceRevision", "authorities",
+    "facts", "conflicts", "missingFacts", "excludedPaths", "gate", "snapshotFingerprint"
+  ],
+  "properties": {
+    "schemaVersion": {"const": "authority-snapshot/v1"},
+    "integrationId": {"type": "string", "minLength": 1},
+    "projectId": {"type": "string", "minLength": 1},
+    "sourceRevision": {
+      "type": "object",
+      "required": ["kind", "head", "tree"],
+      "properties": {
+        "kind": {"enum": ["GIT", "CONTENT"]},
+        "head": {"type": "string", "minLength": 1},
+        "tree": {"type": "string", "minLength": 1}
+      },
+      "additionalProperties": false
+    },
+    "authorities": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "path", "role", "sha256"],
+        "properties": {
+          "id": {"type": "string", "minLength": 1},
+          "path": {"type": "string", "minLength": 1},
+          "role": {"type": "string", "minLength": 1},
+          "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+        },
+        "additionalProperties": false
+      }
+    },
+    "facts": {"type": "object", "additionalProperties": {"type": "object"}},
+    "conflicts": {"type": "array", "items": {"type": "object"}},
+    "missingFacts": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+    "excludedPaths": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+    "gate": {"enum": ["PASS", "NO_GO"]},
+    "snapshotFingerprint": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+  },
+  "additionalProperties": false
+}

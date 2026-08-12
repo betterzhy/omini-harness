@@ -1,0 +1,177 @@
+from __future__ import annotations
+
+import shutil
+from pathlib import Path
+
+import pytest
+import yaml
+
+
+def _write_yaml(path: Path, value: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(yaml.safe_dump(value, sort_keys=False), encoding="utf-8")
+
+
+def _fixture(tmp_path: Path) -> tuple[Path, Path, Path]:
+    repository = Path(__file__).parents[1]
+    root = tmp_path / "harness"
+    shutil.copytree(repository / "core", root / "core")
+    integration = root / "integrations/sample-shadow"
+    source = tmp_path / "source-project"
+    source.mkdir()
+    (source / "status.md").write_text(
+        "# Status\n\nCurrentStage = READY\nExecutionAllowed = NO_WINDOW_CLOSED\n",
+        encoding="utf-8",
+    )
+    _write_yaml(source / "slice.yaml", {"ProgressAuthority": "THIS_DOCUMENT", "SliceStatus": "CLOSED"})
+    (source / "derived.md").write_text("ExecutionAllowed = YES\n", encoding="utf-8")
+    (source / "private").mkdir()
+    (source / "private/secret.md").write_text("Secret = value\n", encoding="utf-8")
+
+    _write_yaml(
+        integration / "integration.yaml",
+        {
+            "schemaVersion": "project-integration/v1",
+            "id": "sample-shadow",
+            "projectId": "sample-shadow",
+            "sourceAccess": "READ_ONLY",
+            "controlPlanePath": "control-plane",
+            "authorityMapPath": "authority-map.yaml",
+            "runtime": "CODEX",
+            "excludedPaths": ["private/**"],
+        },
+    )
+    _write_yaml(
+        integration / "authority-map.yaml",
+        {
+            "schemaVersion": "project-authority-map/v1",
+            "authorities": [
+                {
+                    "id": "global-status",
+                    "path": "status.md",
+                    "format": "MARKDOWN_KV",
+                    "role": "CANONICAL",
+                    "required": True,
+                    "owns": ["project.stage", "permission.execute"],
+                    "selectors": {
+                        "project.stage": {"key": "CurrentStage", "required": True},
+                        "permission.execute": {
+                            "key": "ExecutionAllowed",
+                            "required": True,
+                            "normalization": {
+                                "rules": [
+                                    {"operator": "PREFIX", "expected": "YES", "value": "ALLOW"},
+                                    {"operator": "PREFIX", "expected": "NO", "value": "DENY"},
+                                ],
+                                "default": "UNKNOWN",
+                            },
+                        },
+                    },
+                },
+                {
+                    "id": "slice-status",
+                    "path": "slice.yaml",
+                    "format": "YAML",
+                    "role": "SPECIALIZED",
+                    "required": True,
+                    "owns": ["slice.status"],
+                    "selectors": {
+                        "slice.status": {"key": "SliceStatus", "required": True},
+                    },
+                },
+                {
+                    "id": "derived-status",
+                    "path": "derived.md",
+                    "format": "MARKDOWN_KV",
+                    "role": "DERIVED",
+                    "required": False,
+                    "owns": [],
+                    "selectors": {},
+                },
+            ],
+            "requiredFacts": ["project.stage", "permission.execute", "slice.status"],
+        },
+    )
+    return root, integration, source
+
+
+def test_snapshot_extracts_owned_facts_and_normalizes_permission(tmp_path: Path):
+    from evolution_harness.authority import build_authority_snapshot
+
+    root, integration, source = _fixture(tmp_path)
+    snapshot = build_authority_snapshot(root, integration, source)
+    assert snapshot["gate"] == "PASS"
+    assert snapshot["facts"]["project.stage"]["rawValue"] == "READY"
+    assert snapshot["facts"]["permission.execute"]["normalizedValue"] == "DENY"
+    assert snapshot["facts"]["slice.status"]["owner"] == "slice-status"
+    assert snapshot["snapshotFingerprint"].startswith("sha256:")
+    assert snapshot["sourceRevision"]["kind"] in {"GIT", "CONTENT"}
+
+
+def test_snapshot_fingerprint_changes_when_authority_changes(tmp_path: Path):
+    from evolution_harness.authority import build_authority_snapshot
+
+    root, integration, source = _fixture(tmp_path)
+    before = build_authority_snapshot(root, integration, source)
+    (source / "status.md").write_text(
+        "CurrentStage = READY\nExecutionAllowed = YES_EXPLICIT\n",
+        encoding="utf-8",
+    )
+    after = build_authority_snapshot(root, integration, source)
+    assert before["snapshotFingerprint"] != after["snapshotFingerprint"]
+    assert after["facts"]["permission.execute"]["normalizedValue"] == "ALLOW"
+
+
+def test_multiple_fact_owners_and_conflicting_values_fail_closed(tmp_path: Path):
+    from evolution_harness.authority import build_authority_snapshot
+
+    root, integration, source = _fixture(tmp_path)
+    path = integration / "authority-map.yaml"
+    authority_map = yaml.safe_load(path.read_text(encoding="utf-8"))
+    authority_map["authorities"][2]["role"] = "CANONICAL"
+    authority_map["authorities"][2]["owns"] = ["permission.execute"]
+    authority_map["authorities"][2]["selectors"] = {
+        "permission.execute": {"key": "ExecutionAllowed", "required": True}
+    }
+    _write_yaml(path, authority_map)
+
+    snapshot = build_authority_snapshot(root, integration, source)
+    assert snapshot["gate"] == "NO_GO"
+    assert any(item["type"] == "MULTIPLE_FACT_OWNERS" for item in snapshot["conflicts"])
+
+
+def test_missing_required_fact_fails_closed(tmp_path: Path):
+    from evolution_harness.authority import build_authority_snapshot
+
+    root, integration, source = _fixture(tmp_path)
+    (source / "slice.yaml").write_text("ProgressAuthority: THIS_DOCUMENT\n", encoding="utf-8")
+    snapshot = build_authority_snapshot(root, integration, source)
+    assert snapshot["gate"] == "NO_GO"
+    assert "slice.status" in snapshot["missingFacts"]
+
+
+def test_excluded_authority_path_is_rejected_before_read(tmp_path: Path):
+    from evolution_harness.authority import IntegrationAuthorityError, build_authority_snapshot
+
+    root, integration, source = _fixture(tmp_path)
+    path = integration / "authority-map.yaml"
+    authority_map = yaml.safe_load(path.read_text(encoding="utf-8"))
+    authority_map["authorities"][0]["path"] = "private/secret.md"
+    _write_yaml(path, authority_map)
+    with pytest.raises(IntegrationAuthorityError, match="excluded"):
+        build_authority_snapshot(root, integration, source)
+
+
+def test_derived_authority_cannot_own_facts(tmp_path: Path):
+    from evolution_harness.authority import IntegrationAuthorityError, build_authority_snapshot
+
+    root, integration, source = _fixture(tmp_path)
+    path = integration / "authority-map.yaml"
+    authority_map = yaml.safe_load(path.read_text(encoding="utf-8"))
+    authority_map["authorities"][2]["owns"] = ["permission.execute"]
+    authority_map["authorities"][2]["selectors"] = {
+        "permission.execute": {"key": "ExecutionAllowed", "required": True}
+    }
+    _write_yaml(path, authority_map)
+    with pytest.raises(IntegrationAuthorityError, match="derived"):
+        build_authority_snapshot(root, integration, source)

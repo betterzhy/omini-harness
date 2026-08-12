@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-evolution.local/core/schemas/project-authority-map.schema.json",
+  "$defs": {
+    "factId": {"type": "string", "pattern": "^[a-z][a-z0-9._-]*$"},
+    "selector": {
+      "type": "object",
+      "required": ["key", "required"],
+      "properties": {
+        "key": {"type": "string", "minLength": 1},
+        "required": {"type": "boolean"},
+        "normalization": {
+          "type": "object",
+          "required": ["rules", "default"],
+          "properties": {
+            "rules": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["operator", "expected", "value"],
+                "properties": {
+                  "operator": {"enum": ["EXACT", "PREFIX", "CONTAINS"]},
+                  "expected": {"type": "string"},
+                  "value": {"type": "string", "minLength": 1}
+                },
+                "additionalProperties": false
+              }
+            },
+            "default": {"type": "string", "minLength": 1}
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "type": "object",
+  "required": ["schemaVersion", "authorities", "requiredFacts"],
+  "properties": {
+    "schemaVersion": {"const": "project-authority-map/v1"},
+    "authorities": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "path", "format", "role", "required", "owns", "selectors"],
+        "properties": {
+          "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$"},
+          "path": {"type": "string", "minLength": 1},
+          "format": {"enum": ["MARKDOWN_KV", "YAML", "JSON"]},
+          "role": {"enum": ["CANONICAL", "SPECIALIZED", "GUIDANCE", "DERIVED"]},
+          "required": {"type": "boolean"},
+          "owns": {"type": "array", "items": {"$ref": "#/$defs/factId"}, "uniqueItems": true},
+          "selectors": {
+            "type": "object",
+            "propertyNames": {"$ref": "#/$defs/factId"},
+            "additionalProperties": {"$ref": "#/$defs/selector"}
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "requiredFacts": {"type": "array", "items": {"$ref": "#/$defs/factId"}, "uniqueItems": true}
+  },
+  "additionalProperties": false
+}

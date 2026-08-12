@@ -23,6 +23,7 @@ from .integration import (
 from .learning import create_candidate, promote_candidate, triage_experience, capture_experience
 from .project import build_capability_lock
 from .projection import build_projection_pack, check_projection_freshness
+from .registration import check_project_registration, resolve_registered_integration
 from .registry import build_all_registries, build_design_registry
 from .resolver import resolve_design_context
 from .revalidation import check_revalidation
@@ -60,7 +61,7 @@ def _add_resolution_args(parser: argparse.ArgumentParser) -> None:
 
 
 def _add_integration_resolution_args(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--integration", required=True)
+    parser.add_argument("--integration")
     parser.add_argument("--source", required=True)
     parser.add_argument("--intent", required=True)
     parser.add_argument("--topic", required=True)
@@ -75,6 +76,15 @@ def _resolve(root: Path, args) -> dict[str, Any]:
         root, Path(args.project), intent=args.intent, topic=args.topic, requested_output=args.output,
         runtime=args.runtime, explicit_stage=args.stage, reopen_signal=args.reopen_signal,
     )
+
+
+def _registered_integration_root(root: Path, args) -> Path:
+    loaded = resolve_registered_integration(
+        root,
+        Path(args.source),
+        Path(args.integration) if args.integration else None,
+    )
+    return loaded["integrationRoot"]
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -111,7 +121,8 @@ def build_parser() -> argparse.ArgumentParser:
     q = s.add_parser("uninstall"); q.add_argument("--target", required=True); q.add_argument("--apply", action="store_true"); _add_format(q)
 
     p = sub.add_parser("integration"); s = p.add_subparsers(dest="action", required=True)
-    q = s.add_parser("inspect"); q.add_argument("--integration", required=True); q.add_argument("--source", required=True); _add_format(q)
+    q = s.add_parser("registration-check"); q.add_argument("--source", required=True); _add_format(q)
+    q = s.add_parser("inspect"); q.add_argument("--integration"); q.add_argument("--source", required=True); _add_format(q)
     q = s.add_parser("lock"); q.add_argument("--integration", required=True); q.add_argument("--check", action="store_true"); _add_format(q)
     q = s.add_parser("resolve"); _add_integration_resolution_args(q); q.add_argument("--explain", action="store_true"); _add_format(q)
     q = s.add_parser("projection"); _add_integration_resolution_args(q); q.add_argument("--check", action="store_true"); _add_format(q)
@@ -209,10 +220,13 @@ def main(argv=None) -> int:
         if args.command == "projection" and args.action == "uninstall":
             data = uninstall_projection(root, Path(args.target), apply=args.apply)
             return _emit(data, fmt=fmt, ok=data["gate"] == "PASS", command=command)
+        if args.command == "integration" and args.action == "registration-check":
+            data = check_project_registration(root, Path(args.source))
+            return _emit(data, fmt=fmt, ok=data["gate"] == "PASS", command=command)
         if args.command == "integration" and args.action == "inspect":
             from .authority import build_authority_snapshot
 
-            data = build_authority_snapshot(root, Path(args.integration), Path(args.source))
+            data = build_authority_snapshot(root, _registered_integration_root(root, args), Path(args.source))
             return _emit(data, fmt=fmt, ok=data["gate"] == "PASS", command=command)
         if args.command == "integration" and args.action == "lock":
             loaded = load_integration(root, Path(args.integration))
@@ -223,7 +237,7 @@ def main(argv=None) -> int:
         if args.command == "integration" and args.action == "resolve":
             data = resolve_integration_context(
                 root,
-                Path(args.integration),
+                _registered_integration_root(root, args),
                 Path(args.source),
                 intent=args.intent,
                 topic=args.topic,
@@ -239,7 +253,7 @@ def main(argv=None) -> int:
             if args.check:
                 check = check_integration_projection(
                     root,
-                    Path(args.integration),
+                    _registered_integration_root(root, args),
                     Path(args.source),
                     runtime=args.runtime,
                     intent=args.intent,
@@ -251,7 +265,7 @@ def main(argv=None) -> int:
                 return _emit({"fresh": check.fresh, "reasons": check.reasons}, fmt=fmt, ok=check.fresh, command=command)
             data = build_integration_projection(
                 root,
-                Path(args.integration),
+                _registered_integration_root(root, args),
                 Path(args.source),
                 intent=args.intent,
                 topic=args.topic,

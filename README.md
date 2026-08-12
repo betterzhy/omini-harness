@@ -91,6 +91,16 @@ integrations/<id>/
 
 The sidecar's stage describes the integration work, not the external project's delivery stage. External project state remains in its own authority files and always wins over shared capability guidance.
 
+After a sidecar has been accepted, a project can opt into repository-local discovery with one routing file:
+
+```text
+<project>/.agent-evolution/registration.yaml
+```
+
+The registration records only the Harness identity, repository-relative integration identity/path, `SELF` source root, `READ_ONLY` access, runtime and exact capability-lock fingerprint. It cannot contain project stage, topic state, authorization, architecture text or capability bodies. The Harness validates the registration and exact lock before reusing the sidecar's live Authority Snapshot; it does not create a second project state system. Explicit `--integration` calls remain supported, but if a registration is present an explicit path must identify the same integration.
+
+`integration registration-check --source <project>` validates only this discovery/binding boundary. `integration inspect`, `integration resolve` and `integration projection` can omit `--integration` when the source has a valid registration. Discovery does not authorize project writes, and it does not change the separate plan-only materialization boundary below.
+
 ## Deterministic resolver
 
 ```text
@@ -159,6 +169,7 @@ harness eval run
 harness projection build
 harness projection install --pack <pack> --target <project>
 harness projection uninstall --target <project>
+harness integration registration-check --source <project>
 harness integration inspect --integration <sidecar> --source <project>
 harness integration lock --integration <sidecar>
 harness integration resolve --integration <sidecar> --source <project> --explain

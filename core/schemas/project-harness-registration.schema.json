@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-evolution.local/core/schemas/project-harness-registration.schema.json",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "harnessId",
+    "integrationId",
+    "integrationPath",
+    "sourceRoot",
+    "sourceAccess",
+    "runtime",
+    "capabilityLockFingerprint"
+  ],
+  "properties": {
+    "schemaVersion": {"const": "project-harness-registration/v1"},
+    "harnessId": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$"},
+    "integrationId": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$"},
+    "integrationPath": {"type": "string", "minLength": 1},
+    "sourceRoot": {"const": "SELF"},
+    "sourceAccess": {"const": "READ_ONLY"},
+    "runtime": {"enum": ["CHATGPT", "CODEX"]},
+    "capabilityLockFingerprint": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+  },
+  "additionalProperties": false
+}

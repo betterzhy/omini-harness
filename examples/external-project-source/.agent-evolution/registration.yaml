@@ -1,0 +1,8 @@
+schemaVersion: project-harness-registration/v1
+harnessId: agent-evolution-harness
+integrationId: neutral-shadow
+integrationPath: integrations/neutral-shadow
+sourceRoot: SELF
+sourceAccess: READ_ONLY
+runtime: CODEX
+capabilityLockFingerprint: sha256:6e18d9cd91420d5529f0679cbf1d1cad7be5ae6a76b10df16ebed0d6a5004c24

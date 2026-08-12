@@ -11,6 +11,82 @@ def _tree_bytes(root: Path) -> dict[str, bytes]:
     return {path.relative_to(root).as_posix(): path.read_bytes() for path in root.rglob("*") if path.is_file()}
 
 
+def test_neutral_fixture_registration_discovers_the_same_live_integration(tmp_path: Path):
+    from evolution_harness.install import ProjectionInstallError, install_projection
+    from evolution_harness.integration import (
+        build_integration_projection,
+        check_integration_projection,
+        resolve_integration_context,
+    )
+    from evolution_harness.registration import load_project_registration
+    from evolution_harness.scenario import run_integration_scenario
+
+    repository = Path(__file__).parents[1]
+    root = tmp_path / "harness"
+    for name in ["core", "design", "runtime"]:
+        shutil.copytree(repository / name, root / name)
+    integration = root / "integrations/neutral-shadow"
+    shutil.copytree(repository / "integrations/neutral-shadow", integration)
+    source = tmp_path / "external-project"
+    shutil.copytree(repository / "examples/external-project-source", source)
+    before = _tree_bytes(source)
+
+    registered = load_project_registration(root, source)
+    explicit = resolve_integration_context(
+        root,
+        integration,
+        source,
+        intent="architecture-review",
+        topic="runtime-integration",
+        requested_output="review findings",
+        runtime="CODEX",
+    )
+    discovered = resolve_integration_context(
+        root,
+        registered["integrationRoot"],
+        source,
+        intent="architecture-review",
+        topic="runtime-integration",
+        requested_output="review findings",
+        runtime="CODEX",
+    )
+    assert explicit["resolutionId"] == discovered["resolutionId"]
+
+    scenarios = [
+        run_integration_scenario(root, registered["integrationRoot"], source, scenario)
+        for scenario in sorted((integration / "scenarios").glob("*.yaml"))
+    ]
+    assert len(scenarios) == 2
+    assert all(result["gate"] == "PASS" for result in scenarios)
+
+    build_integration_projection(
+        root,
+        registered["integrationRoot"],
+        source,
+        intent="architecture-review",
+        topic="runtime-integration",
+        requested_output="review findings",
+        runtime="CODEX",
+    )
+    freshness = check_integration_projection(
+        root,
+        registered["integrationRoot"],
+        source,
+        intent="architecture-review",
+        topic="runtime-integration",
+        requested_output="review findings",
+        runtime="CODEX",
+    )
+    assert freshness.fresh
+    pack = root / "generated/projections/codex/neutral-shadow"
+    plan = install_projection(root, pack, source)
+    assert plan["mode"] == "DRY_RUN"
+    assert plan["gate"] == "PASS"
+    with pytest.raises(ProjectionInstallError, match="automatic projection install is disabled"):
+        install_projection(root, pack, source, apply=True)
+    assert before == _tree_bytes(source)
+
+
 def test_neutral_fixture_scenarios_cover_authority_closure_consumed_and_conflict(tmp_path: Path):
     from evolution_harness.authority import build_authority_snapshot
     from evolution_harness.scenario import run_integration_scenario

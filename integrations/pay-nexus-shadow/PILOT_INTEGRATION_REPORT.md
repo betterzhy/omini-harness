@@ -23,7 +23,7 @@ PAY_NEXUS_REAL_CODEX_TASK = NOT_EXECUTED
 
 | Area | Current evidence | Shadow interpretation |
 |---|---|---|
-| Repository | `/Users/yuzhuangzhuang/Projects/pay-nexus` at `f0bfce7a71314c313a01a518fa3a36f8e9bf659a` | Read-only source root |
+| Repository | `/Users/yuzhuangzhuang/Projects/pay-nexus` at `33c06f1ee4f859f5aa0f23dd6c3f3c8c6dfe6bfa` | Read-only source root; revalidated after the original pilot |
 | Global authority | `current-formal-status.md` | Owns global stage and execution permissions |
 | Agent guidance | `AGENTS.md` | Project guidance remains unchanged and outranks generic guidance |
 | Design state | `ArchitectureSemanticStatus=SEALED` | Registered as CLOSED only because explicit evidence exists |
@@ -99,11 +99,11 @@ PYTHONPATH=src .venv/bin/python -m evolution_harness.cli --repository-root . \
 Evidence:
 
 ```text
-source HEAD = f0bfce7a71314c313a01a518fa3a36f8e9bf659a
-source tree = e5c5479192504e303461ea9e5e0784efd1361a8c
+source HEAD = 33c06f1ee4f859f5aa0f23dd6c3f3c8c6dfe6bfa
+source tree = 2caac137f333ee38d9d6deb6b211bbd289140108
 authority set status = CLEAN_FOR_AUTHORITY_SET
 authority set digest = sha256:6822a9d6cefa59913280711e984acd55c958ac4d84f0202a9352fc909d14b6a2
-snapshot = sha256:f25b0fba54416346937472418fba7a56b486729d194647c03ba806d1eadf4bf1
+snapshot = sha256:7c6d0bca359787da0e804aee16dd4fba5bb8212361ac7e57d3a86d08580ba99a
 authority gate = PASS
 conflicts = []
 missing facts = []
@@ -161,7 +161,7 @@ For `intent=architecture-review`, `topic=harness-shadow-binding`, `runtime=CODEX
 - Excluded: `closure-requires-authority` because of `intent-mismatch`.
 - Project conflict: `architecture-review` vs `current-formal-status.md#current-execution-authority`.
 - Resolution: `PROJECT_TRUTH_WINS`.
-- Resolution ID: `resolution:08ed09587386a3af9632a788`.
+- Resolution ID: `resolution:49aff9d22c3611036aa6c82a`.
 
 This demonstrates selection before materialization; the lock contains five capabilities, but the runtime context selects only four.
 
@@ -208,9 +208,9 @@ Result:
 ```text
 projection freshness = PASS
 projection version = codex-project-pack/1
-source resolution = resolution:08ed09587386a3af9632a788
+source resolution = resolution:49aff9d22c3611036aa6c82a
 source lock = sha256:1b5b5116bbd7b98be65f207b0f849cca0cf16cd541e80bb3f6a93f405d4f6bdb
-source authority snapshot = sha256:f25b0fba54416346937472418fba7a56b486729d194647c03ba806d1eadf4bf1
+source authority snapshot = sha256:7c6d0bca359787da0e804aee16dd4fba5bb8212361ac7e57d3a86d08580ba99a
 ```
 
 Generated `architecture-review/SKILL.md` records:
@@ -249,11 +249,13 @@ Automatic materialization and removal are deliberately disabled. On a disposable
 
 ## Baseline and Post-Integration Verification
 
-Pay-Nexus source checks before and after:
+Pay-Nexus source checks for the original pilot and the later registration-candidate revalidation:
 
 ```text
 HEAD before = f0bfce7a71314c313a01a518fa3a36f8e9bf659a
 HEAD after  = f0bfce7a71314c313a01a518fa3a36f8e9bf659a
+revalidation HEAD before = 33c06f1ee4f859f5aa0f23dd6c3f3c8c6dfe6bfa
+revalidation HEAD after  = 33c06f1ee4f859f5aa0f23dd6c3f3c8c6dfe6bfa
 tracked status before = clean
 tracked status after  = clean
 .agent-evolution in Pay-Nexus = absent
@@ -266,7 +268,7 @@ Pay-Nexus tests were intentionally not run because they may materialize build ou
 Harness candidate-freeze verification:
 
 ```text
-pytest = 141 passed
+pytest = 162 passed
 structural validation = PASS (issues = [])
 registry freshness = PASS (design 10, design-learning 5, engineering 6)
 catalog freshness = PASS (design 10, engineering 4, unified 14)

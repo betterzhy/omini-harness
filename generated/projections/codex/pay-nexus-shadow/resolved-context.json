@@ -203,13 +203,13 @@
       "sha256": "ae922ff532dbb4a1728b01059d59649a41c569bb74ad1e9aecd287ded8862c4d"
     }
   ],
-  "authoritySnapshotFingerprint": "sha256:f25b0fba54416346937472418fba7a56b486729d194647c03ba806d1eadf4bf1",
+  "authoritySnapshotFingerprint": "sha256:7c6d0bca359787da0e804aee16dd4fba5bb8212361ac7e57d3a86d08580ba99a",
   "authoritySourceRevision": {
     "authoritySetDigest": "sha256:6822a9d6cefa59913280711e984acd55c958ac4d84f0202a9352fc909d14b6a2",
     "authoritySetStatus": "CLEAN_FOR_AUTHORITY_SET",
-    "head": "f0bfce7a71314c313a01a518fa3a36f8e9bf659a",
+    "head": "33c06f1ee4f859f5aa0f23dd6c3f3c8c6dfe6bfa",
     "kind": "GIT",
-    "tree": "e5c5479192504e303461ea9e5e0784efd1361a8c"
+    "tree": "2caac137f333ee38d9d6deb6b211bbd289140108"
   },
   "capabilityLockFingerprint": "sha256:1b5b5116bbd7b98be65f207b0f849cca0cf16cd541e80bb3f6a93f405d4f6bdb",
   "closedTopics": [
@@ -325,7 +325,7 @@
     "Did project truth override generic guidance where applicable?",
     "Did I avoid mutating closure or promotion state?"
   ],
-  "resolutionId": "resolution:08ed09587386a3af9632a788",
+  "resolutionId": "resolution:49aff9d22c3611036aa6c82a",
   "runtime": "CODEX",
   "schemaVersion": "resolved-design-context/v1",
   "selectedCapabilities": [

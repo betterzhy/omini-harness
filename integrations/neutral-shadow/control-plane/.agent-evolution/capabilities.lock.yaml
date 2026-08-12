@@ -1,36 +1,36 @@
 schemaVersion: capability-lock/v1
 project: neutral-shadow
-sourceHarnessRevision: content-sha256:5acfd6caed1d11473907ac466014bf6571046578323570a24180cdf80b52849a
+sourceHarnessRevision: content-sha256:e5ff078bb187b0970dde15b65abacc705b4d384622ce4dc593e25894fae55a41
 disabledCapabilities: []
 capabilities:
 - capabilityId: framework:agent-design:authority-analysis
   resolvedVersion: 1.0.0
   contentHash: 4fd4857d170c01c8c7672d5e16353be26a2b10897e31952d15172e418eb23f49
-  sourceHarnessRevision: content-sha256:5acfd6caed1d11473907ac466014bf6571046578323570a24180cdf80b52849a
+  sourceHarnessRevision: content-sha256:e5ff078bb187b0970dde15b65abacc705b4d384622ce4dc593e25894fae55a41
   resolvedBecause:
   - explicit-binding
 - capabilityId: framework:agent-design:lifecycle-analysis
   resolvedVersion: 1.0.0
   contentHash: 7a6d87e989ae4e86814fffff078b9a2af686a1e79e98f1831db7abb9ab017a09
-  sourceHarnessRevision: content-sha256:5acfd6caed1d11473907ac466014bf6571046578323570a24180cdf80b52849a
+  sourceHarnessRevision: content-sha256:e5ff078bb187b0970dde15b65abacc705b4d384622ce4dc593e25894fae55a41
   resolvedBecause:
   - explicit-binding
 - capabilityId: principle:agent-design:closure-requires-authority
   resolvedVersion: 1.0.0
   contentHash: c7bf1c1477f24ad95b0cf6eff47c2fe9a902e33d257b3ffae51f5e92bafc66c0
-  sourceHarnessRevision: content-sha256:5acfd6caed1d11473907ac466014bf6571046578323570a24180cdf80b52849a
+  sourceHarnessRevision: content-sha256:e5ff078bb187b0970dde15b65abacc705b4d384622ce4dc593e25894fae55a41
   resolvedBecause:
   - explicit-binding
 - capabilityId: principle:agent-design:project-truth-over-generic-guidance
   resolvedVersion: 1.0.0
   contentHash: fb16ec4b824fea1ccb63c589b314253c56b2cd29992c3008a4dde415532d28ab
-  sourceHarnessRevision: content-sha256:5acfd6caed1d11473907ac466014bf6571046578323570a24180cdf80b52849a
+  sourceHarnessRevision: content-sha256:e5ff078bb187b0970dde15b65abacc705b4d384622ce4dc593e25894fae55a41
   resolvedBecause:
   - explicit-binding
 - capabilityId: skill:agent-design:architecture-review
   resolvedVersion: 1.0.0
   contentHash: 00094ad3677d968fa101879886d2dc0e14bac5926930ddcfad897c9f8879c834
-  sourceHarnessRevision: content-sha256:5acfd6caed1d11473907ac466014bf6571046578323570a24180cdf80b52849a
+  sourceHarnessRevision: content-sha256:e5ff078bb187b0970dde15b65abacc705b4d384622ce4dc593e25894fae55a41
   resolvedBecause:
   - explicit-binding
-lockFingerprint: sha256:1419f87f6fba3d41f3698d5bd6e142c27e995c0c99f369499ae90a641c8dd0e6
+lockFingerprint: sha256:6e18d9cd91420d5529f0679cbf1d1cad7be5ae6a76b10df16ebed0d6a5004c24

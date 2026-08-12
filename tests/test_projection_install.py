@@ -267,3 +267,26 @@ def test_install_recovery_rejects_forged_backup_directory_without_deleting_it(tm
         install.install_projection(root, pack, target, apply=True)
 
     assert sentinel.read_text(encoding="utf-8") == "preserve\n"
+
+
+def test_install_and_uninstall_apply_reject_second_writer_for_same_target(tmp_path: Path):
+    from evolution_harness import install
+    from evolution_harness.process_lock import exclusive_process_lock, process_lock_identity
+
+    root, _, pack = _pack(tmp_path)
+    target = tmp_path / "target"
+    target.mkdir()
+    identity = process_lock_identity("projection-install", target)
+
+    assert install.install_projection(root, pack, target)["mode"] == "DRY_RUN"
+    with exclusive_process_lock(identity):
+        with pytest.raises(install.ProjectionInstallError, match="concurrent projection install rejected"):
+            install.install_projection(root, pack, target, apply=True)
+    assert not (target / ".agents").exists()
+
+    install.install_projection(root, pack, target, apply=True)
+    managed = target / ".agents/skills/architecture-review/SKILL.md"
+    with exclusive_process_lock(identity):
+        with pytest.raises(install.ProjectionInstallError, match="concurrent projection uninstall rejected"):
+            install.uninstall_projection(root, target, apply=True)
+    assert managed.exists()

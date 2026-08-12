@@ -1,5 +1,5 @@
 {
-  "capabilityLockFingerprint": "sha256:fff6d30086b4cf36d5653d5df0e489ed01ce268e0443670bb5c2dee2bbf40736",
+  "capabilityLockFingerprint": "sha256:6f51c9639f728a55f8a1c3f9bd3ed680d7c8c711e3bb41a4d0713e2a63b80153",
   "generatedFiles": [
     {
       "path": "discussion-contract.md",
@@ -11,11 +11,11 @@
     },
     {
       "path": "resolved-context.json",
-      "sha256": "400eb52fabb877127d622b89787905326d231aaf5768e296051c2ce3d4fdc2dc"
+      "sha256": "89dbcb6077ed387a0b0543ee6aadbe3db5b31cbda0809c3cefe9d72d96ce6afc"
     },
     {
       "path": "resolved-context.md",
-      "sha256": "385c819be36d2db2680b2c84ee0ec47266ca6992419db6f857b0fa267e317600"
+      "sha256": "147fa68180c2a434b23577931829cf1e25e0ddc2d0f8d4c7c2aeabc48b26d3f4"
     },
     {
       "path": "skills/architecture-review/SKILL.md",
@@ -88,5 +88,5 @@
       "version": "1.0.0"
     }
   ],
-  "sourceResolutionId": "resolution:1343d4d07b701171928cfd18"
+  "sourceResolutionId": "resolution:5a7ad7806edaa04760ee1164"
 }

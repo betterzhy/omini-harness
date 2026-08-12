@@ -99,3 +99,20 @@ def test_lock_rejects_inconsistent_entry_source_revision(tmp_path: Path):
 
     with pytest.raises(ValueError, match="source revision mismatch"):
         verify_capability_lock(root, project)
+
+
+def test_lock_rejects_self_consistent_but_forged_source_revision(tmp_path: Path):
+    from evolution_harness.project import capability_lock_fingerprint, verify_capability_lock
+
+    root, project = _copy_repo(tmp_path)
+    lock_path = project / ".agent-evolution/capabilities.lock.yaml"
+    lock = yaml.safe_load(lock_path.read_text(encoding="utf-8"))
+    forged = "content-sha256:" + "f" * 64
+    lock["sourceHarnessRevision"] = forged
+    for item in lock["capabilities"]:
+        item["sourceHarnessRevision"] = forged
+    lock["lockFingerprint"] = capability_lock_fingerprint(lock)
+    lock_path.write_text(yaml.safe_dump(lock, sort_keys=False), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="not reproducible"):
+        verify_capability_lock(root, project)

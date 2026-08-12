@@ -107,6 +107,8 @@ request
 
 The resolver does not invoke an LLM. Explicit project state wins over reusable guidance and conflict signals use `PROJECT_TRUTH_WINS`.
 
+Exact locks record capability ID, version and canonical content hash. Their `sourceHarnessRevision` is a reproducible digest of that exact selected source set, so synchronized metadata edits fail verification while unrelated future catalog versions do not silently move an existing project lock.
+
 ## Runtime projection
 
 A canonical Skill can generate runtime `SKILL.md`; only explicitly selected and referenced Principle/Framework content is materialized. Both ChatGPT and Codex packs record the same source capability ID/version/hash while using independent packaging/projection versions.
@@ -125,7 +127,7 @@ generated/projections/chatgpt/<project>/
 
 Codex pack uses `repository-guidance.md` and `resolved-task-context.md`, also includes `resolved-context.json`, and never overwrites project `AGENTS.md`.
 
-Projection installation is manifest-based and dry-run by default. Before planning or applying, the installer deterministically revalidates the pack from canonical capability, exact lock, resolved context and control-plane inputs; an integration pack must also remain fresh against the installation target's current Authority Snapshot. Only resolved generated `skills/*/SKILL.md` files can map to repo-local `.agents/skills/`; existing unmanaged skills, changed managed files, symlinks, unsafe paths, and missing ownership evidence fail closed. `AGENTS.md` is outside the installer write set. Apply and uninstall both require explicit `--apply`, and a validated persistent transaction journal restores a pre-change state after interruption before the next install/uninstall operation proceeds. Projection-pack replacement uses a separate validated swap journal so an interrupted directory rename is recovered without trusting arbitrary backup paths.
+Projection installation is manifest-based and dry-run by default. Before planning or applying, the installer deterministically revalidates the pack from canonical capability, exact lock, resolved context and control-plane inputs; an integration pack must also remain fresh against the installation target's complete live Authority Snapshot. Only resolved generated `skills/*/SKILL.md` files can map to repo-local `.agents/skills/`; existing unmanaged skills, changed managed files, symlinks, unsafe paths, and missing ownership evidence fail closed. `AGENTS.md` is outside the installer write set. Apply and uninstall both require explicit `--apply`, and a validated persistent transaction journal restores a pre-change state after interruption before the next install/uninstall operation proceeds. Projection-pack replacement uses a separate validated swap journal so an interrupted directory rename is recovered without trusting arbitrary backup paths. Cross-process target locks reject concurrent projection writers and concurrent install/uninstall writers; the OS releases those locks after process termination.
 
 ## Governed learning
 

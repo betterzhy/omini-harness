@@ -145,7 +145,7 @@ Result:
 
 ```text
 lock gate = PASS
-lock fingerprint = sha256:2e412ecccc93e4b9e310088464a76c9a155b3b55d4c085aacbfca2a80e4e45c0
+lock fingerprint = sha256:1b5b5116bbd7b98be65f207b0f849cca0cf16cd541e80bb3f6a93f405d4f6bdb
 ```
 
 Each lock entry records capability ID, exact version, content hash and Harness revision. No latest-version lookup occurs after lock verification.
@@ -158,7 +158,7 @@ For `intent=architecture-review`, `topic=harness-shadow-binding`, `runtime=CODEX
 - Excluded: `closure-requires-authority` because of `intent-mismatch`.
 - Project conflict: `architecture-review` vs `current-formal-status.md#current-execution-authority`.
 - Resolution: `PROJECT_TRUTH_WINS`.
-- Resolution ID: `resolution:f075d3f4fe1d6a04a0d5e740`.
+- Resolution ID: `resolution:08ed09587386a3af9632a788`.
 
 This demonstrates selection before materialization; the lock contains five capabilities, but the runtime context selects only four.
 
@@ -205,8 +205,8 @@ Result:
 ```text
 projection freshness = PASS
 projection version = codex-project-pack/1
-source resolution = resolution:f075d3f4fe1d6a04a0d5e740
-source lock = sha256:2e412ecccc93e4b9e310088464a76c9a155b3b55d4c085aacbfca2a80e4e45c0
+source resolution = resolution:08ed09587386a3af9632a788
+source lock = sha256:1b5b5116bbd7b98be65f207b0f849cca0cf16cd541e80bb3f6a93f405d4f6bdb
 source authority snapshot = sha256:f25b0fba54416346937472418fba7a56b486729d194647c03ba806d1eadf4bf1
 ```
 
@@ -261,7 +261,7 @@ Pay-Nexus tests were intentionally not run because they may materialize build ou
 Harness candidate-freeze verification:
 
 ```text
-pytest = 133 passed
+pytest = 137 passed
 structural validation = PASS (issues = [])
 registry freshness = PASS (design 10, design-learning 5, engineering 6)
 catalog freshness = PASS (design 10, engineering 4, unified 14)
@@ -273,7 +273,7 @@ pay-nexus-shadow projection freshness = PASS
 pay-nexus-shadow install plan = PASS / DRY_RUN
 ```
 
-The first fixed candidate, `7d6882bc666ff521e163d9b0bb2e0689b26e2186`, was independently reviewed and rejected as `NO-GO` (`1 P0`, `6 P1`, `2 P2`). A second candidate, `e8903b7b541bdca75846841f1d33d472d1a83d8f`, passed its mechanical Gate but was rejected before acceptance because a negative test proved it did not independently reproduce and verify the saved resolver result. A third candidate, `9706122b7d41bae84ee64092a318b5c8be3d8a27`, was rejected because freshness still consulted untrusted generated-file paths after canonical validation had already failed. A fourth candidate, `61280ab7f50aa06b17a0916dc849d2e5e7b907d2`, closed that path but was rejected when independent review proved embedded authority facts were not compared with the complete live snapshot. All four are superseded and none is acceptance evidence. The remediation adds safe project identities and output boundaries, request-bound freshness, current-resolver reproduction, deterministic projection reconstruction, complete live authority snapshot equality, post-failure fail-closed handling, source and target symlink rejection, canonical topic-status reconciliation, exact-lock consistency checks, authority-set dirty provenance, and persistent validated recovery journals. Final acceptance is bound to a later fixed candidate and its separate review receipt.
+The first fixed candidate, `7d6882bc666ff521e163d9b0bb2e0689b26e2186`, was independently reviewed and rejected as `NO-GO` (`1 P0`, `6 P1`, `2 P2`). A second candidate, `e8903b7b541bdca75846841f1d33d472d1a83d8f`, passed its mechanical Gate but was rejected before acceptance because a negative test proved it did not independently reproduce and verify the saved resolver result. A third candidate, `9706122b7d41bae84ee64092a318b5c8be3d8a27`, was rejected because freshness still consulted untrusted generated-file paths after canonical validation had already failed. A fourth candidate, `61280ab7f50aa06b17a0916dc849d2e5e7b907d2`, closed that path but was rejected when independent review proved embedded authority facts were not compared with the complete live snapshot. A fifth candidate, `4af3112fb61464a038f418c9ef35e6a46b3d0022`, closed the authority gap but was rejected because `sourceHarnessRevision` could be synchronously forged and because concurrent writers were not serialized. All five are superseded and none is acceptance evidence. The remediation adds safe project identities and output boundaries, request-bound freshness, current-resolver reproduction, deterministic projection reconstruction, complete live authority snapshot equality, post-failure fail-closed handling, source and target symlink rejection, canonical topic-status reconciliation, reproducible exact-source lock revisions, authority-set dirty provenance, persistent validated recovery journals, and process-level writer exclusion. Final acceptance is bound to a later fixed candidate and its separate review receipt.
 
 ## Deferred Items and Hard Stop
 

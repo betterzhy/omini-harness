@@ -286,6 +286,25 @@ def test_projection_reentry_recovers_interrupted_directory_swap(tmp_path: Path):
     assert not journal_path.exists()
 
 
+def test_projection_rejects_second_writer_for_same_pack(tmp_path: Path):
+    from evolution_harness import projection
+    from evolution_harness.process_lock import exclusive_process_lock, process_lock_identity
+
+    root, project = _copy_repo(tmp_path)
+    resolved = _resolved(root, project, runtime="CODEX")
+    projection.build_projection_pack(root, project, resolved, runtime="CODEX")
+    target = root / "generated/projections/codex/project-fixture"
+    before = {path.relative_to(target).as_posix(): path.read_bytes() for path in target.rglob("*") if path.is_file()}
+    identity = process_lock_identity("projection-build", target)
+
+    with exclusive_process_lock(identity):
+        with pytest.raises(projection.ProjectionError, match="concurrent projection build rejected"):
+            projection.build_projection_pack(root, project, resolved, runtime="CODEX")
+
+    after = {path.relative_to(target).as_posix(): path.read_bytes() for path in target.rglob("*") if path.is_file()}
+    assert after == before
+
+
 def test_projection_rejects_symlinked_generated_output_parent(tmp_path: Path):
     from evolution_harness.projection import ProjectionError, build_projection_pack
 

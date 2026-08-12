@@ -12,6 +12,7 @@ from .generated import deterministic_json_bytes
 from .hashing import file_sha256
 from .paths import PathBoundaryError, resolve_without_symlinks, resolve_within, safe_relative_path
 from .projection import validate_projection_pack
+from .process_lock import ProcessLockError, exclusive_process_lock, process_lock_identity
 from .schema import SchemaStore
 
 
@@ -342,7 +343,7 @@ def _commit_transaction(target: Path, journal: dict[str, Any]) -> None:
     _cleanup_transaction(target, journal)
 
 
-def install_projection(
+def _install_projection_unlocked(
     repository_root: Path,
     pack_root: Path,
     target_root: Path,
@@ -454,7 +455,24 @@ def install_projection(
     return result
 
 
-def uninstall_projection(
+def install_projection(
+    repository_root: Path,
+    pack_root: Path,
+    target_root: Path,
+    *,
+    apply: bool = False,
+) -> dict[str, Any]:
+    if not apply:
+        return _install_projection_unlocked(repository_root, pack_root, target_root, apply=False)
+    identity = process_lock_identity("projection-install", Path(target_root))
+    try:
+        with exclusive_process_lock(identity):
+            return _install_projection_unlocked(repository_root, pack_root, target_root, apply=True)
+    except ProcessLockError as exc:
+        raise ProjectionInstallError(f"concurrent projection install rejected: {exc}") from exc
+
+
+def _uninstall_projection_unlocked(
     repository_root: Path,
     target_root: Path,
     *,
@@ -523,3 +541,19 @@ def uninstall_projection(
         if parent.is_dir() and not any(parent.iterdir()):
             parent.rmdir()
     return result
+
+
+def uninstall_projection(
+    repository_root: Path,
+    target_root: Path,
+    *,
+    apply: bool = False,
+) -> dict[str, Any]:
+    if not apply:
+        return _uninstall_projection_unlocked(repository_root, target_root, apply=False)
+    identity = process_lock_identity("projection-install", Path(target_root))
+    try:
+        with exclusive_process_lock(identity):
+            return _uninstall_projection_unlocked(repository_root, target_root, apply=True)
+    except ProcessLockError as exc:
+        raise ProjectionInstallError(f"concurrent projection uninstall rejected: {exc}") from exc

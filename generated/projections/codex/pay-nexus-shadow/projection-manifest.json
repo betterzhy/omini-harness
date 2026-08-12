@@ -8,7 +8,7 @@
     "kind": "GIT",
     "tree": "e5c5479192504e303461ea9e5e0784efd1361a8c"
   },
-  "capabilityLockFingerprint": "sha256:2e412ecccc93e4b9e310088464a76c9a155b3b55d4c085aacbfca2a80e4e45c0",
+  "capabilityLockFingerprint": "sha256:1b5b5116bbd7b98be65f207b0f849cca0cf16cd541e80bb3f6a93f405d4f6bdb",
   "generatedFiles": [
     {
       "path": "discussion-contract.md",
@@ -20,11 +20,11 @@
     },
     {
       "path": "resolved-context.json",
-      "sha256": "db78f30e7d347a2c688a3bbdddd1f1775e9b122a76d3d38b84197f9718e64c5f"
+      "sha256": "cc2e041639ca61caaedebf8f983a0b861fbde0fbd26507c28e99b951428dc412"
     },
     {
       "path": "resolved-task-context.md",
-      "sha256": "904babe657dd12180447cb53659d6ca3c77c90ddd727ad3f5c799d8244c40258"
+      "sha256": "09976090ab84e6b9c0510ad2ca501085a7614b6c0e46573817d6fc28d73bc6cc"
     },
     {
       "path": "skills/architecture-review/SKILL.md",
@@ -74,5 +74,5 @@
       "version": "1.0.0"
     }
   ],
-  "sourceResolutionId": "resolution:f075d3f4fe1d6a04a0d5e740"
+  "sourceResolutionId": "resolution:08ed09587386a3af9632a788"
 }

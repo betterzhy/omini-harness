@@ -15,6 +15,7 @@ from .generated import deterministic_json_bytes, write_generated_json
 from .hashing import file_sha256, sha256_bytes
 from .loader import load_capabilities
 from .paths import PathBoundaryError, resolve_without_symlinks, safe_relative_path
+from .process_lock import ProcessLockError, exclusive_process_lock, process_lock_identity
 from .project import load_project_state, verify_capability_lock
 from .schema import SchemaStore
 
@@ -381,7 +382,7 @@ def _render_skill(
     )
 
 
-def build_projection_pack(
+def _build_projection_pack_unlocked(
     repository_root: Path,
     project_root: Path,
     resolved_context: dict[str, Any],
@@ -541,6 +542,30 @@ def build_projection_pack(
         elif pack.exists():
             _remove_projection_directory(pack, label="projection temporary")
         raise
+
+
+def build_projection_pack(
+    repository_root: Path,
+    project_root: Path,
+    resolved_context: dict[str, Any],
+    *,
+    runtime: str,
+    authority_snapshot: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    project_id = resolved_context.get("project", "invalid-project")
+    target = Path(repository_root).resolve() / "generated" / "projections" / runtime.lower() / str(project_id)
+    identity = process_lock_identity("projection-build", target)
+    try:
+        with exclusive_process_lock(identity):
+            return _build_projection_pack_unlocked(
+                repository_root,
+                project_root,
+                resolved_context,
+                runtime=runtime,
+                authority_snapshot=authority_snapshot,
+            )
+    except ProcessLockError as exc:
+        raise ProjectionError(f"concurrent projection build rejected: {exc}") from exc
 
 
 def validate_projection_pack(

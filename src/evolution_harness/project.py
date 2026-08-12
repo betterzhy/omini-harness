@@ -67,24 +67,31 @@ def build_capability_lock(repository_root: Path, project_root: Path, *, write: b
     reasons = bound_capability_reasons(root, project)
     catalog = build_design_active_catalog(root, write=False)
     by_id = {entry["id"]: entry for entry in catalog["entries"]}
-    capabilities: list[dict[str, Any]] = []
+    capability_sources: list[dict[str, str]] = []
     for capability_id in sorted(reasons):
         entry = by_id.get(capability_id)
         if entry is None:
             raise ValueError(f"bound capability is not active/valid/current: {capability_id}")
-        capabilities.append(
+        capability_sources.append(
             {
                 "capabilityId": capability_id,
                 "resolvedVersion": entry["version"],
                 "contentHash": entry["contentHash"],
-                "sourceHarnessRevision": catalog["sourceRevision"],
-                "resolvedBecause": reasons[capability_id],
             }
         )
+    source_revision = capability_lock_source_revision(capability_sources)
+    capabilities = [
+        {
+            **source,
+            "sourceHarnessRevision": source_revision,
+            "resolvedBecause": reasons[source["capabilityId"]],
+        }
+        for source in capability_sources
+    ]
     result: dict[str, Any] = {
         "schemaVersion": "capability-lock/v1",
         "project": load_project_state(root, project)["project"],
-        "sourceHarnessRevision": catalog["sourceRevision"],
+        "sourceHarnessRevision": source_revision,
         "disabledCapabilities": sorted(binding["disabledCapabilities"]),
         "capabilities": capabilities,
     }
@@ -100,6 +107,21 @@ def build_capability_lock(repository_root: Path, project_root: Path, *, write: b
 def capability_lock_fingerprint(lock: dict[str, Any]) -> str:
     payload = {key: value for key, value in lock.items() if key != "lockFingerprint"}
     return "sha256:" + sha256_bytes(canonical_json_bytes(payload))
+
+
+def capability_lock_source_revision(capabilities: list[dict[str, Any]]) -> str:
+    sources = sorted(
+        [
+            {
+                "capabilityId": item["capabilityId"],
+                "resolvedVersion": item["resolvedVersion"],
+                "contentHash": item["contentHash"],
+            }
+            for item in capabilities
+        ],
+        key=lambda item: item["capabilityId"],
+    )
+    return "content-sha256:" + sha256_bytes(canonical_json_bytes(sources))
 
 
 def load_capability_lock(repository_root: Path, project_root: Path) -> dict[str, Any]:
@@ -134,6 +156,9 @@ def verify_capability_lock(
         raise ValueError("capability lock contains duplicate capability ids")
     if set(locked_items) != set(reasons):
         raise ValueError("capability lock binding capability set drift")
+    expected_source_revision = capability_lock_source_revision(lock["capabilities"])
+    if lock["sourceHarnessRevision"] != expected_source_revision:
+        raise ValueError("capability lock source revision is not reproducible from exact sources")
 
     registry = build_design_registry(root, write=False)
     by_version = {(entry["id"], entry["version"]): entry for entry in registry["entries"]}

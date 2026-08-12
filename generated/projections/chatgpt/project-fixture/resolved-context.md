@@ -1,6 +1,6 @@
 # Resolved Design Context
 
-- Resolution: `resolution:1343d4d07b701171928cfd18`
+- Resolution: `resolution:5a7ad7806edaa04760ee1164`
 - Project: `project-fixture`
 - Topic: `resolver-mvp`
 - Stage: `BOUNDARY_CLOSURE`

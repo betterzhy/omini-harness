@@ -1,5 +1,5 @@
 {
-  "capabilityLockFingerprint": "sha256:fff6d30086b4cf36d5653d5df0e489ed01ce268e0443670bb5c2dee2bbf40736",
+  "capabilityLockFingerprint": "sha256:6f51c9639f728a55f8a1c3f9bd3ed680d7c8c711e3bb41a4d0713e2a63b80153",
   "closedTopics": [
     {
       "baselineReference": "baseline://project-fixture/authority-model/1.0",
@@ -136,7 +136,7 @@
     "Did project truth override generic guidance where applicable?",
     "Did I avoid mutating closure or promotion state?"
   ],
-  "resolutionId": "resolution:98bed798cf4855fd263d8d91",
+  "resolutionId": "resolution:e78b5d9378825d47a7bfb035",
   "runtime": "CODEX",
   "schemaVersion": "resolved-design-context/v1",
   "selectedCapabilities": [

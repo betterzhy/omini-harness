@@ -28,6 +28,21 @@ def _pack(tmp_path: Path) -> tuple[Path, Path, Path]:
     return root, project, root / "generated/projections/codex/project-fixture"
 
 
+def _materialize_fixture_projection(root: Path, pack: Path, target: Path) -> Path:
+    from evolution_harness import install
+    from evolution_harness.generated import deterministic_json_bytes
+
+    projection, inputs = install._projection_inputs(root, pack, target)
+    for item in inputs:
+        destination = target / item["path"]
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(item["_sourceBytes"])
+    manifest = target / install.INSTALL_MANIFEST_PATH
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    manifest.write_bytes(deterministic_json_bytes(install._persistent_manifest(projection, inputs)))
+    return manifest
+
+
 def test_install_is_dry_run_by_default_and_never_touches_agents_md(tmp_path: Path):
     from evolution_harness.install import install_projection
 
@@ -46,9 +61,8 @@ def test_install_is_dry_run_by_default_and_never_touches_agents_md(tmp_path: Pat
     assert agents.read_text(encoding="utf-8") == "# Project-owned guidance\n"
 
 
-def test_install_apply_writes_only_manifested_skills_and_uninstall_is_dry_run_only(tmp_path: Path):
+def test_install_and_uninstall_apply_are_disabled_without_target_writes(tmp_path: Path):
     from evolution_harness.install import ProjectionInstallError, install_projection, uninstall_projection
-    from evolution_harness.process_lock import process_lock_identity, recovery_attestation_phase
 
     root, _, pack = _pack(tmp_path)
     target = tmp_path / "target"
@@ -56,22 +70,12 @@ def test_install_apply_writes_only_manifested_skills_and_uninstall_is_dry_run_on
     agents = target / "AGENTS.md"
     agents.write_text("# Keep me\n", encoding="utf-8")
 
-    result = install_projection(root, pack, target, apply=True)
-    assert result["mode"] == "APPLY"
-    managed = target / ".agent-evolution/projection-install-manifest.json"
-    manifest = json.loads(managed.read_text(encoding="utf-8"))
-    installed = [target / item["path"] for item in manifest["installedFiles"]]
-    assert installed and all(path.exists() for path in installed)
-    assert all(path.as_posix().endswith("/SKILL.md") for path in installed)
-    assert agents.read_text(encoding="utf-8") == "# Keep me\n"
-    assert recovery_attestation_phase(process_lock_identity("projection-install", target)) is None
-
-    plan = uninstall_projection(root, target)
-    assert plan["mode"] == "DRY_RUN" and all(path.exists() for path in installed)
+    with pytest.raises(ProjectionInstallError, match="automatic projection install is disabled"):
+        install_projection(root, pack, target, apply=True)
     with pytest.raises(ProjectionInstallError, match="automatic projection uninstall is disabled"):
         uninstall_projection(root, target, apply=True)
-    assert managed.exists()
-    assert all(path.exists() for path in installed)
+    assert not (target / ".agents").exists()
+    assert not (target / ".agent-evolution").exists()
     assert agents.read_text(encoding="utf-8") == "# Keep me\n"
 
 
@@ -87,7 +91,7 @@ def test_install_rejects_project_owned_skill_collision(tmp_path: Path):
     plan = install_projection(root, pack, target)
     assert plan["gate"] == "NO_GO"
     assert plan["collisions"][0]["reason"] == "unmanaged-target-exists"
-    with pytest.raises(ProjectionInstallError, match="skill collision"):
+    with pytest.raises(ProjectionInstallError, match="automatic projection install is disabled"):
         install_projection(root, pack, target, apply=True)
     assert existing.read_text(encoding="utf-8") == "project-owned\n"
 
@@ -98,7 +102,7 @@ def test_uninstall_refuses_modified_managed_skill(tmp_path: Path):
     root, _, pack = _pack(tmp_path)
     target = tmp_path / "target"
     target.mkdir()
-    install_projection(root, pack, target, apply=True)
+    _materialize_fixture_projection(root, pack, target)
     skill = target / ".agents/skills/architecture-review/SKILL.md"
     skill.write_text(skill.read_text(encoding="utf-8") + "manual edit\n", encoding="utf-8")
 
@@ -179,7 +183,7 @@ def test_uninstall_rejects_managed_skill_replaced_by_in_root_symlink(tmp_path: P
     root, _, pack = _pack(tmp_path)
     target = tmp_path / "target"
     target.mkdir()
-    install_projection(root, pack, target, apply=True)
+    _materialize_fixture_projection(root, pack, target)
     skill = target / ".agents/skills/architecture-review/SKILL.md"
     unrelated = target / "unrelated.txt"
     unrelated.write_bytes(skill.read_bytes())
@@ -191,197 +195,7 @@ def test_uninstall_rejects_managed_skill_replaced_by_in_root_symlink(tmp_path: P
     assert unrelated.exists()
 
 
-def test_install_keyboard_interrupt_rolls_back_using_persistent_journal(tmp_path: Path, monkeypatch):
-    from evolution_harness import install
-    from evolution_harness.anchored_fs import AnchoredRoot
-
-    root, _, pack = _pack(tmp_path)
-    target = tmp_path / "target"
-    target.mkdir()
-    original_write = AnchoredRoot.write_bytes_if_absent
-    interrupted = False
-
-    def interrupt_manifest(self, relative: str, data: bytes, **kwargs):
-        nonlocal interrupted
-        if self.root == target and relative == install.INSTALL_MANIFEST_PATH and not interrupted:
-            interrupted = True
-            raise KeyboardInterrupt()
-        return original_write(self, relative, data, **kwargs)
-
-    monkeypatch.setattr(AnchoredRoot, "write_bytes_if_absent", interrupt_manifest)
-    with pytest.raises(install.ProjectionInstallError, match="manual recovery"):
-        install.install_projection(root, pack, target, apply=True)
-
-    assert (target / ".agents/skills/architecture-review/SKILL.md").exists()
-    assert not (target / ".agent-evolution/projection-install-manifest.json").exists()
-    assert (target / ".agent-evolution/projection-install-transaction.json").exists()
-
-
-@pytest.mark.parametrize("inject_before_begin", [True, False])
-def test_install_create_never_replaces_file_racing_with_transaction_begin(
-    tmp_path: Path, monkeypatch, inject_before_begin: bool
-):
-    from evolution_harness import install
-
-    root, _, pack = _pack(tmp_path)
-    target = tmp_path / "target"
-    target.mkdir()
-    destination = target / ".agents/skills/architecture-review/SKILL.md"
-    project_owned_bytes = b"project-owned during apply\n"
-    original_begin = install._begin_transaction
-
-    def inject_project_file(*args, **kwargs):
-        if inject_before_begin:
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            destination.write_bytes(project_owned_bytes)
-        journal = original_begin(*args, **kwargs)
-        if not inject_before_begin:
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            destination.write_bytes(project_owned_bytes)
-        return journal
-
-    monkeypatch.setattr(install, "_begin_transaction", inject_project_file)
-
-    with pytest.raises(install.ProjectionInstallError, match="already exists|manual recovery"):
-        install.install_projection(root, pack, target, apply=True)
-
-    assert destination.read_bytes() == project_owned_bytes
-
-
-def test_install_reentry_recovers_prepared_journal_after_process_loss(tmp_path: Path):
-    from evolution_harness import install
-    from evolution_harness.generated import deterministic_json_bytes
-    from evolution_harness.hashing import sha256_bytes
-
-    root, _, pack = _pack(tmp_path)
-    target = tmp_path / "target"
-    target.mkdir()
-    projection, inputs = install._projection_inputs(root, pack, target)
-    destination = target / inputs[0]["path"]
-    manifest_path = target / install.INSTALL_MANIFEST_PATH
-    persistent = install._persistent_manifest(projection, inputs)
-    install._begin_transaction(
-        target,
-        "INSTALL",
-        [destination],
-        manifest_path,
-        after_sha256_by_path={inputs[0]["path"]: inputs[0]["sourceSha256"]},
-        manifest_after_sha256=sha256_bytes(deterministic_json_bytes(persistent)),
-    )
-    with pytest.raises(install.ProjectionInstallError, match="explicit --apply"):
-        install.install_projection(root, pack, target)
-    assert not destination.exists()
-
-    result = install.install_projection(root, pack, target, apply=True)
-
-    assert result["mode"] == "APPLY"
-    assert destination.exists()
-    assert manifest_path.exists()
-    assert not (target / install.INSTALL_TRANSACTION_PATH).exists()
-
-
-def test_install_recovery_keeps_transaction_after_image_for_manual_recovery(tmp_path: Path):
-    from evolution_harness import install
-    from evolution_harness.anchored_fs import AnchoredRoot
-    from evolution_harness.generated import deterministic_json_bytes
-    from evolution_harness.hashing import sha256_bytes
-
-    root, _, pack = _pack(tmp_path)
-    target = tmp_path / "target"
-    target.mkdir()
-    projection, inputs = install._projection_inputs(root, pack, target)
-    destination = target / inputs[0]["path"]
-    manifest_path = target / install.INSTALL_MANIFEST_PATH
-    persistent = install._persistent_manifest(projection, inputs)
-    install._begin_transaction(
-        target,
-        "INSTALL",
-        [destination],
-        manifest_path,
-        after_sha256_by_path={inputs[0]["path"]: inputs[0]["sourceSha256"]},
-        manifest_after_sha256=sha256_bytes(deterministic_json_bytes(persistent)),
-    )
-    with AnchoredRoot(target) as filesystem:
-        filesystem.write_bytes(inputs[0]["path"], inputs[0]["_sourceBytes"])
-
-    with pytest.raises(install.ProjectionInstallError, match="manual recovery"):
-        install.install_projection(root, pack, target, apply=True)
-
-    assert destination.read_bytes() == inputs[0]["_sourceBytes"]
-    assert (target / install.INSTALL_TRANSACTION_PATH).exists()
-
-
-def test_install_recovery_refuses_file_created_after_prepared_transaction(tmp_path: Path):
-    from evolution_harness import install
-    from evolution_harness.generated import deterministic_json_bytes
-    from evolution_harness.hashing import sha256_bytes
-
-    root, _, pack = _pack(tmp_path)
-    target = tmp_path / "target"
-    target.mkdir()
-    projection, inputs = install._projection_inputs(root, pack, target)
-    destination = target / inputs[0]["path"]
-    manifest_path = target / install.INSTALL_MANIFEST_PATH
-    persistent = install._persistent_manifest(projection, inputs)
-    install._begin_transaction(
-        target,
-        "INSTALL",
-        [destination],
-        manifest_path,
-        after_sha256_by_path={inputs[0]["path"]: inputs[0]["sourceSha256"]},
-        manifest_after_sha256=sha256_bytes(deterministic_json_bytes(persistent)),
-    )
-
-    project_owned_bytes = b"project-owned after process loss\n"
-    destination.parent.mkdir(parents=True)
-    destination.write_bytes(project_owned_bytes)
-
-    with pytest.raises(install.ProjectionInstallError, match="manual recovery"):
-        install.install_projection(root, pack, target, apply=True)
-
-    assert destination.read_bytes() == project_owned_bytes
-    assert not manifest_path.exists()
-    assert (target / install.INSTALL_TRANSACTION_PATH).exists()
-
-
-def test_install_recovery_does_not_remove_file_created_after_before_image_check(tmp_path: Path, monkeypatch):
-    from evolution_harness import install
-    from evolution_harness.generated import deterministic_json_bytes
-    from evolution_harness.hashing import sha256_bytes
-
-    root, _, pack = _pack(tmp_path)
-    target = tmp_path / "target"
-    target.mkdir()
-    projection, inputs = install._projection_inputs(root, pack, target)
-    destination = target / inputs[0]["path"]
-    manifest_path = target / install.INSTALL_MANIFEST_PATH
-    persistent = install._persistent_manifest(projection, inputs)
-    install._begin_transaction(
-        target,
-        "INSTALL",
-        [destination],
-        manifest_path,
-        after_sha256_by_path={inputs[0]["path"]: inputs[0]["sourceSha256"]},
-        manifest_after_sha256=sha256_bytes(deterministic_json_bytes(persistent)),
-    )
-    project_owned_bytes = b"project-owned during recovery\n"
-    original_cleanup = install._cleanup_transaction
-
-    def insert_project_file_before_metadata_cleanup(*args, **kwargs):
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        destination.write_bytes(project_owned_bytes)
-        return original_cleanup(*args, **kwargs)
-
-    monkeypatch.setattr(install, "_cleanup_transaction", insert_project_file_before_metadata_cleanup)
-
-    with pytest.raises(install.ProjectionInstallError, match="skill collision"):
-        install.install_projection(root, pack, target, apply=True)
-
-    assert destination.read_bytes() == project_owned_bytes
-    assert not (target / install.INSTALL_TRANSACTION_PATH).exists()
-
-
-def test_install_recovery_rejects_forged_backup_directory_without_deleting_it(tmp_path: Path):
+def test_install_legacy_transaction_marker_requires_manual_recovery_without_mutation(tmp_path: Path):
     from evolution_harness import install
 
     root, _, pack = _pack(tmp_path)
@@ -391,28 +205,18 @@ def test_install_recovery_rejects_forged_backup_directory_without_deleting_it(tm
     victim.mkdir()
     sentinel = victim / "sentinel.txt"
     sentinel.write_text("preserve\n", encoding="utf-8")
-    journal = {
-        "schemaVersion": "projection-install-transaction/v1",
-        "operation": "INSTALL",
-        "phase": "COMMITTED",
-        "backupDirectory": "src",
-        "files": [],
-        "manifest": {
-            "existed": False,
-            "backupPath": "src/install-manifest",
-        },
-    }
     journal_path = target / install.INSTALL_TRANSACTION_PATH
     journal_path.parent.mkdir(parents=True)
-    journal_path.write_text(json.dumps(journal), encoding="utf-8")
+    journal_path.write_text("legacy marker\n", encoding="utf-8")
 
-    with pytest.raises(install.ProjectionInstallError, match="trusted recovery attestation"):
-        install.install_projection(root, pack, target, apply=True)
+    with pytest.raises(install.ProjectionInstallError, match="manual recovery"):
+        install.install_projection(root, pack, target)
 
     assert sentinel.read_text(encoding="utf-8") == "preserve\n"
+    assert journal_path.read_text(encoding="utf-8") == "legacy marker\n"
 
 
-def test_install_and_uninstall_apply_reject_second_writer_for_same_target(tmp_path: Path):
+def test_install_and_uninstall_planners_reject_second_writer_for_same_target(tmp_path: Path):
     from evolution_harness import install
     from evolution_harness.process_lock import exclusive_process_lock, process_lock_identity
 
@@ -424,15 +228,15 @@ def test_install_and_uninstall_apply_reject_second_writer_for_same_target(tmp_pa
     assert install.install_projection(root, pack, target)["mode"] == "DRY_RUN"
     with exclusive_process_lock(identity):
         with pytest.raises(install.ProjectionInstallError, match="concurrent projection install"):
-            install.install_projection(root, pack, target, apply=True)
-    assert not (target / ".agents").exists()
-
-    install.install_projection(root, pack, target, apply=True)
-    managed = target / ".agents/skills/architecture-review/SKILL.md"
-    with exclusive_process_lock(identity):
+            install.install_projection(root, pack, target)
         with pytest.raises(install.ProjectionInstallError, match="concurrent projection uninstall rejected"):
-            install.uninstall_projection(root, target, apply=True)
-    assert managed.exists()
+            install.uninstall_projection(root, target)
+    assert not (target / ".agents").exists()
+    with pytest.raises(install.ProjectionInstallError, match="automatic projection install is disabled"):
+        install.install_projection(root, pack, target, apply=True)
+    with pytest.raises(install.ProjectionInstallError, match="automatic projection uninstall is disabled"):
+        install.uninstall_projection(root, target, apply=True)
+    assert not (target / ".agents").exists()
 
 
 def test_install_apply_shares_projection_pack_lock_with_builder(tmp_path: Path):
@@ -446,109 +250,12 @@ def test_install_apply_shares_projection_pack_lock_with_builder(tmp_path: Path):
 
     with exclusive_process_lock(pack_identity):
         with pytest.raises(install.ProjectionInstallError, match="projection pack.*locked|concurrent"):
-            install.install_projection(root, pack, target, apply=True)
+            install.install_projection(root, pack, target)
 
     assert not (target / ".agents").exists()
 
 
-def test_install_rejects_unattested_recovery_journal_without_mutating_target(tmp_path: Path):
-    from evolution_harness import install
-
-    root, _, pack = _pack(tmp_path)
-    target = tmp_path / "target"
-    target.mkdir()
-    token = "b" * 32
-    backup_directory = target / install.INSTALL_BACKUP_ROOT / token
-    backup_directory.mkdir(parents=True)
-    (backup_directory / "file-0").write_text("untrusted recovery bytes\n", encoding="utf-8")
-    journal = {
-        "schemaVersion": "projection-install-transaction/v1",
-        "operation": "INSTALL",
-        "phase": "PREPARED",
-        "backupDirectory": f"{install.INSTALL_BACKUP_ROOT}/{token}",
-        "files": [
-            {
-                "path": ".agents/skills/architecture-review/SKILL.md",
-                "existed": True,
-                "backupPath": f"{install.INSTALL_BACKUP_ROOT}/{token}/file-0",
-            }
-        ],
-        "manifest": {
-            "existed": False,
-            "backupPath": f"{install.INSTALL_BACKUP_ROOT}/{token}/install-manifest",
-        },
-    }
-    journal_path = target / install.INSTALL_TRANSACTION_PATH
-    journal_path.parent.mkdir(parents=True, exist_ok=True)
-    journal_path.write_text(json.dumps(journal), encoding="utf-8")
-    destination = target / ".agents/skills/architecture-review/SKILL.md"
-
-    with pytest.raises(install.ProjectionInstallError, match="attestation|trusted recovery"):
-        install.install_projection(root, pack, target, apply=True)
-
-    assert not destination.exists()
-
-
-def test_install_recovery_rejects_tampered_attested_backup(tmp_path: Path):
-    from evolution_harness import install
-    from evolution_harness.anchored_fs import AnchoredRoot
-
-    root, _, pack = _pack(tmp_path)
-    target = tmp_path / "target"
-    target.mkdir()
-    install.install_projection(root, pack, target, apply=True)
-    destination = target / ".agents/skills/architecture-review/SKILL.md"
-    manifest_path = target / install.INSTALL_MANIFEST_PATH
-    with AnchoredRoot(target) as filesystem:
-        journal = install._begin_transaction(
-            target,
-            "UNINSTALL",
-            [destination],
-            manifest_path,
-            filesystem,
-            after_sha256_by_path={destination.relative_to(target).as_posix(): None},
-            manifest_after_sha256=None,
-        )
-        filesystem.write_bytes(destination.relative_to(target).as_posix(), b"partial operation bytes\n")
-        filesystem.write_bytes(journal["files"][0]["backupPath"], b"tampered backup bytes\n")
-
-    with pytest.raises(install.ProjectionInstallError, match="backup hash mismatch"):
-        install.install_projection(root, pack, target, apply=True)
-
-    assert destination.read_bytes() == b"partial operation bytes\n"
-
-
-def test_install_recovery_never_deletes_unexpected_backup_entry(tmp_path: Path):
-    from evolution_harness import install
-    from evolution_harness.generated import deterministic_json_bytes
-    from evolution_harness.hashing import sha256_bytes
-
-    root, _, pack = _pack(tmp_path)
-    target = tmp_path / "target"
-    target.mkdir()
-    projection, inputs = install._projection_inputs(root, pack, target)
-    destination = target / inputs[0]["path"]
-    manifest_path = target / install.INSTALL_MANIFEST_PATH
-    persistent = install._persistent_manifest(projection, inputs)
-    journal = install._begin_transaction(
-        target,
-        "INSTALL",
-        [destination],
-        manifest_path,
-        after_sha256_by_path={inputs[0]["path"]: inputs[0]["sourceSha256"]},
-        manifest_after_sha256=sha256_bytes(deterministic_json_bytes(persistent)),
-    )
-    unexpected = target / journal["backupDirectory"] / "project-owned.txt"
-    unexpected.write_bytes(b"preserve unexpected backup bytes\n")
-
-    with pytest.raises(install.ProjectionInstallError, match="unexpected entries"):
-        install.install_projection(root, pack, target, apply=True)
-
-    assert unexpected.read_bytes() == b"preserve unexpected backup bytes\n"
-    assert (target / install.INSTALL_TRANSACTION_PATH).exists()
-
-
-def test_install_rejects_prepared_attestation_without_journal(tmp_path: Path):
+def test_install_legacy_recovery_attestation_requires_manual_recovery_without_mutation(tmp_path: Path):
     from evolution_harness import install
     from evolution_harness.process_lock import (
         process_lock_identity,
@@ -562,39 +269,9 @@ def test_install_rejects_prepared_attestation_without_journal(tmp_path: Path):
     identity = process_lock_identity("projection-install", target)
     write_recovery_attestation(identity, b"missing journal bytes\n", phase="PREPARED")
     try:
-        with pytest.raises(install.ProjectionInstallError, match="PREPARED recovery attestation has no journal"):
-            install.install_projection(root, pack, target, apply=True)
+        with pytest.raises(install.ProjectionInstallError, match="manual recovery"):
+            install.install_projection(root, pack, target)
     finally:
         remove_recovery_attestation(identity, missing_ok=True)
 
     assert not (target / ".agents").exists()
-
-
-def test_install_apply_cannot_follow_parent_symlink_inserted_after_path_check(tmp_path: Path, monkeypatch):
-    from evolution_harness import install
-
-    root, _, pack = _pack(tmp_path)
-    target = tmp_path / "target"
-    target.mkdir()
-    outside = tmp_path / "outside"
-    outside.mkdir()
-    original_resolve = install.resolve_without_symlinks
-    checked = 0
-
-    def insert_symlink_after_check(root_path, relative, **kwargs):
-        nonlocal checked
-        result = original_resolve(root_path, relative, **kwargs)
-        if relative == ".agents/skills/architecture-review/SKILL.md" and kwargs.get("label") == "skill install target":
-            checked += 1
-            if checked == 3:
-                agents = target / ".agents"
-                assert not agents.exists()
-                agents.symlink_to(outside, target_is_directory=True)
-        return result
-
-    monkeypatch.setattr(install, "resolve_without_symlinks", insert_symlink_after_check)
-
-    with pytest.raises(install.ProjectionInstallError, match="symlink|anchored"):
-        install.install_projection(root, pack, target, apply=True)
-
-    assert not (outside / "skills/architecture-review/SKILL.md").exists()

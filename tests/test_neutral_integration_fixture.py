@@ -118,11 +118,12 @@ def test_neutral_fixture_projection_install_round_trip_is_target_scoped(tmp_path
     shutil.copytree(source, target)
     (target / "AGENTS.md").write_text("# Project owned\n", encoding="utf-8")
     assert install_projection(root, pack, target)["mode"] == "DRY_RUN"
-    install_projection(root, pack, target, apply=True)
-    assert (target / ".agents/skills/architecture-review/SKILL.md").exists()
+    with pytest.raises(ProjectionInstallError, match="automatic projection install is disabled"):
+        install_projection(root, pack, target, apply=True)
+    assert not (target / ".agents/skills/architecture-review/SKILL.md").exists()
     with pytest.raises(ProjectionInstallError, match="automatic projection uninstall is disabled"):
         uninstall_projection(root, target, apply=True)
-    assert (target / ".agents/skills/architecture-review/SKILL.md").exists()
+    assert not (target / ".agents/skills/architecture-review/SKILL.md").exists()
     assert (target / "AGENTS.md").read_text(encoding="utf-8") == "# Project owned\n"
     assert source_before == _tree_bytes(source)
 

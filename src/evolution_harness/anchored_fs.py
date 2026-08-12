@@ -98,20 +98,6 @@ class AnchoredRoot:
         result = self.lstat(relative)
         return result is not None and stat.S_ISDIR(result.st_mode)
 
-    def directory_entries(self, relative: str) -> set[str]:
-        parts = self._parts(relative)
-        current = os.dup(self._descriptor)
-        try:
-            for part in parts:
-                following = os.open(part, _DIRECTORY_FLAGS, dir_fd=current)
-                os.close(current)
-                current = following
-            return set(os.listdir(current))
-        except OSError as exc:
-            raise AnchoredPathError(f"anchored directory is unsafe or missing: {relative}") from exc
-        finally:
-            os.close(current)
-
     def mkdirs(self, relative: str, *, mode: int = 0o755) -> None:
         parts = self._parts(relative)
         current = os.dup(self._descriptor)
@@ -181,41 +167,6 @@ class AnchoredRoot:
                 os.fsync(parent)
             except OSError as exc:
                 raise AnchoredPathError(f"anchored atomic write failed: {relative}") from exc
-            finally:
-                if descriptor >= 0:
-                    os.close(descriptor)
-                try:
-                    os.unlink(temporary, dir_fd=parent)
-                except FileNotFoundError:
-                    pass
-
-    def write_bytes_if_absent(self, relative: str, data: bytes, *, create_parents: bool = True) -> None:
-        """Atomically publish complete bytes without replacing an existing path."""
-        with self._parent(relative, create=create_parents) as (parent, name):
-            temporary = f".{name}.tmp-{uuid.uuid4().hex}"
-            flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | _NOFOLLOW
-            descriptor = -1
-            try:
-                descriptor = os.open(temporary, flags, 0o600, dir_fd=parent)
-                view = memoryview(data)
-                while view:
-                    written = os.write(descriptor, view)
-                    view = view[written:]
-                os.fsync(descriptor)
-                os.close(descriptor)
-                descriptor = -1
-                os.link(
-                    temporary,
-                    name,
-                    src_dir_fd=parent,
-                    dst_dir_fd=parent,
-                    follow_symlinks=False,
-                )
-                os.fsync(parent)
-            except FileExistsError as exc:
-                raise AnchoredPathError(f"anchored destination already exists: {relative}") from exc
-            except OSError as exc:
-                raise AnchoredPathError(f"anchored atomic create failed: {relative}") from exc
             finally:
                 if descriptor >= 0:
                     os.close(descriptor)

@@ -1,6 +1,8 @@
 schemaVersion: project-design-state/v1
 project: pay-nexus-shadow
 currentStage: CALIBRATION
+intentAliases:
+  implementation-readiness-review: architecture-review
 topics:
   - topicId: payment-platform-v1.13-architecture
     status: CLOSED

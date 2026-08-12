@@ -107,6 +107,43 @@ def test_integration_resolution_binds_authority_snapshot(tmp_path: Path):
     assert resolved["project"] == "sample-shadow"
 
 
+def test_integration_intent_alias_selects_locked_capability_and_preserves_request_intent(
+    tmp_path: Path,
+):
+    from evolution_harness.integration import resolve_integration_context
+    from evolution_harness.project import verify_capability_lock
+
+    root, integration, source = _fixture(tmp_path)
+    state_path = integration / "control-plane/.agent-evolution/design-state.yaml"
+    state = yaml.safe_load(state_path.read_text(encoding="utf-8"))
+    state["intentAliases"] = {
+        "implementation-readiness-review": "architecture-review",
+    }
+    state_path.write_text(yaml.safe_dump(state, sort_keys=False), encoding="utf-8")
+    lock_before, _ = verify_capability_lock(root, integration / "control-plane")
+
+    resolved = resolve_integration_context(
+        root,
+        integration,
+        source,
+        intent="implementation-readiness-review",
+        topic="next-development-slice-admission",
+        requested_output="next Slice admission guidance and exact planning constraints",
+        runtime="CODEX",
+    )
+
+    selected = {item["id"]: item for item in resolved["selectedCapabilities"]}
+    lock_after, _ = verify_capability_lock(root, integration / "control-plane")
+    assert resolved["intent"] == "implementation-readiness-review"
+    assert resolved["selectionIntent"] == "architecture-review"
+    assert "skill:agent-design:architecture-review" in selected
+    assert (
+        "intent-alias:implementation-readiness-review->architecture-review"
+        in selected["skill:agent-design:architecture-review"]["selectedBecause"]
+    )
+    assert lock_after["lockFingerprint"] == lock_before["lockFingerprint"]
+
+
 def test_integration_projection_freshness_detects_authority_drift(tmp_path: Path):
     from evolution_harness.integration import build_integration_projection, check_integration_projection
 
@@ -265,3 +302,68 @@ def test_integration_cli_resolves_and_builds_projection_from_generic_paths(tmp_p
         env=environment,
     )
     assert json.loads(projection.stdout)["data"]["authoritySnapshotFingerprint"].startswith("sha256:")
+
+
+def test_integration_install_cli_separates_live_authority_source_from_disposable_target(
+    tmp_path: Path,
+):
+    from evolution_harness.integration import build_integration_projection
+
+    root, integration, source = _fixture(tmp_path)
+    build_integration_projection(
+        root,
+        integration,
+        source,
+        intent="architecture-review",
+        topic="resolver-mvp",
+        requested_output="review findings",
+        runtime="CODEX",
+    )
+    target = tmp_path / "disposable-target"
+    target.mkdir()
+    environment = os.environ.copy()
+    environment["PYTHONPATH"] = str(Path(__file__).parents[1] / "src")
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "evolution_harness.cli",
+            "--repository-root",
+            str(root),
+            "projection",
+            "install",
+            "--pack",
+            str(root / "generated/projections/codex/sample-shadow"),
+            "--source",
+            str(source),
+            "--target",
+            str(target),
+            "--format",
+            "json",
+        ],
+        capture_output=True,
+        text=True,
+        env=environment,
+    )
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["data"]["mode"] == "DRY_RUN"
+    assert payload["data"]["gate"] == "PASS"
+    assert {
+        (item["operation"], item["source"], item["target"])
+        for item in payload["data"]["actions"]
+    } == {
+        (
+            "CREATE",
+            "skills/architecture-review/SKILL.md",
+            ".agents/skills/architecture-review/SKILL.md",
+        ),
+        (
+            "CREATE",
+            "skills/design-closure-assessment/SKILL.md",
+            ".agents/skills/design-closure-assessment/SKILL.md",
+        ),
+    }
+    assert list(target.iterdir()) == []

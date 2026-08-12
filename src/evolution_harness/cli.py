@@ -117,7 +117,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("projection"); s = p.add_subparsers(dest="action", required=True)
     q = s.add_parser("build"); _add_resolution_args(q); q.add_argument("--check", action="store_true"); _add_format(q)
-    q = s.add_parser("install"); q.add_argument("--pack", required=True); q.add_argument("--target", required=True); q.add_argument("--apply", action="store_true"); _add_format(q)
+    q = s.add_parser("install"); q.add_argument("--pack", required=True); q.add_argument("--source"); q.add_argument("--target", required=True); q.add_argument("--apply", action="store_true"); _add_format(q)
     q = s.add_parser("uninstall"); q.add_argument("--target", required=True); q.add_argument("--apply", action="store_true"); _add_format(q)
 
     p = sub.add_parser("integration"); s = p.add_subparsers(dest="action", required=True)
@@ -215,7 +215,13 @@ def main(argv=None) -> int:
                 return _emit({"fresh": check.fresh, "reasons": check.reasons}, fmt=fmt, ok=check.fresh, command=command)
             resolved = _resolve(root, args); return _emit(build_projection_pack(root, Path(args.project), resolved, runtime=args.runtime), fmt=fmt, command=command)
         if args.command == "projection" and args.action == "install":
-            data = install_projection(root, Path(args.pack), Path(args.target), apply=args.apply)
+            data = install_projection(
+                root,
+                Path(args.pack),
+                Path(args.target),
+                source_root=Path(args.source) if args.source else None,
+                apply=args.apply,
+            )
             return _emit(data, fmt=fmt, ok=data["gate"] == "PASS", command=command)
         if args.command == "projection" and args.action == "uninstall":
             data = uninstall_projection(root, Path(args.target), apply=args.apply)

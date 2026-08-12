@@ -8,6 +8,7 @@ The read-only Shadow pilot and the project-local discovery registration are `PAS
 PAY_NEXUS_SHADOW_AUTHORITY_BINDING = PASS
 PAY_NEXUS_SHADOW_EXACT_CAPABILITY_LOCK = PASS
 PAY_NEXUS_SHADOW_RESOLVER_INTEGRATION = PASS
+PAY_NEXUS_SHADOW_NEXT_SLICE_READINESS_RESOLUTION = PASS
 PAY_NEXUS_SHADOW_CODEX_PROJECTION = PASS
 PAY_NEXUS_SHADOW_CLOSED_TOPIC_PROTECTION = PASS
 PAY_NEXUS_SHADOW_PROJECT_AUTHORITY_PRESERVATION = PASS
@@ -18,6 +19,21 @@ PAY_NEXUS_PROJECT_LOCAL_MATERIALIZATION = NOT_EXECUTED_REQUIRES_SEPARATE_AUTHORI
 PAY_NEXUS_PROJECT_LOCAL_FEEDBACK_ENTRY = NOT_EXECUTED_NO_REAL_PILOT_TASK
 PAY_NEXUS_REAL_CODEX_TASK = NOT_EXECUTED
 ```
+
+## Next Slice Consumption Receipt — 2026-08-12
+
+- Required request: `implementation-readiness-review / next-development-slice-admission / CODEX` with output `next Slice admission guidance and exact planning constraints`.
+- Initial result: Authority Snapshot `PASS`, but zero capabilities selected because the Sidecar had no exact intent route; all five locked entries were excluded by `intent-mismatch`.
+- Fix: the Harness-owned integration declares the exact alias `implementation-readiness-review -> architecture-review`. The original request intent remains visible, while `selectionIntent` and `selectedBecause` record the alias.
+- Exact lock: unchanged at `sha256:1b5b5116bbd7b98be65f207b0f849cca0cf16cd541e80bb3f6a93f405d4f6bdb`; the Pay-Nexus registration remains valid without a project write.
+- Fresh resolution: `resolution:7c5b43e825be6a19b23623c5`; four capabilities selected, `closure-requires-authority` excluded, and the project conflict resolves as `PROJECT_TRUTH_WINS`.
+- Admission facts: DEV-S01 is `CLOSED`; Stage 1/3/4/5 authority is `CONSUMED`; Stage 4 review GO is evidence only; Development, Landing and Wave 0 remain `DENY`.
+- Scenarios: `6/6 PASS`, including `pay-nexus-next-slice-readiness-resolution`.
+- Projection: pre-refresh check failed closed with `resolution-context-drift`; the Harness-only Codex pack was rebuilt for the exact request and is now `fresh=true`.
+- First install-plan attempt: rejected by independent review (`NO-GO / P1=1`) because using the live Pay-Nexus root as planner target metadata-probed three paths outside the source allowlist. It made zero writes and did not touch `temp-input/**`.
+- Corrected install planner: `--source` validates against the live allowlisted Pay-Nexus Authority Snapshot while `--target` points to a disposable empty directory; result `PASS / DRY_RUN`, one proposed `CREATE`, no apply, target remained empty.
+- Current Harness Gate: structural validation, registry/catalog freshness, project and integration locks, neutral `2/2` scenarios, Pay-Nexus `6/6` scenarios, engineering doctor and `pytest` all passed; `pytest = 164 passed`.
+- Pay-Nexus HEAD/tree and tracked status remained unchanged. `temp-input/**` was neither read nor hashed.
 
 ## Registered Source Refresh Receipt — 2026-08-12
 
@@ -74,6 +90,7 @@ integrations/pay-nexus-shadow/
 │   ├── closed-architecture-protection.yaml
 │   ├── consumed-stage-does-not-authorize-wave0.yaml
 │   ├── current-authority-denies-execution.yaml
+│   ├── next-slice-readiness-resolution.yaml
 │   ├── review-go-does-not-authorize.yaml
 │   └── stage4-stop-replay.yaml
 └── PILOT_INTEGRATION_REPORT.md
@@ -244,7 +261,8 @@ Command:
 ```bash
 PYTHONPATH=src .venv/bin/python -m evolution_harness.cli --repository-root . \
   projection install --pack generated/projections/codex/pay-nexus-shadow \
-  --target /Users/yuzhuangzhuang/Projects/pay-nexus --format json
+  --source /Users/yuzhuangzhuang/Projects/pay-nexus \
+  --target "$DISPOSABLE_EMPTY_TARGET" --format json
 ```
 
 Result:
@@ -256,7 +274,7 @@ planned create = .agents/skills/architecture-review/SKILL.md
 collisions = []
 ```
 
-The existing project-owned `pay-nexus-implementation-quality-gate` has a distinct identity and path. No install was applied. Generic installer tests separately prove that a same-path unmanaged Skill collision is `NO_GO` and never overwritten.
+No install was applied. The disposable target stayed empty and was removed with `rmdir`. This allowlist-safe plan intentionally does not inspect or claim collision status for the live Pay-Nexus target. Generic installer tests separately prove that a same-path unmanaged Skill collision is `NO_GO` and never overwritten when target inspection is authorized.
 
 Automatic materialization and removal are deliberately disabled. On a disposable empty target, both `projection install --apply` and `projection uninstall --apply` exited `1` before target content access and left the target empty. The dry-run plan is therefore evidence for a proposed write set, not permission or a mechanism to apply it.
 

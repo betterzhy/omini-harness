@@ -260,6 +260,7 @@
         "selectedBecause": [
           "dependency-of:skill:agent-design:architecture-review",
           "explicit-binding",
+          "intent-alias:implementation-readiness-review->architecture-review",
           "intent-match",
           "runtime-match"
         ],
@@ -272,6 +273,7 @@
         "selectedBecause": [
           "dependency-of:skill:agent-design:architecture-review",
           "explicit-binding",
+          "intent-alias:implementation-readiness-review->architecture-review",
           "intent-match",
           "runtime-match"
         ],
@@ -294,6 +296,7 @@
         "kind": "SKILL",
         "selectedBecause": [
           "explicit-binding",
+          "intent-alias:implementation-readiness-review->architecture-review",
           "intent-match",
           "runtime-match",
           "stage-match"
@@ -303,7 +306,7 @@
     ]
   },
   "humanGates": [],
-  "intent": "architecture-review",
+  "intent": "implementation-readiness-review",
   "project": "pay-nexus-shadow",
   "projectAuthorityReferences": [
     "current-formal-status.md",
@@ -313,19 +316,19 @@
     "docs/architecture/engineering-readiness/dev-s01-cpc-query-reference-slice-progress.md"
   ],
   "projectBindingHash": "caa604a50553d850d05fa6303f300406a3643805bf26f33b18c7e65bfa5e205c",
-  "projectStateHash": "bb020b4bee00345b1d4ef362f166be052169ffee4877bac5ab71c123756d0a0a",
+  "projectStateHash": "b723124750fb9beefcbb69fdc8325cc47356b39d5ab2ce78f8edf3e0b4ab2d52",
   "protectedDecisions": [
     "PaymentPlatformV1.13",
     "DEV-S01 Stage 5 local landing authorization is consumed",
     "Wave 0, DDL, database writes, repeat landing, production operations, and push require separate authority"
   ],
   "reopenSignal": null,
-  "requestedOutput": "read-only authority review",
+  "requestedOutput": "next Slice admission guidance and exact planning constraints",
   "requiredSelfReview": [
     "Did project truth override generic guidance where applicable?",
     "Did I avoid mutating closure or promotion state?"
   ],
-  "resolutionId": "resolution:66f9dde4ff1c908994c4ae6b",
+  "resolutionId": "resolution:7c5b43e825be6a19b23623c5",
   "runtime": "CODEX",
   "schemaVersion": "resolved-design-context/v1",
   "selectedCapabilities": [
@@ -336,6 +339,7 @@
       "selectedBecause": [
         "dependency-of:skill:agent-design:architecture-review",
         "explicit-binding",
+        "intent-alias:implementation-readiness-review->architecture-review",
         "intent-match",
         "runtime-match"
       ],
@@ -348,6 +352,7 @@
       "selectedBecause": [
         "dependency-of:skill:agent-design:architecture-review",
         "explicit-binding",
+        "intent-alias:implementation-readiness-review->architecture-review",
         "intent-match",
         "runtime-match"
       ],
@@ -370,6 +375,7 @@
       "kind": "SKILL",
       "selectedBecause": [
         "explicit-binding",
+        "intent-alias:implementation-readiness-review->architecture-review",
         "intent-match",
         "runtime-match",
         "stage-match"
@@ -377,9 +383,10 @@
       "version": "1.0.0"
     }
   ],
+  "selectionIntent": "architecture-review",
   "semanticSelectionCandidates": [],
   "stage": "CALIBRATION",
-  "topic": "harness-shadow-binding",
+  "topic": "next-development-slice-admission",
   "topicGuard": "OPEN_OR_IN_PROGRESS",
   "workflowStage": null
 }

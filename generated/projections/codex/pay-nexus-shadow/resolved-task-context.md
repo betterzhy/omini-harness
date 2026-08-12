@@ -1,10 +1,10 @@
 # Resolved Design Context
 
-- Resolution: `resolution:66f9dde4ff1c908994c4ae6b`
+- Resolution: `resolution:7c5b43e825be6a19b23623c5`
 - Project: `pay-nexus-shadow`
-- Topic: `harness-shadow-binding`
+- Topic: `next-development-slice-admission`
 - Stage: `CALIBRATION`
-- Intent: `architecture-review`
+- Intent: `implementation-readiness-review`
 - Topic Guard: `OPEN_OR_IN_PROGRESS`
 
 ## Selected Capabilities

@@ -88,6 +88,12 @@ def resolve_design_context(
     state_hash = file_sha256(project / ".agent-evolution/design-state.yaml")
     binding_hash = file_sha256(project / ".agent-evolution/capabilities.yaml")
     stage = explicit_stage or state["currentStage"]
+    effective_intent = state.get("intentAliases", {}).get(intent, intent)
+    intent_alias_reason = (
+        f"intent-alias:{intent}->{effective_intent}"
+        if effective_intent != intent
+        else None
+    )
     topic_state = next((item for item in state["topics"] if item["topicId"] == topic), None)
     closed_topics = [
         {
@@ -145,9 +151,15 @@ def resolve_design_context(
             if entry is None:
                 exclude(capability_id, _classify_inactive(capability_id, current_registry, superseded_ids))
                 continue
-            matches, positive, negative = _scope_reasons(entry, intent=intent, stage=stage, runtime=runtime)
+            matches, positive, negative = _scope_reasons(
+                entry,
+                intent=effective_intent,
+                stage=stage,
+                runtime=runtime,
+            )
             if matches:
-                select(capability_id, *bound_reasons, *positive)
+                alias_reasons = [intent_alias_reason] if intent_alias_reason else []
+                select(capability_id, *bound_reasons, *positive, *alias_reasons)
             else:
                 for reason in negative:
                     exclude(capability_id, reason)
@@ -216,6 +228,8 @@ def resolve_design_context(
         "projectStateHash": state_hash,
         "projectBindingHash": binding_hash,
     }
+    if intent_alias_reason:
+        resolution_payload["selectionIntent"] = effective_intent
     if authority_snapshot is not None:
         resolution_payload["authoritySnapshotFingerprint"] = authority_snapshot["snapshotFingerprint"]
     resolution_id = "resolution:" + sha256_bytes(canonical_json_bytes(resolution_payload))[:24]
@@ -244,6 +258,8 @@ def resolve_design_context(
         "semanticSelectionCandidates": [],
         "explain": {"selected": selected, "excluded": excluded},
     }
+    if intent_alias_reason:
+        result["selectionIntent"] = effective_intent
     if authority_snapshot is not None:
         result.update(
             {

@@ -12,7 +12,7 @@
   "generatedFiles": [
     {
       "path": "discussion-contract.md",
-      "sha256": "f386732e3c9a1fed09f78c7122f8ae718909a4e93536a9a424cbd6c14bd4ef64"
+      "sha256": "7ad12276e4612b9bedd6e9261c3de0a3bed0743d3ec94760a82cde860fbe6795"
     },
     {
       "path": "repository-guidance.md",
@@ -20,11 +20,11 @@
     },
     {
       "path": "resolved-context.json",
-      "sha256": "44e1eecbc7ea654d0c96d30c9fee042c7cae8f03aff573af9532d78755ae7960"
+      "sha256": "7778a5737f5703ef4fcf76874e3294a85a98c435c8eb4449ee68cea8eda6822b"
     },
     {
       "path": "resolved-task-context.md",
-      "sha256": "cd67474620aaff068118f91d05ef08f921a2e5dee82575599111a3250477d601"
+      "sha256": "daf399bf8d3f0dce484bdfd37e53bf5b9628b1c0c0d19316dadf354fa5fa6d42"
     },
     {
       "path": "skills/architecture-review/SKILL.md",
@@ -43,7 +43,7 @@
   "omittedReferences": [],
   "project": "pay-nexus-shadow",
   "projectBindingHash": "caa604a50553d850d05fa6303f300406a3643805bf26f33b18c7e65bfa5e205c",
-  "projectStateHash": "bb020b4bee00345b1d4ef362f166be052169ffee4877bac5ab71c123756d0a0a",
+  "projectStateHash": "b723124750fb9beefcbb69fdc8325cc47356b39d5ab2ce78f8edf3e0b4ab2d52",
   "projectionType": "CODEX_REPOSITORY_PACK",
   "projectionVersion": "codex-project-pack/1",
   "runtime": "CODEX",
@@ -74,5 +74,5 @@
       "version": "1.0.0"
     }
   ],
-  "sourceResolutionId": "resolution:66f9dde4ff1c908994c4ae6b"
+  "sourceResolutionId": "resolution:7c5b43e825be6a19b23623c5"
 }

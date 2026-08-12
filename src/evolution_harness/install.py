@@ -141,6 +141,7 @@ def _install_projection_unlocked(
     pack_root: Path,
     target_root: Path,
     *,
+    source_root: Path | None = None,
     apply: bool = False,
 ) -> dict[str, Any]:
     if apply:
@@ -154,6 +155,7 @@ def _install_projection_unlocked(
     target = target_input.resolve()
     if not target.is_dir():
         raise ProjectionInstallError("install target must be an existing directory")
+    source = Path(source_root).resolve() if source_root is not None else target
     try:
         with AnchoredRoot(target) as filesystem:
             recovery_identity = process_lock_identity("projection-install", target)
@@ -164,7 +166,7 @@ def _install_projection_unlocked(
                 raise ProjectionInstallError(
                     "pending projection transaction requires manual recovery; automatic recovery is disabled"
                 )
-            projection, inputs = _projection_inputs(repository, pack_root, target)
+            projection, inputs = _projection_inputs(repository, pack_root, source)
             resolved = projection.pop("_validatedResolvedContext")
             integration_root_value = projection.pop("_validatedIntegrationRoot")
             if integration_root_value is not None:
@@ -173,7 +175,7 @@ def _install_projection_unlocked(
                 freshness = check_integration_projection(
                     repository,
                     Path(integration_root_value),
-                    target,
+                    source,
                     runtime=projection["runtime"],
                     intent=resolved["intent"],
                     topic=resolved["topic"],
@@ -248,13 +250,20 @@ def install_projection(
     pack_root: Path,
     target_root: Path,
     *,
+    source_root: Path | None = None,
     apply: bool = False,
 ) -> dict[str, Any]:
     target_identity = process_lock_identity("projection-install", Path(target_root))
     pack_identity = process_lock_identity("projection-pack", Path(pack_root))
     try:
         with exclusive_process_locks([pack_identity, target_identity]):
-            return _install_projection_unlocked(repository_root, pack_root, target_root, apply=apply)
+            return _install_projection_unlocked(
+                repository_root,
+                pack_root,
+                target_root,
+                source_root=source_root,
+                apply=apply,
+            )
     except ProcessLockError as exc:
         raise ProjectionInstallError(f"concurrent projection install or projection pack access rejected: {exc}") from exc
 

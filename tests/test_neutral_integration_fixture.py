@@ -89,7 +89,7 @@ def test_neutral_fixture_canonical_topic_reopen_cannot_be_hidden_by_closed_sidec
 
 
 def test_neutral_fixture_projection_install_round_trip_is_target_scoped(tmp_path: Path):
-    from evolution_harness.install import install_projection, uninstall_projection
+    from evolution_harness.install import ProjectionInstallError, install_projection, uninstall_projection
     from evolution_harness.integration import build_integration_projection
 
     repository = Path(__file__).parents[1]
@@ -120,8 +120,9 @@ def test_neutral_fixture_projection_install_round_trip_is_target_scoped(tmp_path
     assert install_projection(root, pack, target)["mode"] == "DRY_RUN"
     install_projection(root, pack, target, apply=True)
     assert (target / ".agents/skills/architecture-review/SKILL.md").exists()
-    uninstall_projection(root, target, apply=True)
-    assert not (target / ".agents/skills/architecture-review/SKILL.md").exists()
+    with pytest.raises(ProjectionInstallError, match="automatic projection uninstall is disabled"):
+        uninstall_projection(root, target, apply=True)
+    assert (target / ".agents/skills/architecture-review/SKILL.md").exists()
     assert (target / "AGENTS.md").read_text(encoding="utf-8") == "# Project owned\n"
     assert source_before == _tree_bytes(source)
 

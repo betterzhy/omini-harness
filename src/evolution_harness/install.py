@@ -247,7 +247,17 @@ def _cleanup_transaction(
     if filesystem.exists(backup_directory):
         if not filesystem.is_dir(backup_directory):
             raise ProjectionInstallError("transaction backup path is not a directory")
-        filesystem.remove_tree(backup_directory)
+        expected_backups = {
+            PurePosixPath(item["backupPath"]).name for item in journal["files"] if item["existed"]
+        }
+        if journal["manifest"]["existed"]:
+            expected_backups.add(PurePosixPath(journal["manifest"]["backupPath"]).name)
+        if filesystem.directory_entries(backup_directory) != expected_backups:
+            raise ProjectionInstallError("transaction backup directory contains unexpected entries")
+        for name in expected_backups:
+            filesystem.unlink(f"{backup_directory}/{name}")
+        if not filesystem.rmdir_if_empty(backup_directory):
+            raise ProjectionInstallError("transaction backup directory could not be cleared")
     filesystem.unlink(INSTALL_TRANSACTION_PATH, missing_ok=True)
     filesystem.rmdir_if_empty(INSTALL_BACKUP_ROOT)
     remove_recovery_attestation(identity, missing_ok=True)
@@ -497,7 +507,10 @@ def _install_projection_unlocked(
                     if current_bytes is None or sha256_bytes(current_bytes) != managed["installedSha256"]:
                         collisions.append({"path": item["path"], "reason": "managed-target-drift"})
                         continue
-                    operation = "UNCHANGED" if sha256_bytes(current_bytes) == item["sourceSha256"] else "UPDATE"
+                    if sha256_bytes(current_bytes) != item["sourceSha256"]:
+                        collisions.append({"path": item["path"], "reason": "managed-update-requires-review"})
+                        continue
+                    operation = "UNCHANGED"
                 elif managed is not None:
                     collisions.append({"path": item["path"], "reason": "managed-target-missing"})
                     continue
@@ -527,6 +540,17 @@ def _install_projection_unlocked(
             if collisions:
                 raise ProjectionInstallError("skill collision prevents projection install")
 
+            creates = [item for item in inputs if not filesystem.exists(item["path"])]
+            if not creates:
+                for item in inputs:
+                    if not filesystem.is_file(item["path"]) or sha256_bytes(
+                        filesystem.read_bytes(item["path"])
+                    ) != item["sourceSha256"]:
+                        raise ProjectionInstallError("managed target changed during install planning")
+                return result
+            if current_manifest is not None:
+                raise ProjectionInstallError("creating additional managed skills requires review")
+
             persistent = _persistent_manifest(projection, inputs)
             SchemaStore(repository).validate("core/schemas/projection-install-manifest.schema.json", persistent)
             persistent_bytes = deterministic_json_bytes(persistent)
@@ -545,13 +569,11 @@ def _install_projection_unlocked(
             )
             try:
                 for item in inputs:
+                    if item not in creates:
+                        continue
                     resolve_without_symlinks(target, item["path"], label="skill install target")
-                    if filesystem.is_file(item["path"]):
-                        current_bytes = filesystem.read_bytes(item["path"])
-                        if sha256_bytes(current_bytes) == item["sourceSha256"]:
-                            continue
-                    filesystem.write_bytes(item["path"], item["_sourceBytes"])
-                filesystem.write_bytes(INSTALL_MANIFEST_PATH, persistent_bytes)
+                    filesystem.write_bytes_if_absent(item["path"], item["_sourceBytes"])
+                filesystem.write_bytes_if_absent(INSTALL_MANIFEST_PATH, persistent_bytes)
                 _commit_transaction(target, filesystem, journal)
             except BaseException:
                 _recover_install_transaction_anchored(target, filesystem)
@@ -590,6 +612,10 @@ def _uninstall_projection_unlocked(
     target = target_input.resolve()
     if not target.is_dir():
         raise ProjectionInstallError("uninstall target must be an existing directory")
+    if apply:
+        raise ProjectionInstallError(
+            "automatic projection uninstall is disabled; use the dry-run plan for project-authorized removal"
+        )
     try:
         with AnchoredRoot(target) as filesystem:
             recovery_identity = process_lock_identity("projection-install", target)
@@ -600,7 +626,7 @@ def _uninstall_projection_unlocked(
                 if not apply:
                     raise ProjectionInstallError("pending projection transaction recovery requires explicit --apply")
                 _recover_install_transaction_anchored(target, filesystem)
-            manifest_path, manifest = _managed_manifest(repository, target, filesystem)
+            _, manifest = _managed_manifest(repository, target, filesystem)
             if manifest is None:
                 result = {
                     "schemaVersion": "projection-uninstall-plan/v1",
@@ -615,14 +641,12 @@ def _uninstall_projection_unlocked(
 
             collisions: list[dict[str, str]] = []
             actions: list[dict[str, str]] = []
-            destinations: list[Path] = []
             for item in manifest["installedFiles"]:
                 try:
-                    destination = resolve_without_symlinks(target, item["path"], label="managed skill path")
+                    resolve_without_symlinks(target, item["path"], label="managed skill path")
                     current_bytes = filesystem.read_bytes(item["path"]) if filesystem.is_file(item["path"]) else None
                 except (PathBoundaryError, AnchoredPathError) as exc:
                     raise ProjectionInstallError(f"managed skill path contains symlink: {item['path']}") from exc
-                destinations.append(destination)
                 if current_bytes is None or sha256_bytes(current_bytes) != item["installedSha256"]:
                     collisions.append({"path": item["path"], "reason": "managed-file-drift"})
                 else:
@@ -634,30 +658,6 @@ def _uninstall_projection_unlocked(
                 "actions": actions,
                 "collisions": collisions,
             }
-            if not apply:
-                return result
-            if collisions:
-                raise ProjectionInstallError("managed file drift prevents projection uninstall")
-
-            journal = _begin_transaction(
-                target,
-                "UNINSTALL",
-                destinations,
-                manifest_path,
-                filesystem,
-                after_sha256_by_path={item["path"]: None for item in manifest["installedFiles"]},
-                manifest_after_sha256=None,
-            )
-            try:
-                for item in manifest["installedFiles"]:
-                    filesystem.unlink(item["path"])
-                filesystem.unlink(INSTALL_MANIFEST_PATH)
-                _commit_transaction(target, filesystem, journal)
-            except BaseException:
-                _recover_install_transaction_anchored(target, filesystem)
-                raise
-            for item in manifest["installedFiles"]:
-                filesystem.rmdir_if_empty(PurePosixPath(item["path"]).parent.as_posix())
             return result
     except AnchoredPathError as exc:
         raise ProjectionInstallError(f"anchored uninstall path failed: {exc}") from exc

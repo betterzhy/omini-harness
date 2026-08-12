@@ -46,8 +46,8 @@ def test_install_is_dry_run_by_default_and_never_touches_agents_md(tmp_path: Pat
     assert agents.read_text(encoding="utf-8") == "# Project-owned guidance\n"
 
 
-def test_install_apply_writes_only_manifested_skills_and_uninstall_is_managed(tmp_path: Path):
-    from evolution_harness.install import install_projection, uninstall_projection
+def test_install_apply_writes_only_manifested_skills_and_uninstall_is_dry_run_only(tmp_path: Path):
+    from evolution_harness.install import ProjectionInstallError, install_projection, uninstall_projection
     from evolution_harness.process_lock import process_lock_identity, recovery_attestation_phase
 
     root, _, pack = _pack(tmp_path)
@@ -68,9 +68,10 @@ def test_install_apply_writes_only_manifested_skills_and_uninstall_is_managed(tm
 
     plan = uninstall_projection(root, target)
     assert plan["mode"] == "DRY_RUN" and all(path.exists() for path in installed)
-    uninstall_projection(root, target, apply=True)
-    assert not managed.exists()
-    assert all(not path.exists() for path in installed)
+    with pytest.raises(ProjectionInstallError, match="automatic projection uninstall is disabled"):
+        uninstall_projection(root, target, apply=True)
+    assert managed.exists()
+    assert all(path.exists() for path in installed)
     assert agents.read_text(encoding="utf-8") == "# Keep me\n"
 
 
@@ -103,7 +104,7 @@ def test_uninstall_refuses_modified_managed_skill(tmp_path: Path):
 
     plan = uninstall_projection(root, target)
     assert plan["gate"] == "NO_GO"
-    with pytest.raises(ProjectionInstallError, match="managed file drift"):
+    with pytest.raises(ProjectionInstallError, match="automatic projection uninstall is disabled"):
         uninstall_projection(root, target, apply=True)
     assert skill.exists()
 
@@ -197,7 +198,7 @@ def test_install_keyboard_interrupt_rolls_back_using_persistent_journal(tmp_path
     root, _, pack = _pack(tmp_path)
     target = tmp_path / "target"
     target.mkdir()
-    original_write = AnchoredRoot.write_bytes
+    original_write = AnchoredRoot.write_bytes_if_absent
     interrupted = False
 
     def interrupt_manifest(self, relative: str, data: bytes, **kwargs):
@@ -207,13 +208,44 @@ def test_install_keyboard_interrupt_rolls_back_using_persistent_journal(tmp_path
             raise KeyboardInterrupt()
         return original_write(self, relative, data, **kwargs)
 
-    monkeypatch.setattr(AnchoredRoot, "write_bytes", interrupt_manifest)
+    monkeypatch.setattr(AnchoredRoot, "write_bytes_if_absent", interrupt_manifest)
     with pytest.raises(install.ProjectionInstallError, match="manual recovery"):
         install.install_projection(root, pack, target, apply=True)
 
     assert (target / ".agents/skills/architecture-review/SKILL.md").exists()
     assert not (target / ".agent-evolution/projection-install-manifest.json").exists()
     assert (target / ".agent-evolution/projection-install-transaction.json").exists()
+
+
+@pytest.mark.parametrize("inject_before_begin", [True, False])
+def test_install_create_never_replaces_file_racing_with_transaction_begin(
+    tmp_path: Path, monkeypatch, inject_before_begin: bool
+):
+    from evolution_harness import install
+
+    root, _, pack = _pack(tmp_path)
+    target = tmp_path / "target"
+    target.mkdir()
+    destination = target / ".agents/skills/architecture-review/SKILL.md"
+    project_owned_bytes = b"project-owned during apply\n"
+    original_begin = install._begin_transaction
+
+    def inject_project_file(*args, **kwargs):
+        if inject_before_begin:
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(project_owned_bytes)
+        journal = original_begin(*args, **kwargs)
+        if not inject_before_begin:
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(project_owned_bytes)
+        return journal
+
+    monkeypatch.setattr(install, "_begin_transaction", inject_project_file)
+
+    with pytest.raises(install.ProjectionInstallError, match="already exists|manual recovery"):
+        install.install_projection(root, pack, target, apply=True)
+
+    assert destination.read_bytes() == project_owned_bytes
 
 
 def test_install_reentry_recovers_prepared_journal_after_process_loss(tmp_path: Path):
@@ -484,6 +516,36 @@ def test_install_recovery_rejects_tampered_attested_backup(tmp_path: Path):
         install.install_projection(root, pack, target, apply=True)
 
     assert destination.read_bytes() == b"partial operation bytes\n"
+
+
+def test_install_recovery_never_deletes_unexpected_backup_entry(tmp_path: Path):
+    from evolution_harness import install
+    from evolution_harness.generated import deterministic_json_bytes
+    from evolution_harness.hashing import sha256_bytes
+
+    root, _, pack = _pack(tmp_path)
+    target = tmp_path / "target"
+    target.mkdir()
+    projection, inputs = install._projection_inputs(root, pack, target)
+    destination = target / inputs[0]["path"]
+    manifest_path = target / install.INSTALL_MANIFEST_PATH
+    persistent = install._persistent_manifest(projection, inputs)
+    journal = install._begin_transaction(
+        target,
+        "INSTALL",
+        [destination],
+        manifest_path,
+        after_sha256_by_path={inputs[0]["path"]: inputs[0]["sourceSha256"]},
+        manifest_after_sha256=sha256_bytes(deterministic_json_bytes(persistent)),
+    )
+    unexpected = target / journal["backupDirectory"] / "project-owned.txt"
+    unexpected.write_bytes(b"preserve unexpected backup bytes\n")
+
+    with pytest.raises(install.ProjectionInstallError, match="unexpected entries"):
+        install.install_projection(root, pack, target, apply=True)
+
+    assert unexpected.read_bytes() == b"preserve unexpected backup bytes\n"
+    assert (target / install.INSTALL_TRANSACTION_PATH).exists()
 
 
 def test_install_rejects_prepared_attestation_without_journal(tmp_path: Path):

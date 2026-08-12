@@ -23,7 +23,7 @@ PAY_NEXUS_REAL_CODEX_TASK = NOT_EXECUTED
 
 | Area | Current evidence | Shadow interpretation |
 |---|---|---|
-| Repository | `/Users/yuzhuangzhuang/Projects/pay-nexus` at `4cf60c3e171b27bddbb0be70aea8db905c5c60d5` | Read-only source root; revalidated after the original pilot |
+| Repository | `/Users/yuzhuangzhuang/Projects/pay-nexus` at `6db5e1efe548abe3a7862c231aba3b2e62b89eab` | Read-only source root; revalidated after the original pilot |
 | Global authority | `current-formal-status.md` | Owns global stage and execution permissions |
 | Agent guidance | `AGENTS.md` | Project guidance remains unchanged and outranks generic guidance |
 | Design state | `ArchitectureSemanticStatus=SEALED` | Registered as CLOSED only because explicit evidence exists |
@@ -99,11 +99,11 @@ PYTHONPATH=src .venv/bin/python -m evolution_harness.cli --repository-root . \
 Evidence:
 
 ```text
-source HEAD = 4cf60c3e171b27bddbb0be70aea8db905c5c60d5
-source tree = 8a98efe070f51ed1deace750ba6fb0dd8dbc8070
+source HEAD = 6db5e1efe548abe3a7862c231aba3b2e62b89eab
+source tree = 831a91f865b674f244d2aa657aab0a4c2811cbb8
 authority set status = CLEAN_FOR_AUTHORITY_SET
 authority set digest = sha256:f5eeb28b701cb16301064060ae93ecb8f39c88d34c51e7d5c07efea4b9f351c2
-snapshot = sha256:85070dd1bb728749f89c2626fc8d1a962e64719827bd7dde5a9c0c9f3a660d74
+snapshot = sha256:7edd374fdf7cfeadf106ac78fb8f8dcc74ea01de6c34907c235229903a985f52
 authority gate = PASS
 conflicts = []
 missing facts = []
@@ -161,7 +161,7 @@ For `intent=architecture-review`, `topic=harness-shadow-binding`, `runtime=CODEX
 - Excluded: `closure-requires-authority` because of `intent-mismatch`.
 - Project conflict: `architecture-review` vs `current-formal-status.md#current-execution-authority`.
 - Resolution: `PROJECT_TRUTH_WINS`.
-- Resolution ID: `resolution:873d16bfe1afc9c22c554e70`.
+- Resolution ID: `resolution:28a772208660adb5bf5b52c1`.
 
 This demonstrates selection before materialization; the lock contains five capabilities, but the runtime context selects only four.
 
@@ -208,9 +208,9 @@ Result:
 ```text
 projection freshness = PASS
 projection version = codex-project-pack/1
-source resolution = resolution:873d16bfe1afc9c22c554e70
+source resolution = resolution:28a772208660adb5bf5b52c1
 source lock = sha256:1b5b5116bbd7b98be65f207b0f849cca0cf16cd541e80bb3f6a93f405d4f6bdb
-source authority snapshot = sha256:85070dd1bb728749f89c2626fc8d1a962e64719827bd7dde5a9c0c9f3a660d74
+source authority snapshot = sha256:7edd374fdf7cfeadf106ac78fb8f8dcc74ea01de6c34907c235229903a985f52
 ```
 
 Generated `architecture-review/SKILL.md` records:
@@ -254,8 +254,8 @@ Pay-Nexus source checks for the original pilot and the later registration-candid
 ```text
 HEAD before = f0bfce7a71314c313a01a518fa3a36f8e9bf659a
 HEAD after  = f0bfce7a71314c313a01a518fa3a36f8e9bf659a
-latest revalidation HEAD before = 4cf60c3e171b27bddbb0be70aea8db905c5c60d5
-latest revalidation HEAD after  = 4cf60c3e171b27bddbb0be70aea8db905c5c60d5
+latest revalidation HEAD before = 6db5e1efe548abe3a7862c231aba3b2e62b89eab
+latest revalidation HEAD after  = 6db5e1efe548abe3a7862c231aba3b2e62b89eab
 latest authority set status before = CLEAN_FOR_AUTHORITY_SET
 latest authority set status after  = CLEAN_FOR_AUTHORITY_SET
 unrelated tracked modifications observed = 2 (outside the six-file authority allowlist; preserved)

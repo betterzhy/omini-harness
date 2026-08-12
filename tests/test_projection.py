@@ -183,6 +183,17 @@ def test_projection_rejects_resolved_project_path_escape(tmp_path: Path):
     assert sentinel.read_text(encoding="utf-8") == "preserve\n"
 
 
+def test_projection_rejects_resolved_context_not_produced_by_current_resolver(tmp_path: Path):
+    from evolution_harness.projection import ProjectionError, build_projection_pack
+
+    root, project = _copy_repo(tmp_path)
+    resolved = _resolved(root, project, runtime="CODEX")
+    resolved["requestedOutput"] = "tampered output with stale selection identity"
+
+    with pytest.raises(ProjectionError, match="current resolver"):
+        build_projection_pack(root, project, resolved, runtime="CODEX")
+
+
 def test_projection_freshness_can_bind_expected_resolution_request(tmp_path: Path):
     from evolution_harness.projection import build_projection_pack, check_projection_freshness
     from evolution_harness.resolver import resolve_design_context

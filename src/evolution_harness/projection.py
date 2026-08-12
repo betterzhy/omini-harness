@@ -213,6 +213,57 @@ def _adapter(runtime: str) -> ProjectionAdapter:
     raise ProjectionError(f"unsupported runtime projection: {runtime}")
 
 
+def _authority_snapshot_from_resolved(resolved: dict[str, Any]) -> dict[str, Any] | None:
+    authority_keys = {
+        "authoritySnapshotFingerprint",
+        "authoritySourceRevision",
+        "authorityFacts",
+        "authorityConflicts",
+        "authorityGate",
+        "authorityPaths",
+    }
+    present = authority_keys & set(resolved)
+    if not present:
+        return None
+    if present != authority_keys:
+        raise ProjectionError("resolved context has incomplete authority metadata")
+    return {
+        "snapshotFingerprint": resolved["authoritySnapshotFingerprint"],
+        "sourceRevision": resolved["authoritySourceRevision"],
+        "facts": resolved["authorityFacts"],
+        "conflicts": resolved["authorityConflicts"],
+        "gate": resolved["authorityGate"],
+        "authorities": resolved["authorityPaths"],
+    }
+
+
+def _verify_resolved_context(
+    repository_root: Path,
+    project_root: Path,
+    resolved: dict[str, Any],
+    *,
+    runtime: str,
+) -> None:
+    from .resolver import resolve_design_context
+
+    try:
+        expected = resolve_design_context(
+            repository_root,
+            project_root,
+            intent=resolved["intent"],
+            topic=resolved["topic"],
+            requested_output=resolved["requestedOutput"],
+            runtime=runtime,
+            explicit_stage=resolved["stage"],
+            reopen_signal=resolved.get("reopenSignal"),
+            authority_snapshot=_authority_snapshot_from_resolved(resolved),
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ProjectionError("resolved context is invalid for the current resolver") from exc
+    if resolved != expected:
+        raise ProjectionError("resolved context was not produced by the current resolver")
+
+
 def _can_materialize(visibility: str, target_visibility: str = "PROJECT") -> bool:
     return _VISIBILITY_RANK.get(visibility, -1) >= _VISIBILITY_RANK[target_visibility]
 
@@ -330,6 +381,7 @@ def build_projection_pack(
         raise ProjectionError("resolved context capability lock is stale")
     if resolved_context.get("project") != lock["project"]:
         raise ProjectionError("resolved context project does not match capability lock")
+    _verify_resolved_context(root, project, resolved_context, runtime=runtime)
     try:
         project_identity = safe_relative_path(resolved_context["project"], label="projection project")
     except (KeyError, PathBoundaryError) as exc:
@@ -505,6 +557,7 @@ def validate_projection_pack(
         raise ProjectionError("canonical projection manifest identity mismatch")
     if manifest.get("capabilityLockFingerprint") != lock["lockFingerprint"]:
         raise ProjectionError("canonical projection manifest lock mismatch")
+    _verify_resolved_context(root, project, resolved, runtime=runtime)
     state_path = project / ".agent-evolution/design-state.yaml"
     binding_path = project / ".agent-evolution/capabilities.yaml"
     if resolved.get("projectStateHash") != file_sha256(state_path) or resolved.get("projectBindingHash") != file_sha256(binding_path):

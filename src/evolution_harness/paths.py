@@ -26,6 +26,25 @@ def resolve_within(root: Path, relative: str, *, must_exist: bool = False, label
     return candidate
 
 
+def resolve_without_symlinks(
+    root: Path,
+    relative: str,
+    *,
+    must_exist: bool = False,
+    label: str = "path",
+) -> Path:
+    base = Path(root).resolve()
+    rel = safe_relative_path(relative, label=label)
+    current = base
+    for part in rel.parts:
+        current = current / part
+        if current.is_symlink():
+            raise PathBoundaryError(f"{label} contains symlink: {relative}")
+    if must_exist and not current.exists():
+        raise FileNotFoundError(current)
+    return current
+
+
 def matches_excluded(relative: str, patterns: list[str]) -> bool:
     value = safe_relative_path(relative, label="source path").as_posix()
     return any(fnmatch.fnmatchcase(value, pattern) or PurePosixPath(value).match(pattern) for pattern in patterns)

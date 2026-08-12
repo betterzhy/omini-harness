@@ -20,6 +20,9 @@ def load_project_state(repository_root: Path, project_root: Path) -> dict[str, A
     path = Path(project_root) / ".agent-evolution" / "design-state.yaml"
     value = _load_yaml(path)
     SchemaStore(root).validate("core/schemas/project-design-state.schema.json", value)
+    topic_ids = [item["topicId"] for item in value["topics"]]
+    if len(topic_ids) != len(set(topic_ids)):
+        raise ValueError("project design state contains duplicate topic ids")
     return value
 
 
@@ -136,6 +139,8 @@ def verify_capability_lock(
     by_version = {(entry["id"], entry["version"]): entry for entry in registry["entries"]}
     verified: dict[str, dict[str, Any]] = {}
     for capability_id, item in locked_items.items():
+        if item["sourceHarnessRevision"] != lock["sourceHarnessRevision"]:
+            raise ValueError(f"capability lock source revision mismatch: {capability_id}")
         if sorted(item["resolvedBecause"]) != sorted(reasons[capability_id]):
             raise ValueError(f"capability lock binding reasons drift: {capability_id}")
         entry = by_version.get((capability_id, item["resolvedVersion"]))

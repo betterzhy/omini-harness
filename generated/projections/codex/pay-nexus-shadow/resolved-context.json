@@ -2,7 +2,7 @@
   "authorityConflicts": [],
   "authorityFacts": {
     "architecture.semantic-status": {
-      "normalizedValue": "SEALED",
+      "normalizedValue": "CLOSED",
       "owner": "current-formal-status",
       "rawValue": "SEALED",
       "sourcePath": "current-formal-status.md"
@@ -104,7 +104,7 @@
       "sourcePath": "docs/architecture/engineering-readiness/dev-s01-cpc-query-reference-slice-progress.md"
     },
     "slice.dev-s01.current-gate": {
-      "normalizedValue": "DEV_S01_STAGE5_LOCAL_REPOSITORY_LANDING_COMPLETED",
+      "normalizedValue": "CLOSED",
       "owner": "dev-s01-progress",
       "rawValue": "DEV_S01_STAGE5_LOCAL_REPOSITORY_LANDING_COMPLETED",
       "sourcePath": "docs/architecture/engineering-readiness/dev-s01-cpc-query-reference-slice-progress.md"
@@ -203,8 +203,10 @@
       "sha256": "ae922ff532dbb4a1728b01059d59649a41c569bb74ad1e9aecd287ded8862c4d"
     }
   ],
-  "authoritySnapshotFingerprint": "sha256:547bbadf19c353eaa9b25071b61046f55b1ba06d5da1514ad948ab35279dc205",
+  "authoritySnapshotFingerprint": "sha256:f25b0fba54416346937472418fba7a56b486729d194647c03ba806d1eadf4bf1",
   "authoritySourceRevision": {
+    "authoritySetDigest": "sha256:6822a9d6cefa59913280711e984acd55c958ac4d84f0202a9352fc909d14b6a2",
+    "authoritySetStatus": "CLEAN_FOR_AUTHORITY_SET",
     "head": "f0bfce7a71314c313a01a518fa3a36f8e9bf659a",
     "kind": "GIT",
     "tree": "e5c5479192504e303461ea9e5e0784efd1361a8c"
@@ -323,7 +325,7 @@
     "Did project truth override generic guidance where applicable?",
     "Did I avoid mutating closure or promotion state?"
   ],
-  "resolutionId": "resolution:298ba4ff28c866c1b539dfd9",
+  "resolutionId": "resolution:f075d3f4fe1d6a04a0d5e740",
   "runtime": "CODEX",
   "schemaVersion": "resolved-design-context/v1",
   "selectedCapabilities": [

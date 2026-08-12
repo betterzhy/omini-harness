@@ -18,6 +18,11 @@
       "type": "array",
       "items": {"type": "string", "minLength": 1},
       "uniqueItems": true
+    },
+    "topicStatusFacts": {
+      "type": "object",
+      "propertyNames": {"type": "string", "minLength": 1},
+      "additionalProperties": {"type": "string", "pattern": "^[a-z][a-z0-9._-]*$"}
     }
   },
   "additionalProperties": false

@@ -131,10 +131,47 @@ def test_integration_projection_freshness_detects_authority_drift(tmp_path: Path
     assert "authority-snapshot-drift" in freshness.reasons
 
 
+def test_integration_projection_check_binds_requested_context(tmp_path: Path):
+    from evolution_harness.integration import build_integration_projection, check_integration_projection
+
+    root, integration, source = _fixture(tmp_path)
+    build_integration_projection(
+        root,
+        integration,
+        source,
+        intent="architecture-review",
+        topic="resolver-mvp",
+        requested_output="review findings",
+        runtime="CODEX",
+    )
+    freshness = check_integration_projection(
+        root,
+        integration,
+        source,
+        intent="architecture-review",
+        topic="resolver-mvp",
+        requested_output="different output contract",
+        runtime="CODEX",
+    )
+    assert not freshness.fresh
+    assert "resolution-context-drift" in freshness.reasons
+
+
 def test_integration_resolution_stops_on_authority_no_go(tmp_path: Path):
     root, integration, source = _fixture(tmp_path)
     (source / "status.md").write_text("CurrentStage = READY\n", encoding="utf-8")
     with pytest.raises(ValueError, match="authority snapshot gate is NO_GO"):
+        _resolve(root, integration, source)
+
+
+def test_integration_resolution_rejects_sidecar_topic_status_authority_drift(tmp_path: Path):
+    root, integration, source = _fixture(tmp_path)
+    config_path = integration / "integration.yaml"
+    config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    config["topicStatusFacts"] = {"authority-model": "project.stage"}
+    config_path.write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="topic status authority mismatch"):
         _resolve(root, integration, source)
 
 

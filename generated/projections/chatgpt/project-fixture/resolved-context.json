@@ -136,7 +136,7 @@
     "Did project truth override generic guidance where applicable?",
     "Did I avoid mutating closure or promotion state?"
   ],
-  "resolutionId": "resolution:c40032f72d898948c072a5c8",
+  "resolutionId": "resolution:1343d4d07b701171928cfd18",
   "runtime": "CHATGPT",
   "schemaVersion": "resolved-design-context/v1",
   "selectedCapabilities": [

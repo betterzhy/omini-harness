@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -175,3 +176,39 @@ def test_derived_authority_cannot_own_facts(tmp_path: Path):
     _write_yaml(path, authority_map)
     with pytest.raises(IntegrationAuthorityError, match="derived"):
         build_authority_snapshot(root, integration, source)
+
+
+def test_excluded_authority_cannot_be_read_through_in_root_symlink(tmp_path: Path):
+    from evolution_harness.authority import IntegrationAuthorityError, build_authority_snapshot
+
+    root, integration, source = _fixture(tmp_path)
+    (source / "alias").symlink_to(source / "private", target_is_directory=True)
+    path = integration / "authority-map.yaml"
+    authority_map = yaml.safe_load(path.read_text(encoding="utf-8"))
+    authority_map["authorities"][0]["path"] = "alias/secret.md"
+    _write_yaml(path, authority_map)
+
+    with pytest.raises(IntegrationAuthorityError, match="symlink|excluded"):
+        build_authority_snapshot(root, integration, source)
+
+
+def test_git_source_revision_marks_dirty_authority_set(tmp_path: Path):
+    from evolution_harness.authority import build_authority_snapshot
+
+    root, integration, source = _fixture(tmp_path)
+    subprocess.run(["git", "init", "-q", str(source)], check=True)
+    subprocess.run(["git", "-C", str(source), "add", "status.md", "slice.yaml", "derived.md"], check=True)
+    subprocess.run(
+        ["git", "-C", str(source), "-c", "user.name=Harness Test", "-c", "user.email=harness@example.invalid", "commit", "-q", "-m", "baseline"],
+        check=True,
+    )
+    clean = build_authority_snapshot(root, integration, source)
+    assert clean["sourceRevision"]["authoritySetStatus"] == "CLEAN_FOR_AUTHORITY_SET"
+
+    (source / "status.md").write_text(
+        "CurrentStage = READY\nExecutionAllowed = YES_EXPLICIT\n", encoding="utf-8"
+    )
+    dirty = build_authority_snapshot(root, integration, source)
+    assert dirty["sourceRevision"]["authoritySetStatus"] == "DIRTY_AUTHORITY_SET"
+    assert dirty["sourceRevision"]["head"] == clean["sourceRevision"]["head"]
+    assert dirty["sourceRevision"]["authoritySetDigest"] != clean["sourceRevision"]["authoritySetDigest"]

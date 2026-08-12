@@ -117,5 +117,153 @@ def test_install_rejects_poisoned_projection_skill_path(tmp_path: Path):
     manifest["generatedSkills"][0]["path"] = "../outside/SKILL.md"
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
-    with pytest.raises(ProjectionInstallError, match="unsafe projected skill path"):
+    with pytest.raises(ProjectionInstallError, match="canonical projection"):
         install_projection(root, pack, target)
+
+
+def test_install_rejects_self_consistent_but_noncanonical_skill_bytes(tmp_path: Path):
+    from evolution_harness.hashing import file_sha256
+    from evolution_harness.install import ProjectionInstallError, install_projection
+
+    root, _, pack = _pack(tmp_path)
+    target = tmp_path / "target"
+    target.mkdir()
+    skill = pack / "skills/architecture-review/SKILL.md"
+    skill.write_text("malicious but self-hashed\n", encoding="utf-8")
+    manifest_path = pack / "projection-manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    for item in manifest["generatedFiles"]:
+        if item["path"] == "skills/architecture-review/SKILL.md":
+            item["sha256"] = file_sha256(skill)
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    with pytest.raises(ProjectionInstallError, match="canonical projection"):
+        install_projection(root, pack, target)
+
+
+def test_install_rejects_pack_outside_harness_generated_root(tmp_path: Path):
+    from evolution_harness.install import ProjectionInstallError, install_projection
+
+    root, _, pack = _pack(tmp_path)
+    outside = tmp_path / "outside-pack"
+    shutil.copytree(pack, outside)
+    target = tmp_path / "target"
+    target.mkdir()
+
+    with pytest.raises(ProjectionInstallError, match="generated projections root"):
+        install_projection(root, outside, target)
+
+
+def test_install_rejects_symlinked_file_inside_canonical_projection(tmp_path: Path):
+    from evolution_harness.install import ProjectionInstallError, install_projection
+
+    root, _, pack = _pack(tmp_path)
+    target = tmp_path / "target"
+    target.mkdir()
+    skill = pack / "skills/architecture-review/SKILL.md"
+    outside = tmp_path / "outside-skill.md"
+    outside.write_bytes(skill.read_bytes())
+    skill.unlink()
+    skill.symlink_to(outside)
+
+    with pytest.raises(ProjectionInstallError, match="canonical projection"):
+        install_projection(root, pack, target)
+
+
+def test_uninstall_rejects_managed_skill_replaced_by_in_root_symlink(tmp_path: Path):
+    from evolution_harness.install import ProjectionInstallError, install_projection, uninstall_projection
+
+    root, _, pack = _pack(tmp_path)
+    target = tmp_path / "target"
+    target.mkdir()
+    install_projection(root, pack, target, apply=True)
+    skill = target / ".agents/skills/architecture-review/SKILL.md"
+    unrelated = target / "unrelated.txt"
+    unrelated.write_bytes(skill.read_bytes())
+    skill.unlink()
+    skill.symlink_to(unrelated)
+
+    with pytest.raises(ProjectionInstallError, match="symlink"):
+        uninstall_projection(root, target)
+    assert unrelated.exists()
+
+
+def test_install_keyboard_interrupt_rolls_back_using_persistent_journal(tmp_path: Path, monkeypatch):
+    from evolution_harness import install
+
+    root, _, pack = _pack(tmp_path)
+    target = tmp_path / "target"
+    target.mkdir()
+    original_write = install._write_atomic
+    calls = 0
+
+    def interrupt_manifest(path: Path, data: bytes):
+        nonlocal calls
+        calls += 1
+        if calls == 3:
+            raise KeyboardInterrupt()
+        return original_write(path, data)
+
+    monkeypatch.setattr(install, "_write_atomic", interrupt_manifest)
+    with pytest.raises(KeyboardInterrupt):
+        install.install_projection(root, pack, target, apply=True)
+
+    assert not (target / ".agents/skills/architecture-review/SKILL.md").exists()
+    assert not (target / ".agent-evolution/projection-install-manifest.json").exists()
+    assert not (target / ".agent-evolution/projection-install-transaction.json").exists()
+
+
+def test_install_reentry_recovers_prepared_journal_after_process_loss(tmp_path: Path):
+    from evolution_harness import install
+
+    root, _, pack = _pack(tmp_path)
+    target = tmp_path / "target"
+    target.mkdir()
+    _, inputs = install._projection_inputs(root, pack)
+    source = inputs[0]["_source"]
+    destination = target / inputs[0]["path"]
+    manifest_path = target / install.INSTALL_MANIFEST_PATH
+    install._begin_transaction(target, "INSTALL", [destination], manifest_path)
+    install._write_atomic(destination, source.read_bytes())
+
+    with pytest.raises(install.ProjectionInstallError, match="explicit --apply"):
+        install.install_projection(root, pack, target)
+    assert destination.exists()
+
+    result = install.install_projection(root, pack, target, apply=True)
+
+    assert result["mode"] == "APPLY"
+    assert destination.exists()
+    assert manifest_path.exists()
+    assert not (target / install.INSTALL_TRANSACTION_PATH).exists()
+
+
+def test_install_recovery_rejects_forged_backup_directory_without_deleting_it(tmp_path: Path):
+    from evolution_harness import install
+
+    root, _, pack = _pack(tmp_path)
+    target = tmp_path / "target"
+    target.mkdir()
+    victim = target / "src"
+    victim.mkdir()
+    sentinel = victim / "sentinel.txt"
+    sentinel.write_text("preserve\n", encoding="utf-8")
+    journal = {
+        "schemaVersion": "projection-install-transaction/v1",
+        "operation": "INSTALL",
+        "phase": "COMMITTED",
+        "backupDirectory": "src",
+        "files": [],
+        "manifest": {
+            "existed": False,
+            "backupPath": "src/install-manifest",
+        },
+    }
+    journal_path = target / install.INSTALL_TRANSACTION_PATH
+    journal_path.parent.mkdir(parents=True)
+    journal_path.write_text(json.dumps(journal), encoding="utf-8")
+
+    with pytest.raises(install.ProjectionInstallError, match="invalid projection install recovery journal"):
+        install.install_projection(root, pack, target, apply=True)
+
+    assert sentinel.read_text(encoding="utf-8") == "preserve\n"

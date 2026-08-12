@@ -63,6 +63,31 @@ def test_neutral_fixture_excluded_authority_fails_before_consumption(tmp_path: P
         build_authority_snapshot(root, integration, source)
 
 
+def test_neutral_fixture_canonical_topic_reopen_cannot_be_hidden_by_closed_sidecar(tmp_path: Path):
+    from evolution_harness.integration import resolve_integration_context
+
+    root = Path(__file__).parents[1]
+    integration = root / "integrations/neutral-shadow"
+    source = tmp_path / "external-project"
+    shutil.copytree(root / "examples/external-project-source", source)
+    decisions = source / "decisions.md"
+    decisions.write_text(
+        decisions.read_text(encoding="utf-8").replace("ApiBoundaryStatus = CLOSED", "ApiBoundaryStatus = OPEN"),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="topic status authority mismatch"):
+        resolve_integration_context(
+            root,
+            integration,
+            source,
+            intent="architecture-review",
+            topic="api-boundary",
+            requested_output="review findings",
+            runtime="CODEX",
+        )
+
+
 def test_neutral_fixture_projection_install_round_trip_is_target_scoped(tmp_path: Path):
     from evolution_harness.install import install_projection, uninstall_projection
     from evolution_harness.integration import build_integration_projection
@@ -76,9 +101,6 @@ def test_neutral_fixture_projection_install_round_trip_is_target_scoped(tmp_path
     source = tmp_path / "external-project"
     shutil.copytree(repository / "examples/external-project-source", source)
     source_before = _tree_bytes(source)
-    target = tmp_path / "install-target"
-    target.mkdir()
-    (target / "AGENTS.md").write_text("# Project owned\n", encoding="utf-8")
 
     build_integration_projection(
         root,
@@ -90,6 +112,11 @@ def test_neutral_fixture_projection_install_round_trip_is_target_scoped(tmp_path
         runtime="CODEX",
     )
     pack = root / "generated/projections/codex/neutral-shadow"
+    # The installation target must itself be the registered integration source;
+    # use a second source copy to prove the source/target boundary without touching the fixture authority tree.
+    target = tmp_path / "install-target-source"
+    shutil.copytree(source, target)
+    (target / "AGENTS.md").write_text("# Project owned\n", encoding="utf-8")
     assert install_projection(root, pack, target)["mode"] == "DRY_RUN"
     install_projection(root, pack, target, apply=True)
     assert (target / ".agents/skills/architecture-review/SKILL.md").exists()

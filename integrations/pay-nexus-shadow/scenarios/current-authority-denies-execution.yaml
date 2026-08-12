@@ -8,7 +8,7 @@ expected:
   authorityGate: PASS
   topicGuard: OPEN_OR_IN_PROGRESS
   facts:
-    architecture.semantic-status: SEALED
+    architecture.semantic-status: CLOSED
     permission.development: DENY
     permission.repository-landing: DENY
     permission.ddl: DENY

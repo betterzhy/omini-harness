@@ -12,11 +12,13 @@
     "projectId": {"type": "string", "minLength": 1},
     "sourceRevision": {
       "type": "object",
-      "required": ["kind", "head", "tree"],
+      "required": ["kind", "head", "tree", "authoritySetStatus", "authoritySetDigest"],
       "properties": {
         "kind": {"enum": ["GIT", "CONTENT"]},
         "head": {"type": "string", "minLength": 1},
-        "tree": {"type": "string", "minLength": 1}
+        "tree": {"type": "string", "minLength": 1},
+        "authoritySetStatus": {"enum": ["CLEAN_FOR_AUTHORITY_SET", "DIRTY_AUTHORITY_SET", "CONTENT_SNAPSHOT"]},
+        "authoritySetDigest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
       },
       "additionalProperties": false
     },

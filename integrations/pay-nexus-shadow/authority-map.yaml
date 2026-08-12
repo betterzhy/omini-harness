@@ -21,6 +21,12 @@ authorities:
       architecture.semantic-status:
         key: ArchitectureSemanticStatus
         required: true
+        normalization:
+          rules:
+            - operator: EXACT
+              expected: SEALED
+              value: CLOSED
+          default: UNKNOWN
       project.current-stage:
         key: CurrentStage
         required: true
@@ -129,6 +135,12 @@ authorities:
       slice.dev-s01.current-gate:
         key: CurrentGate
         required: true
+        normalization:
+          rules:
+            - operator: EXACT
+              expected: DEV_S01_STAGE5_LOCAL_REPOSITORY_LANDING_COMPLETED
+              value: CLOSED
+          default: UNKNOWN
       slice.dev-s01.allowed-future-write:
         key: AllowedFutureWriteEnvelope
         required: true

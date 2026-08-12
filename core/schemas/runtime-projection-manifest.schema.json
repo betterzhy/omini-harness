@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-evolution.local/core/schemas/runtime-projection-manifest.schema.json",
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "sourceCapability": {
+      "type": "object",
+      "required": ["id", "kind", "version", "contentHash"],
+      "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "kind": {"enum": ["PRINCIPLE", "FRAMEWORK", "SKILL", "WORKFLOW"]},
+        "version": {"type": "string", "minLength": 1},
+        "contentHash": {"$ref": "#/$defs/sha256"}
+      },
+      "additionalProperties": false
+    }
+  },
+  "type": "object",
+  "required": [
+    "schemaVersion", "projectionType", "projectionVersion", "runtime", "project",
+    "sourceResolutionId", "capabilityLockFingerprint", "projectStateHash",
+    "projectBindingHash", "sourceCapabilities", "generatedSkills", "omittedReferences",
+    "generatedFiles"
+  ],
+  "properties": {
+    "schemaVersion": {"const": "runtime-projection-manifest/v1"},
+    "projectionType": {"enum": ["CHATGPT_PROJECT_PACK", "CODEX_REPOSITORY_PACK"]},
+    "projectionVersion": {"type": "string", "minLength": 1},
+    "runtime": {"enum": ["CHATGPT", "CODEX"]},
+    "project": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$"},
+    "sourceResolutionId": {"type": "string", "minLength": 1},
+    "capabilityLockFingerprint": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "projectStateHash": {"$ref": "#/$defs/sha256"},
+    "projectBindingHash": {"$ref": "#/$defs/sha256"},
+    "sourceCapabilities": {"type": "array", "items": {"$ref": "#/$defs/sourceCapability"}},
+    "generatedSkills": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "version", "contentHash", "skillProjectionVersion", "path"],
+        "properties": {
+          "id": {"type": "string", "minLength": 1},
+          "version": {"type": "string", "minLength": 1},
+          "contentHash": {"$ref": "#/$defs/sha256"},
+          "skillProjectionVersion": {"type": "string", "minLength": 1},
+          "path": {"type": "string", "pattern": "^skills/[^/]+/SKILL\\.md$"}
+        },
+        "additionalProperties": false
+      }
+    },
+    "omittedReferences": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "reason"],
+        "properties": {
+          "id": {"type": "string", "minLength": 1},
+          "reason": {"type": "string", "minLength": 1}
+        },
+        "additionalProperties": false
+      }
+    },
+    "generatedFiles": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["path", "sha256"],
+        "properties": {
+          "path": {"type": "string", "minLength": 1},
+          "sha256": {"$ref": "#/$defs/sha256"}
+        },
+        "additionalProperties": false
+      }
+    },
+    "authoritySnapshotFingerprint": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "authoritySourceRevision": {
+      "type": "object",
+      "required": ["kind", "head", "tree", "authoritySetStatus", "authoritySetDigest"],
+      "properties": {
+        "kind": {"enum": ["GIT", "CONTENT"]},
+        "head": {"type": "string", "minLength": 1},
+        "tree": {"type": "string", "minLength": 1},
+        "authoritySetStatus": {"enum": ["CLEAN_FOR_AUTHORITY_SET", "DIRTY_AUTHORITY_SET", "CONTENT_SNAPSHOT"]},
+        "authoritySetDigest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+      },
+      "additionalProperties": false
+    },
+    "authorityGate": {"enum": ["PASS", "NO_GO"]}
+  },
+  "additionalProperties": false
+}

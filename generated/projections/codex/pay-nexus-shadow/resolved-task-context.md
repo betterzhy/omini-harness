@@ -1,6 +1,6 @@
 # Resolved Design Context
 
-- Resolution: `resolution:298ba4ff28c866c1b539dfd9`
+- Resolution: `resolution:f075d3f4fe1d6a04a0d5e740`
 - Project: `pay-nexus-shadow`
 - Topic: `harness-shadow-binding`
 - Stage: `CALIBRATION`

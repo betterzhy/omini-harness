@@ -10,7 +10,7 @@ expected:
   facts:
     slice.dev-s01.stage4-authorization: CONSUMED
     slice.dev-s01.landing-preflight: CONSUMED
-    slice.dev-s01.current-gate: DEV_S01_STAGE5_LOCAL_REPOSITORY_LANDING_COMPLETED
+    slice.dev-s01.current-gate: CLOSED
     slice.dev-s01.allowed-future-write: CLOSED_DEV_S01_NO_FURTHER_EXECUTION_AUTHORIZED
     slice.dev-s01.next-action: AWAIT_SEPARATE_WAVE0_OR_NEXT_SLICE_AUTHORIZATION
     permission.repository-landing: DENY

@@ -5,7 +5,7 @@ from typing import Any
 
 import yaml
 
-from .paths import resolve_within
+from .paths import resolve_without_symlinks
 from .schema import SchemaStore
 
 
@@ -24,12 +24,16 @@ def load_integration(repository_root: Path, integration_root: Path) -> dict[str,
     config = _load_yaml(config_path)
     store = SchemaStore(repository)
     store.validate("core/schemas/project-integration.schema.json", config)
-    authority_path = resolve_within(
+    authority_path = resolve_without_symlinks(
         integration, config["authorityMapPath"], must_exist=True, label="authority map path"
     )
     authority_map = _load_yaml(authority_path)
     store.validate("core/schemas/project-authority-map.schema.json", authority_map)
-    control_plane = resolve_within(integration, config["controlPlanePath"], label="control plane path")
+    control_plane = resolve_without_symlinks(
+        integration,
+        config["controlPlanePath"],
+        label="control plane path",
+    )
     return {
         "config": config,
         "authorityMap": authority_map,
@@ -60,6 +64,14 @@ def resolve_integration_context(
     snapshot = build_authority_snapshot(repository_root, integration_root, source_root)
     if snapshot["gate"] != "PASS":
         raise ValueError("authority snapshot gate is NO_GO")
+    state = _load_yaml(loaded["controlPlaneRoot"] / ".agent-evolution/design-state.yaml")
+    topics = {item["topicId"]: item["status"] for item in state.get("topics", [])}
+    for topic_id, fact_id in config.get("topicStatusFacts", {}).items():
+        authority_status = snapshot["facts"].get(fact_id, {}).get("normalizedValue")
+        if topic_id not in topics or authority_status != topics[topic_id]:
+            raise ValueError(
+                f"topic status authority mismatch: {topic_id} sidecar={topics.get(topic_id)} authority={authority_status}"
+            )
     resolved = resolve_design_context(
         repository_root,
         loaded["controlPlaneRoot"],
@@ -116,6 +128,11 @@ def check_integration_projection(
     source_root: Path,
     *,
     runtime: str,
+    intent: str | None = None,
+    topic: str | None = None,
+    requested_output: str | None = None,
+    explicit_stage: str | None = None,
+    reopen_signal: str | None = None,
 ):
     from .authority import build_authority_snapshot
     from .projection import ProjectionFreshness, check_projection_freshness
@@ -126,9 +143,29 @@ def check_integration_projection(
     snapshot = build_authority_snapshot(repository_root, integration_root, source_root)
     if snapshot["gate"] != "PASS":
         return ProjectionFreshness(False, ("authority-snapshot-no-go",))
+    resolution_values = (intent, topic, requested_output)
+    if any(value is not None for value in resolution_values) and not all(
+        value is not None for value in resolution_values
+    ):
+        return ProjectionFreshness(False, ("resolution-context-required",))
+    expected_resolution_id = None
+    if all(value is not None for value in resolution_values):
+        resolved = resolve_integration_context(
+            repository_root,
+            integration_root,
+            source_root,
+            intent=intent,
+            topic=topic,
+            requested_output=requested_output,
+            runtime=runtime,
+            explicit_stage=explicit_stage,
+            reopen_signal=reopen_signal,
+        )
+        expected_resolution_id = resolved["resolutionId"]
     return check_projection_freshness(
         repository_root,
         loaded["controlPlaneRoot"],
         runtime=runtime,
         authority_snapshot=snapshot,
+        expected_resolution_id=expected_resolution_id,
     )

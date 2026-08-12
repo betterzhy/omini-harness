@@ -8,3 +8,6 @@ runtime: CODEX
 excludedPaths:
   - temp-input/**
   - .git/**
+topicStatusFacts:
+  payment-platform-v1.13-architecture: architecture.semantic-status
+  dev-s01-local-landing: slice.dev-s01.current-gate

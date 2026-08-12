@@ -209,7 +209,8 @@ def resolve_design_context(
     ]
     resolution_payload = {
         "project": state["project"], "topic": topic, "stage": stage, "intent": intent,
-        "runtime": runtime, "selected": [(item["id"], item["version"], item["contentHash"]) for item in selected],
+        "runtime": runtime, "requestedOutput": requested_output,
+        "selected": [(item["id"], item["version"], item["contentHash"]) for item in selected],
         "topicGuard": topic_guard, "reopenSignal": reopen_signal,
         "capabilityLockFingerprint": lock["lockFingerprint"],
         "projectStateHash": state_hash,

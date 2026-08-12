@@ -8,6 +8,6 @@ expected:
   authorityGate: PASS
   topicGuard: DO_NOT_REOPEN
   facts:
-    architecture.semantic-status: SEALED
+    architecture.semantic-status: CLOSED
   selectedCapabilities: []
   conflictResolutionRules: []

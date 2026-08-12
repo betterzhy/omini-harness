@@ -48,7 +48,7 @@
   "required": ["schemaVersion", "project", "currentStage", "topics", "baselines", "assumptions", "openDecisions", "nextTopicCandidates", "projectAuthorityReferences", "protectedDecisions", "projectConstraints"],
   "properties": {
     "schemaVersion": {"const": "project-design-state/v1"},
-    "project": {"type": "string", "minLength": 1},
+    "project": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$"},
     "currentStage": {"enum": ["EXPLORATION", "FOCUSED_DESIGN", "CALIBRATION", "BOUNDARY_CLOSURE", "BASELINE", "ENGINEERING_DESIGN", "REPOSITORY_LANDING"]},
     "topics": {"type": "array", "items": {"$ref": "#/$defs/topic"}},
     "baselines": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},

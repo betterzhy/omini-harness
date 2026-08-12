@@ -194,7 +194,13 @@ def main(argv=None) -> int:
             path = record_eval_result(root, _load_yaml(args.result)); return _emit({"location": str(path)}, fmt=fmt, command=command)
         if args.command == "projection" and args.action == "build":
             if args.check:
-                check = check_projection_freshness(root, Path(args.project), runtime=args.runtime)
+                resolved = _resolve(root, args)
+                check = check_projection_freshness(
+                    root,
+                    Path(args.project),
+                    runtime=args.runtime,
+                    expected_resolution_id=resolved["resolutionId"],
+                )
                 return _emit({"fresh": check.fresh, "reasons": check.reasons}, fmt=fmt, ok=check.fresh, command=command)
             resolved = _resolve(root, args); return _emit(build_projection_pack(root, Path(args.project), resolved, runtime=args.runtime), fmt=fmt, command=command)
         if args.command == "projection" and args.action == "install":
@@ -232,7 +238,15 @@ def main(argv=None) -> int:
         if args.command == "integration" and args.action == "projection":
             if args.check:
                 check = check_integration_projection(
-                    root, Path(args.integration), Path(args.source), runtime=args.runtime
+                    root,
+                    Path(args.integration),
+                    Path(args.source),
+                    runtime=args.runtime,
+                    intent=args.intent,
+                    topic=args.topic,
+                    requested_output=args.output,
+                    explicit_stage=args.stage,
+                    reopen_signal=args.reopen_signal,
                 )
                 return _emit({"fresh": check.fresh, "reasons": check.reasons}, fmt=fmt, ok=check.fresh, command=command)
             data = build_integration_projection(

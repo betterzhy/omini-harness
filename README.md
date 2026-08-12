@@ -125,7 +125,7 @@ generated/projections/chatgpt/<project>/
 
 Codex pack uses `repository-guidance.md` and `resolved-task-context.md`, also includes `resolved-context.json`, and never overwrites project `AGENTS.md`.
 
-Projection installation is manifest-based and dry-run by default. Only resolved generated `skills/*/SKILL.md` files can map to repo-local `.agents/skills/`; existing unmanaged skills, changed managed files, unsafe paths, and missing ownership evidence fail closed. `AGENTS.md` is outside the installer write set. Apply and uninstall both require explicit `--apply`.
+Projection installation is manifest-based and dry-run by default. Before planning or applying, the installer deterministically revalidates the pack from canonical capability, exact lock, resolved context and control-plane inputs; an integration pack must also remain fresh against the installation target's current Authority Snapshot. Only resolved generated `skills/*/SKILL.md` files can map to repo-local `.agents/skills/`; existing unmanaged skills, changed managed files, symlinks, unsafe paths, and missing ownership evidence fail closed. `AGENTS.md` is outside the installer write set. Apply and uninstall both require explicit `--apply`, and a validated persistent transaction journal restores a pre-change state after interruption before the next install/uninstall operation proceeds. Projection-pack replacement uses a separate validated swap journal so an interrupted directory rename is recovered without trusting arbitrary backup paths.
 
 ## Governed learning
 

@@ -11,11 +11,11 @@
     },
     {
       "path": "resolved-context.json",
-      "sha256": "07c48b5253dadad7dbaef1ea4d27a63604041239563c8fd220ca2e1ffdb596d1"
+      "sha256": "a8ff54821125154285a302189e3cf5080bf00863e8df8fb1a2ff741ab362fd27"
     },
     {
       "path": "resolved-task-context.md",
-      "sha256": "4be3927c433bdab0845ae4598c6f7803a3f6a1d6c3a9f9f0f82e1eb063d9687e"
+      "sha256": "37bfebbc151e7eb1e877b5ac906f3670dd9b443b61f136d33f10204b662d1391"
     },
     {
       "path": "skills/architecture-review/SKILL.md",
@@ -88,5 +88,5 @@
       "version": "1.0.0"
     }
   ],
-  "sourceResolutionId": "resolution:a5fbe5832ae37540047bffe0"
+  "sourceResolutionId": "resolution:98bed798cf4855fd263d8d91"
 }

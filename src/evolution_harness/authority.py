@@ -7,7 +7,7 @@ from typing import Any
 from .extractors import extract_values
 from .hashing import canonical_json_bytes, file_sha256, sha256_bytes
 from .integration import load_integration
-from .paths import PathBoundaryError, matches_excluded, resolve_within
+from .paths import PathBoundaryError, matches_excluded, resolve_without_symlinks
 from .schema import SchemaStore
 
 
@@ -32,7 +32,16 @@ def _normalize(raw: str, selector: dict[str, Any]) -> str:
 
 
 def _source_revision(source_root: Path, authorities: list[dict[str, str]]) -> dict[str, str]:
+    authority_set_digest = "sha256:" + sha256_bytes(canonical_json_bytes(authorities))
     try:
+        git_root = Path(
+            subprocess.run(
+                ["git", "-C", str(source_root), "rev-parse", "--show-toplevel"],
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+        ).resolve()
         head = subprocess.run(
             ["git", "-C", str(source_root), "rev-parse", "HEAD"],
             check=True,
@@ -45,10 +54,44 @@ def _source_revision(source_root: Path, authorities: list[dict[str, str]]) -> di
             capture_output=True,
             text=True,
         ).stdout.strip()
-        return {"kind": "GIT", "head": head, "tree": tree}
+        clean = True
+        for authority in authorities:
+            try:
+                path = (source_root / authority["path"]).resolve(strict=True)
+                repository_relative = path.relative_to(git_root).as_posix()
+                committed_blob = subprocess.run(
+                    ["git", "-C", str(git_root), "rev-parse", f"HEAD:{repository_relative}"],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                ).stdout.strip()
+                working_blob = subprocess.run(
+                    ["git", "-C", str(git_root), "hash-object", str(path)],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                ).stdout.strip()
+            except (OSError, ValueError, subprocess.CalledProcessError):
+                clean = False
+                continue
+            if committed_blob != working_blob:
+                clean = False
+        return {
+            "kind": "GIT",
+            "head": head,
+            "tree": tree,
+            "authoritySetStatus": "CLEAN_FOR_AUTHORITY_SET" if clean else "DIRTY_AUTHORITY_SET",
+            "authoritySetDigest": authority_set_digest,
+        }
     except (OSError, subprocess.CalledProcessError):
-        digest = "content-sha256:" + sha256_bytes(canonical_json_bytes(authorities))
-        return {"kind": "CONTENT", "head": digest, "tree": digest}
+        digest = "content-sha256:" + authority_set_digest.removeprefix("sha256:")
+        return {
+            "kind": "CONTENT",
+            "head": digest,
+            "tree": digest,
+            "authoritySetStatus": "CONTENT_SNAPSHOT",
+            "authoritySetDigest": authority_set_digest,
+        }
 
 
 def build_authority_snapshot(
@@ -89,7 +132,12 @@ def build_authority_snapshot(
         try:
             if matches_excluded(relative, excluded):
                 raise IntegrationAuthorityError(f"authority path is excluded: {relative}")
-            path = resolve_within(source, relative, must_exist=False, label="authority source path")
+            path = resolve_without_symlinks(
+                source, relative, must_exist=False, label="authority source path"
+            )
+            canonical_relative = path.relative_to(source).as_posix()
+            if matches_excluded(canonical_relative, excluded):
+                raise IntegrationAuthorityError(f"authority path is excluded: {relative}")
         except PathBoundaryError as exc:
             raise IntegrationAuthorityError(str(exc)) from exc
         if not path.exists():

@@ -98,7 +98,9 @@ Evidence:
 ```text
 source HEAD = f0bfce7a71314c313a01a518fa3a36f8e9bf659a
 source tree = e5c5479192504e303461ea9e5e0784efd1361a8c
-snapshot = sha256:547bbadf19c353eaa9b25071b61046f55b1ba06d5da1514ad948ab35279dc205
+authority set status = CLEAN_FOR_AUTHORITY_SET
+authority set digest = sha256:6822a9d6cefa59913280711e984acd55c958ac4d84f0202a9352fc909d14b6a2
+snapshot = sha256:f25b0fba54416346937472418fba7a56b486729d194647c03ba806d1eadf4bf1
 authority gate = PASS
 conflicts = []
 missing facts = []
@@ -156,7 +158,7 @@ For `intent=architecture-review`, `topic=harness-shadow-binding`, `runtime=CODEX
 - Excluded: `closure-requires-authority` because of `intent-mismatch`.
 - Project conflict: `architecture-review` vs `current-formal-status.md#current-execution-authority`.
 - Resolution: `PROJECT_TRUTH_WINS`.
-- Resolution ID: `resolution:298ba4ff28c866c1b539dfd9`.
+- Resolution ID: `resolution:f075d3f4fe1d6a04a0d5e740`.
 
 This demonstrates selection before materialization; the lock contains five capabilities, but the runtime context selects only four.
 
@@ -203,9 +205,9 @@ Result:
 ```text
 projection freshness = PASS
 projection version = codex-project-pack/1
-source resolution = resolution:298ba4ff28c866c1b539dfd9
+source resolution = resolution:f075d3f4fe1d6a04a0d5e740
 source lock = sha256:2e412ecccc93e4b9e310088464a76c9a155b3b55d4c085aacbfca2a80e4e45c0
-source authority snapshot = sha256:547bbadf19c353eaa9b25071b61046f55b1ba06d5da1514ad948ab35279dc205
+source authority snapshot = sha256:f25b0fba54416346937472418fba7a56b486729d194647c03ba806d1eadf4bf1
 ```
 
 Generated `architecture-review/SKILL.md` records:
@@ -255,6 +257,23 @@ PAY_NEXUS_SHADOW_ZERO_WRITE = PASS
 ```
 
 Pay-Nexus tests were intentionally not run because they may materialize build outputs in the source repository and the approved Shadow boundary is zero-write. No regression claim beyond byte-preservation is made. Harness tests, structural validation, lock freshness, scenario checks and projection freshness are the executable integration evidence.
+
+Harness candidate-freeze verification:
+
+```text
+pytest = 130 passed
+structural validation = PASS (issues = [])
+registry freshness = PASS (design 10, design-learning 5, engineering 6)
+catalog freshness = PASS (design 10, engineering 4, unified 14)
+neutral exact lock = PASS
+pay-nexus-shadow exact lock = PASS
+neutral scenarios = 2/2 PASS
+pay-nexus-shadow scenarios = 5/5 PASS
+pay-nexus-shadow projection freshness = PASS
+pay-nexus-shadow install plan = PASS / DRY_RUN
+```
+
+The first fixed candidate, `7d6882bc666ff521e163d9b0bb2e0689b26e2186`, was independently reviewed and rejected as `NO-GO` (`1 P0`, `6 P1`, `2 P2`). It is superseded and is not acceptance evidence. The remediation adds safe project identities and output boundaries, request-bound freshness, deterministic projection reconstruction, source and target symlink rejection, canonical topic-status reconciliation, exact-lock consistency checks, authority-set dirty provenance, and persistent validated recovery journals. Final acceptance is bound to a later fixed candidate and its separate review receipt.
 
 ## Deferred Items and Hard Stop
 

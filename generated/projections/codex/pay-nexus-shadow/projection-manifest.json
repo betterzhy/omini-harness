@@ -1,7 +1,9 @@
 {
   "authorityGate": "PASS",
-  "authoritySnapshotFingerprint": "sha256:547bbadf19c353eaa9b25071b61046f55b1ba06d5da1514ad948ab35279dc205",
+  "authoritySnapshotFingerprint": "sha256:f25b0fba54416346937472418fba7a56b486729d194647c03ba806d1eadf4bf1",
   "authoritySourceRevision": {
+    "authoritySetDigest": "sha256:6822a9d6cefa59913280711e984acd55c958ac4d84f0202a9352fc909d14b6a2",
+    "authoritySetStatus": "CLEAN_FOR_AUTHORITY_SET",
     "head": "f0bfce7a71314c313a01a518fa3a36f8e9bf659a",
     "kind": "GIT",
     "tree": "e5c5479192504e303461ea9e5e0784efd1361a8c"
@@ -18,11 +20,11 @@
     },
     {
       "path": "resolved-context.json",
-      "sha256": "26cabc2eb86aafde8bb8e4ae1a49673353f08b91b25ceb13bc1f6a70069ad147"
+      "sha256": "db78f30e7d347a2c688a3bbdddd1f1775e9b122a76d3d38b84197f9718e64c5f"
     },
     {
       "path": "resolved-task-context.md",
-      "sha256": "90e96b5660298471d7d6df6c9e4d551dbb27c2954beb8536881653b172043f0f"
+      "sha256": "904babe657dd12180447cb53659d6ca3c77c90ddd727ad3f5c799d8244c40258"
     },
     {
       "path": "skills/architecture-review/SKILL.md",
@@ -72,5 +74,5 @@
       "version": "1.0.0"
     }
   ],
-  "sourceResolutionId": "resolution:298ba4ff28c866c1b539dfd9"
+  "sourceResolutionId": "resolution:f075d3f4fe1d6a04a0d5e740"
 }

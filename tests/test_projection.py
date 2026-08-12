@@ -165,3 +165,92 @@ def test_projection_rebuild_is_atomic_when_materialization_fails(tmp_path: Path,
     after = {path.relative_to(pack).as_posix(): path.read_bytes() for path in pack.rglob("*") if path.is_file()}
     assert after == before
     assert not list(pack.parent.glob(".project-fixture.*"))
+
+
+def test_projection_rejects_resolved_project_path_escape(tmp_path: Path):
+    from evolution_harness.projection import ProjectionError, build_projection_pack
+
+    root, project = _copy_repo(tmp_path)
+    resolved = _resolved(root, project, runtime="CODEX")
+    victim = tmp_path / "victim"
+    victim.mkdir()
+    sentinel = victim / "sentinel.txt"
+    sentinel.write_text("preserve\n", encoding="utf-8")
+    resolved["project"] = str(victim)
+
+    with pytest.raises(ProjectionError, match="resolved context project"):
+        build_projection_pack(root, project, resolved, runtime="CODEX")
+    assert sentinel.read_text(encoding="utf-8") == "preserve\n"
+
+
+def test_projection_freshness_can_bind_expected_resolution_request(tmp_path: Path):
+    from evolution_harness.projection import build_projection_pack, check_projection_freshness
+    from evolution_harness.resolver import resolve_design_context
+
+    root, project = _copy_repo(tmp_path)
+    resolved = _resolved(root, project, runtime="CODEX")
+    build_projection_pack(root, project, resolved, runtime="CODEX")
+    changed_request = resolve_design_context(
+        root,
+        project,
+        intent="architecture-review",
+        topic="resolver-mvp",
+        requested_output="different output contract",
+        runtime="CODEX",
+    )
+    freshness = check_projection_freshness(
+        root,
+        project,
+        runtime="CODEX",
+        expected_resolution_id=changed_request["resolutionId"],
+    )
+    assert not freshness.fresh
+    assert "resolution-context-drift" in freshness.reasons
+
+
+def test_projection_reentry_recovers_interrupted_directory_swap(tmp_path: Path):
+    from evolution_harness import projection
+
+    root, project = _copy_repo(tmp_path)
+    resolved = _resolved(root, project, runtime="CODEX")
+    projection.build_projection_pack(root, project, resolved, runtime="CODEX")
+    target = root / "generated/projections/codex/project-fixture"
+    token = "a" * 32
+    backup = target.parent / f".project-fixture.backup-{token}"
+    target.replace(backup)
+    orphan = target.parent / f".project-fixture.tmp-{token}"
+    orphan.mkdir()
+    (orphan / "partial.txt").write_text("partial\n", encoding="utf-8")
+    journal = {
+        "schemaVersion": "projection-swap-transaction/v1",
+        "phase": "PREPARED",
+        "runtime": "CODEX",
+        "project": "project-fixture",
+        "token": token,
+        "hadTarget": True,
+        "temporaryName": orphan.name,
+        "backupName": backup.name,
+    }
+    journal_path = target.parent / ".project-fixture.swap-transaction.json"
+    projection._write_atomic(journal_path, projection.deterministic_json_bytes(journal))
+
+    projection.build_projection_pack(root, project, resolved, runtime="CODEX")
+    assert target.is_dir()
+    assert not backup.exists()
+    assert not orphan.exists()
+    assert not journal_path.exists()
+
+
+def test_projection_rejects_symlinked_generated_output_parent(tmp_path: Path):
+    from evolution_harness.projection import ProjectionError, build_projection_pack
+
+    root, project = _copy_repo(tmp_path)
+    resolved = _resolved(root, project, runtime="CODEX")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (root / "generated").symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(ProjectionError, match="output path contains a symlink"):
+        build_projection_pack(root, project, resolved, runtime="CODEX")
+
+    assert not any(outside.iterdir())

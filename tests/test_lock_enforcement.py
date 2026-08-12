@@ -85,3 +85,17 @@ def test_projection_and_freshness_bind_lock_fingerprint(tmp_path: Path):
     freshness = check_projection_freshness(root, project, runtime="CODEX")
     assert not freshness.fresh
     assert "capability-lock-drift" in freshness.reasons
+
+
+def test_lock_rejects_inconsistent_entry_source_revision(tmp_path: Path):
+    from evolution_harness.project import capability_lock_fingerprint, verify_capability_lock
+
+    root, project = _copy_repo(tmp_path)
+    lock_path = project / ".agent-evolution/capabilities.lock.yaml"
+    lock = yaml.safe_load(lock_path.read_text(encoding="utf-8"))
+    lock["capabilities"][0]["sourceHarnessRevision"] = "content-sha256:" + "f" * 64
+    lock["lockFingerprint"] = capability_lock_fingerprint(lock)
+    lock_path.write_text(yaml.safe_dump(lock, sort_keys=False), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="source revision mismatch"):
+        verify_capability_lock(root, project)

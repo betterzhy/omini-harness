@@ -7,3 +7,5 @@ authorityMapPath: authority-map.yaml
 runtime: CODEX
 excludedPaths:
   - private/**
+topicStatusFacts:
+  api-boundary: topic.api-boundary.status

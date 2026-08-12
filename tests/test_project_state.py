@@ -58,3 +58,36 @@ def test_capability_lock_is_exact_and_traceable(tmp_path: Path):
     assert all(item["resolvedVersion"].count(".") == 2 for item in lock["capabilities"])
     stored = yaml.safe_load((project / ".agent-evolution/capabilities.lock.yaml").read_text(encoding="utf-8"))
     assert stored == lock
+
+
+def test_project_design_state_rejects_path_like_project_identity(tmp_path: Path):
+    from evolution_harness.project import load_project_state
+    from evolution_harness.schema import SchemaValidationError
+
+    root, project = _copy_repo(tmp_path)
+    state_path = project / ".agent-evolution/design-state.yaml"
+    state = yaml.safe_load(state_path.read_text(encoding="utf-8"))
+    state["project"] = str(tmp_path / "victim")
+    state_path.write_text(yaml.safe_dump(state, sort_keys=False), encoding="utf-8")
+
+    with pytest.raises(SchemaValidationError):
+        load_project_state(root, project)
+
+
+def test_project_design_state_rejects_duplicate_topic_ids(tmp_path: Path):
+    from evolution_harness.project import load_project_state
+
+    root, project = _copy_repo(tmp_path)
+    state_path = project / ".agent-evolution/design-state.yaml"
+    state = yaml.safe_load(state_path.read_text(encoding="utf-8"))
+    duplicate = dict(state["topics"][0])
+    duplicate["status"] = "OPEN"
+    duplicate.pop("closedAt", None)
+    duplicate.pop("closedBy", None)
+    duplicate.pop("baselineReference", None)
+    duplicate.pop("reopenConditions", None)
+    state["topics"].insert(0, duplicate)
+    state_path.write_text(yaml.safe_dump(state, sort_keys=False), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="duplicate topic"):
+        load_project_state(root, project)

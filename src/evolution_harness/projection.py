@@ -660,12 +660,11 @@ def check_projection_freshness(
     manifest_path = pack / "projection-manifest.json"
     if not manifest_path.exists():
         return ProjectionFreshness(False, ("projection-missing",))
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    reasons: set[str] = set()
     try:
-        validate_projection_pack(root, project, pack, runtime=runtime)
+        manifest, _ = validate_projection_pack(root, project, pack, runtime=runtime)
     except Exception:
-        reasons.add("projection-integrity-drift")
+        return ProjectionFreshness(False, ("projection-integrity-drift",))
+    reasons: set[str] = set()
     if manifest.get("projectionVersion") != adapter.projection_version:
         reasons.add("projection-version-changed")
     if expected_resolution_id is not None and manifest.get("sourceResolutionId") != expected_resolution_id:

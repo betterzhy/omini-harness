@@ -84,7 +84,7 @@ def test_projection_and_freshness_bind_lock_fingerprint(tmp_path: Path):
     lock_path.write_text(yaml.safe_dump(lock, sort_keys=False), encoding="utf-8")
     freshness = check_projection_freshness(root, project, runtime="CODEX")
     assert not freshness.fresh
-    assert "capability-lock-drift" in freshness.reasons
+    assert freshness.reasons == ("projection-integrity-drift",)
 
 
 def test_lock_rejects_inconsistent_entry_source_revision(tmp_path: Path):

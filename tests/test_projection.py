@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 from pathlib import Path
 
@@ -99,13 +100,13 @@ def test_projection_freshness_detects_generated_edit_and_canonical_hash_change(t
     original = skill.read_text(encoding="utf-8")
     skill.write_text(original + "\nmanual edit\n", encoding="utf-8")
     check = check_projection_freshness(root, project, runtime="CHATGPT")
-    assert not check.fresh and "generated-file-drift" in check.reasons
+    assert not check.fresh and check.reasons == ("projection-integrity-drift",)
     build_projection_pack(root, project, resolved, runtime="CHATGPT")
     assert skill.read_text(encoding="utf-8") == original
     canonical = root / "design/capabilities/skills/architecture-review/content.md"
     canonical.write_text(canonical.read_text(encoding="utf-8") + "\ncanonical change without projection rebuild\n", encoding="utf-8")
     check = check_projection_freshness(root, project, runtime="CHATGPT")
-    assert not check.fresh and "source-capability-hash-changed" in check.reasons
+    assert not check.fresh and check.reasons == ("projection-integrity-drift",)
 
 
 def test_codex_pack_never_overwrites_or_generates_agents_md(tmp_path: Path):
@@ -217,6 +218,39 @@ def test_projection_freshness_can_bind_expected_resolution_request(tmp_path: Pat
     )
     assert not freshness.fresh
     assert "resolution-context-drift" in freshness.reasons
+
+
+def test_projection_freshness_never_hashes_manifest_path_outside_pack(tmp_path: Path, monkeypatch):
+    from evolution_harness import projection
+
+    root, project = _copy_repo(tmp_path)
+    resolved = _resolved(root, project, runtime="CODEX")
+    projection.build_projection_pack(root, project, resolved, runtime="CODEX")
+    pack = root / "generated/projections/codex/project-fixture"
+    victim = tmp_path / "excluded-secret.txt"
+    victim.write_text("must not be read or hashed\n", encoding="utf-8")
+    manifest_path = pack / "projection-manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["generatedFiles"] = [
+        {
+            "path": Path(os.path.relpath(victim, pack)).as_posix(),
+            "sha256": "0" * 64,
+        }
+    ]
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    original_hash = projection.file_sha256
+    hashed: list[Path] = []
+
+    def observe_hash(path: Path) -> str:
+        hashed.append(path.resolve())
+        return original_hash(path)
+
+    monkeypatch.setattr(projection, "file_sha256", observe_hash)
+    freshness = projection.check_projection_freshness(root, project, runtime="CODEX")
+
+    assert not freshness.fresh
+    assert freshness.reasons == ("projection-integrity-drift",)
+    assert victim.resolve() not in hashed
 
 
 def test_projection_reentry_recovers_interrupted_directory_swap(tmp_path: Path):

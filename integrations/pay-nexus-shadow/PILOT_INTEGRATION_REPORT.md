@@ -261,7 +261,7 @@ Pay-Nexus tests were intentionally not run because they may materialize build ou
 Harness candidate-freeze verification:
 
 ```text
-pytest = 131 passed
+pytest = 132 passed
 structural validation = PASS (issues = [])
 registry freshness = PASS (design 10, design-learning 5, engineering 6)
 catalog freshness = PASS (design 10, engineering 4, unified 14)
@@ -273,7 +273,7 @@ pay-nexus-shadow projection freshness = PASS
 pay-nexus-shadow install plan = PASS / DRY_RUN
 ```
 
-The first fixed candidate, `7d6882bc666ff521e163d9b0bb2e0689b26e2186`, was independently reviewed and rejected as `NO-GO` (`1 P0`, `6 P1`, `2 P2`). A second candidate, `e8903b7b541bdca75846841f1d33d472d1a83d8f`, passed its mechanical Gate but was rejected before acceptance because a negative test proved it did not independently reproduce and verify the saved resolver result. Both are superseded and neither is acceptance evidence. The remediation adds safe project identities and output boundaries, request-bound freshness, current-resolver reproduction, deterministic projection reconstruction, source and target symlink rejection, canonical topic-status reconciliation, exact-lock consistency checks, authority-set dirty provenance, and persistent validated recovery journals. Final acceptance is bound to a later fixed candidate and its separate review receipt.
+The first fixed candidate, `7d6882bc666ff521e163d9b0bb2e0689b26e2186`, was independently reviewed and rejected as `NO-GO` (`1 P0`, `6 P1`, `2 P2`). A second candidate, `e8903b7b541bdca75846841f1d33d472d1a83d8f`, passed its mechanical Gate but was rejected before acceptance because a negative test proved it did not independently reproduce and verify the saved resolver result. A third candidate, `9706122b7d41bae84ee64092a318b5c8be3d8a27`, was rejected because freshness still consulted untrusted generated-file paths after canonical validation had already failed. All three are superseded and none is acceptance evidence. The remediation adds safe project identities and output boundaries, request-bound freshness, current-resolver reproduction, deterministic projection reconstruction, post-failure fail-closed handling, source and target symlink rejection, canonical topic-status reconciliation, exact-lock consistency checks, authority-set dirty provenance, and persistent validated recovery journals. Final acceptance is bound to a later fixed candidate and its separate review receipt.
 
 ## Deferred Items and Hard Stop
 

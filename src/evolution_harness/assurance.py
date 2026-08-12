@@ -8,6 +8,7 @@ import yaml
 
 from .catalog import build_all_catalogs
 from .generated import deterministic_json_bytes
+from .integration import load_integration
 from .learning import _candidate_paths, _experience_paths, _load_yaml
 from .project import build_capability_lock, load_project_binding, load_project_state
 from .projection import check_projection_freshness
@@ -81,6 +82,31 @@ def _validate_engineering(root: Path, issues: list[dict[str, Any]]) -> None:
         issues.append(_issue("ENGINEERING_INVALID", str(exc), "engineering"))
 
 
+def _validate_integrations(root: Path, issues: list[dict[str, Any]]) -> int:
+    store = SchemaStore(root)
+    integration_roots = sorted(path.parent for path in (root / "integrations").glob("*/integration.yaml"))
+    for integration in integration_roots:
+        try:
+            loaded = load_integration(root, integration)
+            control_plane = loaded["controlPlaneRoot"]
+            load_project_state(root, control_plane)
+            load_project_binding(root, control_plane)
+            expected_lock = build_capability_lock(root, control_plane, write=False)
+            lock_path = control_plane / ".agent-evolution/capabilities.lock.yaml"
+            if not lock_path.exists():
+                issues.append(_issue("INTEGRATION_LOCK_MISSING", "integration capability lock missing", str(lock_path)))
+            else:
+                actual_lock = yaml.safe_load(lock_path.read_text(encoding="utf-8")) or {}
+                if actual_lock != expected_lock:
+                    issues.append(_issue("INTEGRATION_LOCK_DRIFT", "integration capability lock drift", str(lock_path)))
+            for scenario in sorted((integration / "scenarios").glob("*.yaml")):
+                value = yaml.safe_load(scenario.read_text(encoding="utf-8")) or {}
+                store.validate("core/schemas/project-integration-scenario.schema.json", value)
+        except Exception as exc:
+            issues.append(_issue("INTEGRATION_INVALID", str(exc), str(integration)))
+    return len(integration_roots)
+
+
 def structural_validate(
     repository_root: Path,
     *,
@@ -94,6 +120,7 @@ def structural_validate(
         issues.append(_issue(item.code, item.message, item.path))
     _validate_learning(root, issues)
     _validate_engineering(root, issues)
+    integration_count = _validate_integrations(root, issues)
 
     store = SchemaStore(root)
     projects = [Path(value) for value in project_roots]
@@ -146,4 +173,5 @@ def structural_validate(
         "experienceCount": sum(1 for _ in _experience_paths(root)),
         "candidateCount": sum(1 for _ in _candidate_paths(root)),
         "evalCount": len(list((root / "design/evals").glob("*.yaml"))),
+        "integrationCount": integration_count,
     }

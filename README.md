@@ -43,6 +43,7 @@ engineering/              Brownfield-compatible repository learning domain
 runtime/                  profiles, adapter descriptors, stable runtime templates
 tooling/                  implementation-tool boundary only
 examples/                 project/runtime fixtures
+integrations/             Harness-owned Brownfield sidecars and scenario fixtures
 generated/                rebuildable registries, catalogs, runtime packs
 src/evolution_harness/    unified implementation
 src/engineering_cli/      engineering compatibility facade
@@ -78,6 +79,18 @@ The four canonical design kinds are `PRINCIPLE`, `FRAMEWORK`, `SKILL`, and `WORK
 
 `design-state.yaml` is a routing/control plane. CLOSED topics are explicit and default to `DO_NOT_REOPEN`. An explicit represented reopen signal only produces review-required state; the resolver never mutates CLOSED → OPEN.
 
+Existing repositories can also be registered without receiving Harness control files. A Harness-owned integration directory contains `integration.yaml`, an explicit authority map, a sidecar control plane, and executable scenarios. Source access is read-only and allowlist-based; excluded paths are rejected before reading. Canonical and specialized project facts become a fingerprinted Authority Snapshot, while derived reports may be referenced but cannot own facts.
+
+```text
+integrations/<id>/
+├── integration.yaml
+├── authority-map.yaml
+├── control-plane/.agent-evolution/
+└── scenarios/
+```
+
+The sidecar's stage describes the integration work, not the external project's delivery stage. External project state remains in its own authority files and always wins over shared capability guidance.
+
 ## Deterministic resolver
 
 ```text
@@ -112,6 +125,8 @@ generated/projections/chatgpt/<project>/
 
 Codex pack uses `repository-guidance.md` and `resolved-task-context.md`, also includes `resolved-context.json`, and never overwrites project `AGENTS.md`.
 
+Projection installation is manifest-based and dry-run by default. Only resolved generated `skills/*/SKILL.md` files can map to repo-local `.agents/skills/`; existing unmanaged skills, changed managed files, unsafe paths, and missing ownership evidence fail closed. `AGENTS.md` is outside the installer write set. Apply and uninstall both require explicit `--apply`.
+
 ## Governed learning
 
 Experience stores distilled behavior/correction/impact plus a source reference; it has no transcript field. Candidate promotion is dry-review by default and requires explicit approval metadata plus required PASS eval results. `BROADEN_SCOPE` additionally requires independent evidence, cross-case analysis, counterexample review, and a transfer eval. `SUPERSEDE` requires the proposed capability to explicitly point to the superseded target.
@@ -140,6 +155,13 @@ harness candidate create
 harness candidate promote
 harness eval run
 harness projection build
+harness projection install --pack <pack> --target <project>
+harness projection uninstall --target <project>
+harness integration inspect --integration <sidecar> --source <project>
+harness integration lock --integration <sidecar>
+harness integration resolve --integration <sidecar> --source <project> --explain
+harness integration projection --integration <sidecar> --source <project>
+harness integration scenario --integration <sidecar> --source <project> --scenario <file>
 harness discussion materialize
 harness discussion route-next
 harness handoff build
@@ -182,4 +204,4 @@ Eval execution records manual/fixture results rather than using an automatic mod
 
 ## Next step
 
-Do not expand schema breadth first. Apply this package to the real Brownfield checkout and dogfood it in this order: Agent-Native Software Engineering → Agent Continuous Learning → Payment Platform. Measure resolver selection quality, context size, CLOSED-topic preservation, applicability, runtime consistency, feedback quality, false-positive learning, mega-skill pressure, model sensitivity, and human-authority friction before adding automation.
+Do not expand schema breadth first. Register Brownfield projects through Harness-owned, read-only sidecars and validate neutral fixtures before any project-local installation. Measure resolver selection quality, context size, CLOSED-topic preservation, applicability, runtime consistency, feedback quality, false-positive learning, mega-skill pressure, model sensitivity, and human-authority friction before adding automation.

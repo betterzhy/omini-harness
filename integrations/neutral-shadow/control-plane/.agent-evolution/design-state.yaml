@@ -1,0 +1,40 @@
+schemaVersion: project-design-state/v1
+project: neutral-shadow
+currentStage: BOUNDARY_CLOSURE
+topics:
+  - topicId: api-boundary
+    status: CLOSED
+    scope:
+      domain: neutral-fixture
+      concern: external-api
+    closedAt: '2026-08-12T00:00:00Z'
+    closedBy: HUMAN_AUTHORITY
+    baselineReference: baseline://external-project/api-boundary/1.0
+    reopenConditions:
+      - NEW_EVIDENCE
+      - REQUIREMENT_CHANGE
+      - EXPLICIT_AUTHORITY
+  - topicId: runtime-integration
+    status: IN_PROGRESS
+    scope:
+      domain: neutral-fixture
+      concern: agent-runtime
+    dependsOn:
+      - api-boundary
+baselines:
+  - baseline://external-project/api-boundary/1.0
+assumptions: []
+openDecisions:
+  - decision://external-project/runtime-install-approval
+nextTopicCandidates: []
+projectAuthorityReferences:
+  - status.md
+  - release-control.yaml
+  - decisions.md
+protectedDecisions:
+  - baseline://external-project/api-boundary/1.0
+projectConstraints:
+  - reference: decisions.md#api-boundary
+    conflictType: PROJECT_BOUNDARY_OVERRIDES_GENERIC_REVIEW
+    conflictsWithCapabilities:
+      - skill:agent-design:architecture-review

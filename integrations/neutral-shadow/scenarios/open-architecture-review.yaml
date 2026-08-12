@@ -1,0 +1,20 @@
+schemaVersion: project-integration-scenario/v1
+id: neutral-open-architecture-review
+intent: architecture-review
+topic: runtime-integration
+requestedOutput: review findings
+runtime: CODEX
+expected:
+  authorityGate: PASS
+  topicGuard: OPEN_OR_IN_PROGRESS
+  facts:
+    permission.development: DENY
+    permission.stage4: CONSUMED
+    permission.stage5: DENY
+  selectedCapabilities:
+    - framework:agent-design:authority-analysis
+    - framework:agent-design:lifecycle-analysis
+    - principle:agent-design:project-truth-over-generic-guidance
+    - skill:agent-design:architecture-review
+  conflictResolutionRules:
+    - PROJECT_TRUTH_WINS

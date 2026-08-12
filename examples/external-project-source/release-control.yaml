@@ -1,0 +1,3 @@
+release:
+  stage4: CONSUMED
+  stage5: DENY

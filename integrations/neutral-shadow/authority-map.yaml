@@ -1,0 +1,70 @@
+schemaVersion: project-authority-map/v1
+authorities:
+  - id: global-status
+    path: status.md
+    format: MARKDOWN_KV
+    role: CANONICAL
+    required: true
+    owns:
+      - project.stage
+      - permission.development
+    selectors:
+      project.stage:
+        key: ProjectStage
+        required: true
+      permission.development:
+        key: DevelopmentAuthorization
+        required: true
+        normalization:
+          rules:
+            - operator: PREFIX
+              expected: 'YES'
+              value: ALLOW
+            - operator: PREFIX
+              expected: 'NO'
+              value: DENY
+          default: UNKNOWN
+  - id: release-control
+    path: release-control.yaml
+    format: YAML
+    role: SPECIALIZED
+    required: true
+    owns:
+      - permission.stage4
+      - permission.stage5
+    selectors:
+      permission.stage4:
+        key: release.stage4
+        required: true
+      permission.stage5:
+        key: release.stage5
+        required: true
+  - id: api-boundary-decision
+    path: decisions.md
+    format: MARKDOWN_KV
+    role: CANONICAL
+    required: true
+    owns:
+      - topic.api-boundary.status
+      - topic.api-boundary.baseline
+    selectors:
+      topic.api-boundary.status:
+        key: ApiBoundaryStatus
+        required: true
+      topic.api-boundary.baseline:
+        key: ApiBoundaryBaseline
+        required: true
+  - id: status-summary
+    path: reports/status-summary.json
+    format: JSON
+    role: DERIVED
+    required: false
+    owns: []
+    selectors: {}
+requiredFacts:
+  - project.stage
+  - permission.development
+  - permission.stage4
+  - permission.stage5
+  - topic.api-boundary.status
+  - topic.api-boundary.baseline

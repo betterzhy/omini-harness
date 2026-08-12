@@ -11,7 +11,7 @@ from pathlib import Path
 def _copy_repo(tmp_path: Path) -> tuple[Path, Path]:
     source = Path(__file__).parents[1]
     root = tmp_path / "repo"
-    for name in ["core", "design", "engineering", "runtime", "examples", "contracts", "policies", "skills", "verification"]:
+    for name in ["core", "design", "engineering", "runtime", "examples", "integrations", "contracts", "policies", "skills", "verification"]:
         src = source / name
         if src.exists():
             shutil.copytree(src, root / name)
@@ -37,6 +37,7 @@ def test_structural_validation_separates_mechanical_gate_from_semantic_quality(t
     assert report["structuralGate"] == "PASS"
     assert report["semanticGate"] == "NOT_ASSERTED_BY_CI"
     assert report["issues"] == []
+    assert report["integrationCount"] == 1
 
 
 def test_structural_validation_detects_generated_registry_drift(tmp_path: Path):

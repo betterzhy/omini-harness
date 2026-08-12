@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-evolution.local/core/schemas/project-integration-scenario.schema.json",
+  "type": "object",
+  "required": ["schemaVersion", "id", "intent", "topic", "requestedOutput", "runtime", "expected"],
+  "properties": {
+    "schemaVersion": {"const": "project-integration-scenario/v1"},
+    "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$"},
+    "intent": {"type": "string", "minLength": 1},
+    "topic": {"type": "string", "minLength": 1},
+    "requestedOutput": {"type": "string", "minLength": 1},
+    "runtime": {"enum": ["CHATGPT", "CODEX"]},
+    "explicitStage": {"type": "string", "minLength": 1},
+    "reopenSignal": {"type": "string", "minLength": 1},
+    "expected": {
+      "type": "object",
+      "required": ["authorityGate"],
+      "properties": {
+        "authorityGate": {"enum": ["PASS", "NO_GO"]},
+        "topicGuard": {"type": "string", "minLength": 1},
+        "facts": {"type": "object", "additionalProperties": {"type": "string"}},
+        "selectedCapabilities": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1},
+          "uniqueItems": true
+        },
+        "excludedCapabilities": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1},
+          "uniqueItems": true
+        },
+        "conflictResolutionRules": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1},
+          "uniqueItems": true
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

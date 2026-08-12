@@ -26,6 +26,7 @@ from .projection import build_projection_pack, check_projection_freshness
 from .registry import build_all_registries, build_design_registry
 from .resolver import resolve_design_context
 from .revalidation import check_revalidation
+from .scenario import run_integration_scenario
 
 
 def _load_yaml(path: str | Path) -> dict[str, Any]:
@@ -114,6 +115,7 @@ def build_parser() -> argparse.ArgumentParser:
     q = s.add_parser("lock"); q.add_argument("--integration", required=True); q.add_argument("--check", action="store_true"); _add_format(q)
     q = s.add_parser("resolve"); _add_integration_resolution_args(q); q.add_argument("--explain", action="store_true"); _add_format(q)
     q = s.add_parser("projection"); _add_integration_resolution_args(q); q.add_argument("--check", action="store_true"); _add_format(q)
+    q = s.add_parser("scenario"); q.add_argument("--integration", required=True); q.add_argument("--source", required=True); q.add_argument("--scenario", required=True); _add_format(q)
     p = sub.add_parser("discussion"); s = p.add_subparsers(dest="action", required=True)
     q = s.add_parser("materialize"); _add_resolution_args(q); q.add_argument("--persist"); _add_format(q)
     q = s.add_parser("route-next"); q.add_argument("--project", required=True); q.add_argument("--current-topic", required=True); _add_format(q)
@@ -245,6 +247,11 @@ def main(argv=None) -> int:
                 reopen_signal=args.reopen_signal,
             )
             return _emit(data, fmt=fmt, command=command)
+        if args.command == "integration" and args.action == "scenario":
+            data = run_integration_scenario(
+                root, Path(args.integration), Path(args.source), Path(args.scenario)
+            )
+            return _emit(data, fmt=fmt, ok=data["gate"] == "PASS", command=command)
         if args.command == "discussion" and args.action == "materialize":
             resolved = _resolve(root, args); text = materialize_discussion_contract(root, Path(args.project), resolved, persist_path=Path(args.persist) if args.persist else None); return _emit(text, fmt=fmt, command=command)
         if args.command == "discussion" and args.action == "route-next":

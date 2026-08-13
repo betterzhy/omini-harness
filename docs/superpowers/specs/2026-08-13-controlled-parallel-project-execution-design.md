@@ -281,8 +281,8 @@ One project integration controller processes queued lane candidates in determini
 
 For each candidate the controller:
 
-1. acquires the exclusive integration lease and records `expectedIntegrationHead`;
-2. verifies candidate identity, original lane receipts, fencing token, and replay status;
+1. submits a caller-stable `integrationRequestId`, acquires the exclusive integration lease, and records a coordinator-issued `integrationAttemptId` plus `expectedIntegrationHead`;
+2. verifies candidate identity, original lane receipts, fencing token, request/attempt replay status, and fresh authority for this attempt;
 3. compares the candidate footprint with every change integrated since `batchBaseCommit`;
 4. creates a dedicated staging ref and isolated integration worktree from `expectedIntegrationHead`;
 5. applies or rebases the candidate only in staging, without force operations or target-branch mutation;
@@ -299,13 +299,17 @@ For each candidate the controller:
 
 `reviewBindingDigest` is canonical JSON over the integration candidate commit and tree, `expectedIntegrationHead`, authority snapshot, complete `envelopeDigest` and expiry status, authorization-source digest, conflict-policy version, contract-registry digest, dependency-graph digest, lane and observed WriteSets, generated-artifact manifest, gate definitions, and gate receipts. The independent review receipt is valid only for that exact digest. Any mismatch after review—including a narrower or revoked authorization—abandons the prepared transaction; a refreshed transaction must rerun generation, all gates, and independent review before it can publish.
 
-The integration idempotency key is `(projectExecutionKey, laneCandidateCommit, expectedIntegrationHead, conflictPolicyVersion)`. Replaying a prepared or published key resumes or returns its recorded outcome; it never reapplies the candidate, regenerates aggregates, or publishes twice. A new target head produces a new refresh decision, not an implicit retry.
+`integrationRequestId` is supplied by the caller and remains stable only for retries of one requested integration generation. Under the project-scoped compare-and-swap, the coordinator maps `(projectExecutionKey, integrationRequestId)` to exactly one append-only transaction, allocates a monotonically increasing generation, and derives `integrationAttemptId` from the project key, request ID, generation, lane candidate, expected head, policy version, and initial review-binding inputs. A crash before the caller receives the ID is retried with the same request ID and returns the already recorded attempt.
+
+The integration idempotency key is `(projectExecutionKey, integrationAttemptId)`. Replaying a prepared or published attempt resumes or returns its recorded outcome; it never reapplies the candidate, regenerates aggregates, or publishes twice. A `STALE` or aborted attempt is terminal and its key permanently returns that exact outcome; its receipts are append-only and cannot be overwritten or reopened.
+
+Creating a replacement after `STALE`, changed authority, or a changed target head requires a new `integrationRequestId`. The coordinator first revalidates current project authority, envelope, lane lease, candidate, head, and recovery state, then allocates a new `integrationAttemptId`. The new attempt has no inherited generated artifacts, gates, or review receipt and must execute the complete transaction from staging. Reusing an old request ID with different inputs is rejected as an idempotency conflict.
 
 The integration journal records `PREPARED`, `STAGED`, `REVIEWED`, and `PUBLISHED` commit points. After a crash:
 
 - `PREPARED`, `STAGED`, or `REVIEWED` blocks other integration and new admission until the staging ref, worktree, candidate identity, and authority snapshot are audited; recovery may resume the same idempotency key or record a project-authorized abort;
 - `PUBLISHED` is complete only when the target ref equals the journaled new commit; that state is finalized idempotently;
-- an unexpected target ref, missing object, invalid receipt, or ambiguous journal marks the transaction `STALE` and forbids automatic publication.
+- an unexpected target ref, missing object, invalid receipt, or ambiguous journal marks that immutable attempt `STALE` and forbids automatic publication or reopening under the same request ID.
 
 A changed Git base alone does not require user intervention. If the integrated changes are proven disjoint and the relevant authority inputs remain equivalent, the controller may refresh the candidate mechanically in a new transaction and rerun gates. Any semantic conflict, authority change, WriteSet expansion, or failed gate returns the Slice to `STALE`, `BLOCKED`, or `NO_GO` as appropriate.
 
@@ -334,7 +338,7 @@ The Harness adds deterministic, schema-validated projections conceptually equiva
 - `authorization-decision.json` (`controlled-authorization-decision/v1`): allowed action classes, denied boundaries, and expiry;
 - `lease-receipt.json` (`controlled-execution-lease/v1`): idempotency key, full footprint, fencing token, transition, and recovery status;
 - `integration-refresh.json` (`controlled-integration-refresh/v1`): candidate freshness, relevant changes, and required next state;
-- `integration-transaction.json` (`controlled-integration-transaction/v1`): expected head, staging identity, commit point, and publication receipt.
+- `integration-transaction.json` (`controlled-integration-transaction/v1`): immutable request/attempt identity and generation, expected head, staging identity, commit point, and publication receipt.
 
 Each output records source identities and content digests. JSON output ordering and identifiers are deterministic. Human-readable explanations are projections of the same structured reason codes.
 
@@ -423,7 +427,7 @@ Phase 1A acceptance requires tests for:
 
 Phase 1B acceptance additionally requires concurrent-process tests for cross-target, cross-plan, cross-batch, project-wide lane-cap enforcement, replay, snapshot change, policy change, fencing, lease retention through `INTEGRATING`, crash, state loss, and project-authorized recovery. WriteSet tests must cover tracked and untracked breaches, symlink ancestor/final-target/path-swap escape attempts, unavailable process-tree sandbox rejection, in-flight fencing, project-wide cross-batch freeze, `observedWriteSet` recomputation, affected-lane staleness, and fresh-plan-only recovery.
 
-Phase 1C acceptance additionally requires competing integration-controller, changed-head, apply failure, generated-artifact failure, review failure, authority and every envelope field changing after review, expiry/revocation after review, `reviewBindingDigest` mismatch, mandatory gate/review rerun, crash at every journal commit point, replay-before-publication, replay-after-publication, atomic ref compare-and-swap, and target-ref-unchanged negatives.
+Phase 1C acceptance additionally requires competing integration-controller, changed-head, apply failure, generated-artifact failure, review failure, authority and every envelope field changing after review, expiry/revocation after review, `reviewBindingDigest` mismatch, mandatory gate/review rerun, crash before and after attempt-ID delivery and at every journal commit point, same-request replay, same request with changed inputs, same candidate/head/policy with a new authorized generation, terminal-`STALE` immutability, replay-before-publication, replay-after-publication, atomic ref compare-and-swap, and target-ref-unchanged negatives.
 
 Later Pay-Nexus acceptance additionally requires exact read allowlists, zero unauthorized project writes, authority-source freshness, project-specific negative scenarios, and independent review of both the lane candidate and the serial integration candidate.
 

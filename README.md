@@ -159,6 +159,7 @@ harness show
 harness registry build
 harness catalog build
 harness resolve --explain
+harness planning plan --request <file>
 harness project bind
 harness project lock
 harness experience capture
@@ -214,6 +215,8 @@ PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q
 ## Deliberate MVP limits
 
 Eval execution records manual/fixture results rather than using an automatic model judge. Project conflict detection relies on explicit constraints rather than reading every baseline semantically. Version resolution is exact/highest-current, not a package-manager range solver. Revalidation identifies due/triggered assets but does not perform revalidation. Runtime packs are generated for explicit installation; no ChatGPT project configuration API or Custom GPT rewriting is invoked.
+
+Controlled planning is a deterministic Phase 1A projection only. It validates explicit authority-backed descriptors as input and emits a provisional, stdout-only plan. It does not discover missing concurrency facts, admit work, create worktrees, acquire leases, execute Slices, integrate commits, or write a registered project. Projects without the controlled model retain their existing serial flow.
 
 ## Next step
 

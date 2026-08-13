@@ -9,6 +9,8 @@ import yaml
 
 from .assurance import structural_validate
 from .catalog import build_all_catalogs
+from .controlled_inputs import load_planning_request
+from .controlled_planner import build_provisional_execution_plan
 from .discussion import materialize_discussion_contract, route_next_topics
 from .evals import record_eval_result
 from .feedback import capture_feedback_as_experience
@@ -101,6 +103,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("resolve"); _add_resolution_args(p); p.add_argument("--explain", action="store_true"); _add_format(p)
 
+    p = sub.add_parser("planning"); s = p.add_subparsers(dest="action", required=True)
+    q = s.add_parser("plan"); q.add_argument("--request", required=True); _add_format(q)
+
     p = sub.add_parser("project"); s = p.add_subparsers(dest="action", required=True)
     q = s.add_parser("lock"); q.add_argument("--project", required=True); q.add_argument("--check", action="store_true"); _add_format(q)
     q = s.add_parser("bind"); q.add_argument("--project", required=True); q.add_argument("--profile", action="append"); q.add_argument("--capability", action="append"); q.add_argument("--extension", action="append"); q.add_argument("--disable", action="append"); _add_format(q)
@@ -180,6 +185,11 @@ def main(argv=None) -> int:
             if not args.explain:
                 data = dict(data); data.pop("explain", None)
             return _emit(data, fmt=fmt, command=command)
+        if args.command == "planning" and args.action == "plan":
+            request = load_planning_request(root, Path(args.request))
+            return _emit(
+                build_provisional_execution_plan(root, request), fmt=fmt, command=command
+            )
         if args.command == "project" and args.action == "lock":
             expected = build_capability_lock(root, Path(args.project), write=not args.check)
             path = Path(args.project) / ".agent-evolution/capabilities.lock.yaml"

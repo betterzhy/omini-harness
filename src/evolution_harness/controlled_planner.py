@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import heapq
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -18,6 +19,19 @@ from .schema import SchemaStore
 _DECISION_SCHEMA = "core/schemas/controlled-authorization-decision.schema.json"
 _REPORT_SCHEMA = "core/schemas/controlled-conflict-report.schema.json"
 _PLAN_SCHEMA = "core/schemas/controlled-execution-plan.schema.json"
+_PROTECTED_ACTION_CLASSES = frozenset(
+    {
+        "action:database-write",
+        "action:migration-apply",
+        "action:destructive",
+        "action:production-access",
+        "action:landing",
+        "action:wave-entry",
+        "action:push",
+        "action:release",
+        "action:deploy",
+    }
+)
 
 
 def _stable_id(prefix: str, payload: Any) -> str:
@@ -46,7 +60,10 @@ def _authorization_reasons(
         reasons.append("SLICE_CLASS_NOT_PERMITTED")
     if descriptor["authorizationClass"] not in envelope["permittedActionClasses"]:
         reasons.append("ACTION_CLASS_NOT_PERMITTED")
-    if descriptor["authorizationClass"] in envelope["deniedActions"]:
+    if (
+        descriptor["authorizationClass"] in _PROTECTED_ACTION_CLASSES
+        or descriptor["authorizationClass"] in envelope["deniedActions"]
+    ):
         reasons.append("ACTION_EXPLICITLY_DENIED")
     declared_writes = descriptor["exactWriteSet"] + descriptor["ephemeralWriteSet"]
     if any(
@@ -105,6 +122,8 @@ def build_authorization_decision(
 
 def _dependency_depths(descriptors: list[dict[str, Any]]) -> dict[str, int]:
     by_id = {item["sliceId"]: item for item in descriptors}
+    dependents = {slice_id: [] for slice_id in by_id}
+    remaining_dependencies: dict[str, int] = {}
     for descriptor in descriptors:
         for dependency_id in descriptor["dependencySet"]:
             if dependency_id not in by_id:
@@ -112,26 +131,42 @@ def _dependency_depths(descriptors: list[dict[str, Any]]) -> dict[str, int]:
                     "UNKNOWN_DEPENDENCY",
                     f"unknown dependency {dependency_id} for {descriptor['sliceId']}",
                 )
+            dependents[dependency_id].append(descriptor["sliceId"])
+        remaining_dependencies[descriptor["sliceId"]] = len(
+            descriptor["dependencySet"]
+        )
 
-    depths: dict[str, int] = {}
-    visiting: set[str] = set()
-
-    def visit(slice_id: str) -> int:
-        if slice_id in visiting:
-            raise ControlledPlanningError(
-                "DEPENDENCY_CYCLE", f"dependency cycle includes {slice_id}"
+    for dependent_ids in dependents.values():
+        dependent_ids.sort()
+    ready = [
+        slice_id
+        for slice_id, count in remaining_dependencies.items()
+        if count == 0
+    ]
+    heapq.heapify(ready)
+    depths = {slice_id: 0 for slice_id in by_id}
+    processed = 0
+    while ready:
+        slice_id = heapq.heappop(ready)
+        processed += 1
+        for dependent_id in dependents[slice_id]:
+            depths[dependent_id] = max(
+                depths[dependent_id], depths[slice_id] + 1
             )
-        if slice_id in depths:
-            return depths[slice_id]
-        visiting.add(slice_id)
-        dependencies = by_id[slice_id]["dependencySet"]
-        depth = 0 if not dependencies else 1 + max(visit(item) for item in dependencies)
-        visiting.remove(slice_id)
-        depths[slice_id] = depth
-        return depth
+            remaining_dependencies[dependent_id] -= 1
+            if remaining_dependencies[dependent_id] == 0:
+                heapq.heappush(ready, dependent_id)
 
-    for slice_id in sorted(by_id):
-        visit(slice_id)
+    if processed != len(by_id):
+        cycle_anchor = min(
+            slice_id
+            for slice_id, count in remaining_dependencies.items()
+            if count > 0
+        )
+        raise ControlledPlanningError(
+            "DEPENDENCY_CYCLE",
+            f"dependency cycle prevents ordering at {cycle_anchor}",
+        )
     return depths
 
 

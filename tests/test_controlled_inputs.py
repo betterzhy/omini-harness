@@ -12,6 +12,7 @@ from evolution_harness.controlled_inputs import (
     normalize_authorization_envelope,
     normalize_planning_request,
     normalize_slice_descriptor,
+    parse_rfc3339,
 )
 from evolution_harness.hashing import canonical_json_bytes, sha256_bytes
 from evolution_harness.schema import SchemaValidationError
@@ -122,12 +123,13 @@ def test_authority_set_digest_mismatch_is_rejected(repository_root, controlled_f
     assert exc.value.code == "AUTHORITY_SET_DIGEST_MISMATCH"
 
 
-@pytest.mark.parametrize("field", ["id", "path"])
-def test_duplicate_authority_identity_is_rejected(repository_root, controlled_factory, field):
+def test_duplicate_authority_id_is_rejected_when_path_is_unique(
+    repository_root, controlled_factory
+):
     request = controlled_factory.request(controlled_factory.descriptor())
     records = request["authoritySnapshot"]["authorities"]
     records.append(copy.deepcopy(records[0]))
-    records[-1][field] = records[0][field]
+    records[-1]["path"] = "authority/duplicate-id-only.yaml"
     request["authoritySnapshot"]["sourceRevision"]["authoritySetDigest"] = "sha256:" + sha256_bytes(
         canonical_json_bytes(records)
     )
@@ -135,6 +137,93 @@ def test_duplicate_authority_identity_is_rejected(repository_root, controlled_fa
     with pytest.raises(ControlledPlanningError) as exc:
         normalize_planning_request(repository_root, request)
     assert exc.value.code == "AUTHORITY_RECORD_DUPLICATE"
+
+
+def test_duplicate_authority_path_is_rejected_when_id_is_unique(
+    repository_root, controlled_factory
+):
+    request = controlled_factory.request(controlled_factory.descriptor())
+    records = request["authoritySnapshot"]["authorities"]
+    records.append(copy.deepcopy(records[0]))
+    records[-1]["id"] = "authority-duplicate-path-only"
+    request["authoritySnapshot"]["sourceRevision"]["authoritySetDigest"] = "sha256:" + sha256_bytes(
+        canonical_json_bytes(records)
+    )
+    _refresh_snapshot(request["authoritySnapshot"])
+    with pytest.raises(ControlledPlanningError) as exc:
+        normalize_planning_request(repository_root, request)
+    assert exc.value.code == "AUTHORITY_RECORD_DUPLICATE"
+
+
+def test_canonical_authority_path_alias_collision_is_rejected_after_raw_digest_verification(
+    repository_root, controlled_factory
+):
+    request = controlled_factory.request(controlled_factory.descriptor())
+    records = request["authoritySnapshot"]["authorities"]
+    records.append(
+        {
+            "id": "authority-slice-alias",
+            "path": "authority//slice-neutral-a.yaml",
+            "role": "CANONICAL",
+            "sha256": "7" * 64,
+        }
+    )
+    request["authoritySnapshot"]["sourceRevision"]["authoritySetDigest"] = "sha256:" + sha256_bytes(
+        canonical_json_bytes(records)
+    )
+    _refresh_snapshot(request["authoritySnapshot"])
+
+    with pytest.raises(ControlledPlanningError) as exc:
+        normalize_planning_request(repository_root, request)
+
+    assert exc.value.code == "AUTHORITY_RECORD_DUPLICATE"
+
+
+def test_raw_authority_set_digest_mismatch_precedes_canonical_alias_collision(
+    repository_root, controlled_factory
+):
+    request = controlled_factory.request(controlled_factory.descriptor())
+    request["authoritySnapshot"]["authorities"].append(
+        {
+            "id": "authority-slice-alias",
+            "path": "authority//slice-neutral-a.yaml",
+            "role": "CANONICAL",
+            "sha256": "7" * 64,
+        }
+    )
+    _refresh_snapshot(request["authoritySnapshot"])
+
+    with pytest.raises(ControlledPlanningError) as exc:
+        normalize_planning_request(repository_root, request)
+
+    assert exc.value.code == "AUTHORITY_SET_DIGEST_MISMATCH"
+
+
+def test_canonical_authority_paths_bind_without_rewriting_the_signed_snapshot(
+    repository_root, controlled_factory
+):
+    request = controlled_factory.request(controlled_factory.descriptor())
+    snapshot = request["authoritySnapshot"]
+    snapshot["authorities"][0]["path"] = "authority//portfolio.yaml"
+    snapshot["authorities"][1]["path"] = "authority//slice-neutral-a.yaml"
+    for fact in snapshot["facts"].values():
+        fact["sourcePath"] = "authority//portfolio.yaml"
+    snapshot["sourceRevision"]["authoritySetDigest"] = "sha256:" + sha256_bytes(
+        canonical_json_bytes(snapshot["authorities"])
+    )
+    _refresh_snapshot(snapshot)
+
+    normalized = normalize_planning_request(repository_root, request)
+
+    assert normalized["authoritySnapshot"]["authorities"][0]["path"] == (
+        "authority//portfolio.yaml"
+    )
+    assert normalized["authoritySnapshot"]["authorities"][1]["path"] == (
+        "authority//slice-neutral-a.yaml"
+    )
+    assert normalized["authoritySnapshot"]["facts"]["controlled_planning.mode"][
+        "sourcePath"
+    ] == "authority//portfolio.yaml"
 
 
 def test_missing_authority_fact_is_rejected(repository_root, controlled_factory):
@@ -199,6 +288,41 @@ def test_authorization_interval_must_be_positive(repository_root, controlled_fac
     with pytest.raises(ControlledPlanningError) as exc:
         normalize_planning_request(repository_root, request)
     assert exc.value.code == "AUTHORIZATION_INTERVAL_INVALID"
+
+
+@pytest.mark.parametrize(
+    "timestamp",
+    [
+        "2026-08-13 12:00:00+00:00",
+        "20260813T120000+00:00",
+        "2026-W33-4T12:00:00+00:00",
+    ],
+)
+def test_planning_request_rejects_non_rfc3339_timestamp_syntax(
+    repository_root, controlled_factory, timestamp
+):
+    request = controlled_factory.request(
+        controlled_factory.descriptor(), asOf=timestamp
+    )
+
+    with pytest.raises(ControlledPlanningError) as exc:
+        normalize_planning_request(repository_root, request)
+
+    assert exc.value.code == "TIMESTAMP_INVALID"
+
+
+@pytest.mark.parametrize(
+    ("timestamp", "expected_isoformat"),
+    [
+        ("2026-08-13T12:00:00Z", "2026-08-13T12:00:00+00:00"),
+        ("2026-08-13T12:00:00.123456Z", "2026-08-13T12:00:00.123456+00:00"),
+        ("2026-08-13T12:00:00+08:30", "2026-08-13T12:00:00+08:30"),
+    ],
+)
+def test_parse_rfc3339_retains_valid_z_fraction_and_offset(
+    timestamp, expected_isoformat
+):
+    assert parse_rfc3339(timestamp).isoformat() == expected_isoformat
 
 
 def test_normalizes_authorization_envelope_sets(repository_root, controlled_factory):

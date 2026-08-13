@@ -31,6 +31,52 @@ def _entry(items, slice_id):
     return next(item for item in items if item["sliceId"] == slice_id)
 
 
+def _deep_dependency_chain(controlled_factory, size, *, cycle=False):
+    descriptors = []
+    for index in range(size):
+        slice_id = f"slice:node-{index:04d}"
+        if index == size - 1:
+            dependencies = ["slice:node-0000"] if cycle else []
+        else:
+            dependencies = [f"slice:node-{index + 1:04d}"]
+        descriptors.append(
+            _descriptor(
+                controlled_factory,
+                slice_id,
+                state="READY" if index == 0 else "CLOSED",
+                dependencySet=dependencies,
+            )
+        )
+    return descriptors
+
+
+def _singleton_conflict_report(
+    repository_root,
+    *,
+    project_id,
+    authority_snapshot_fingerprint,
+    conflict_policy_version,
+    descriptors,
+):
+    del repository_root
+    return {
+        "schemaVersion": "controlled-conflict-report/v1",
+        "projectId": project_id,
+        "authoritySnapshotFingerprint": authority_snapshot_fingerprint,
+        "conflictPolicyVersion": conflict_policy_version,
+        "footprints": [],
+        "edges": [],
+        "clusters": [
+            {
+                "clusterId": f"conflict-cluster:{index:024x}",
+                "sliceIds": [descriptor["sliceId"]],
+            }
+            for index, descriptor in enumerate(descriptors)
+        ],
+        "conflictReportId": "conflict-report:" + "f" * 24,
+    }
+
+
 def test_three_disjoint_ready_slices_are_proposed_in_deterministic_order(
     repository_root, controlled_factory
 ):
@@ -138,6 +184,88 @@ def test_dependency_cycle_fails_closed(repository_root, controlled_factory):
     with pytest.raises(ControlledPlanningError) as caught:
         build_provisional_execution_plan(repository_root, controlled_factory.request(*descriptors))
     assert caught.value.code == "DEPENDENCY_CYCLE"
+
+
+def test_1100_node_dependency_chain_has_a_deterministic_provisional_outcome(
+    repository_root, controlled_factory, monkeypatch
+):
+    descriptors = _deep_dependency_chain(controlled_factory, 1100)
+    # The conflict contract intentionally projects every transitive dependency
+    # edge. Isolate that quadratic output so this regression measures the
+    # planner's deep traversal and public plan result.
+    monkeypatch.setattr(
+        "evolution_harness.controlled_planner.build_conflict_report",
+        _singleton_conflict_report,
+    )
+
+    plan = build_provisional_execution_plan(
+        repository_root,
+        controlled_factory.request(*descriptors),
+    )["executionPlan"]
+
+    assert [item["sliceId"] for item in plan["proposedAdmissions"]] == [
+        "slice:node-0000"
+    ]
+    assert plan["queued"] == []
+    assert len(plan["blocked"]) == 1099
+
+
+def test_1100_node_dependency_cycle_fails_closed_without_recursion_error(
+    repository_root, controlled_factory
+):
+    descriptors = _deep_dependency_chain(controlled_factory, 1100, cycle=True)
+
+    with pytest.raises(ControlledPlanningError) as caught:
+        build_provisional_execution_plan(
+            repository_root,
+            controlled_factory.request(*descriptors),
+        )
+
+    assert caught.value.code == "DEPENDENCY_CYCLE"
+
+
+@pytest.mark.parametrize(
+    "action_class",
+    [
+        "action:database-write",
+        "action:migration-apply",
+        "action:destructive",
+        "action:production-access",
+        "action:landing",
+        "action:wave-entry",
+        "action:push",
+        "action:release",
+        "action:deploy",
+    ],
+)
+def test_protected_actions_are_hard_denied_even_when_the_envelope_permits_them(
+    repository_root, controlled_factory, action_class
+):
+    descriptor = _descriptor(
+        controlled_factory,
+        "slice:protected",
+        authorizationClass=action_class,
+    )
+    envelope = controlled_factory.envelope(
+        permittedActionClasses=[action_class],
+        deniedActions=[],
+    )
+
+    result = build_provisional_execution_plan(
+        repository_root,
+        controlled_factory.request(descriptor, envelope=envelope),
+    )
+
+    expected_rejection = {
+        "sliceId": "slice:protected",
+        "reasons": ["ACTION_EXPLICITLY_DENIED"],
+    }
+    assert result["authorizationDecision"]["gate"] == "PASS"
+    assert result["authorizationDecision"]["decisions"] == [
+        {**expected_rejection, "result": "REJECT"}
+    ]
+    assert result["executionPlan"]["proposedAdmissions"] == []
+    assert result["executionPlan"]["rejected"] == [expected_rejection]
 
 
 @pytest.mark.parametrize(

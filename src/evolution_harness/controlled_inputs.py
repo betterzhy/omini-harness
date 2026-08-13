@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -26,6 +27,9 @@ PATH_FIELDS = ("exactWriteSet", "ephemeralWriteSet", "authorityReferences")
 _DESCRIPTOR_SCHEMA = "core/schemas/controlled-slice-descriptor.schema.json"
 _ENVELOPE_SCHEMA = "core/schemas/controlled-authorization-envelope.schema.json"
 _REQUEST_SCHEMA = "core/schemas/controlled-planning-request.schema.json"
+_RFC3339_PATTERN = re.compile(
+    r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$"
+)
 _FACT_IDS = (
     "controlled_planning.mode",
     "controlled_planning.batch_base_commit",
@@ -104,8 +108,12 @@ def dependency_graph_digest(descriptors: list[dict[str, Any]]) -> str:
 
 
 def parse_rfc3339(value: str) -> datetime:
+    if not isinstance(value, str) or _RFC3339_PATTERN.fullmatch(value) is None:
+        raise ControlledPlanningError("TIMESTAMP_INVALID", f"invalid RFC 3339 timestamp: {value}")
     try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(
+            value[:-1] + "+00:00" if value.endswith("Z") else value
+        )
     except (TypeError, ValueError) as exc:
         raise ControlledPlanningError("TIMESTAMP_INVALID", f"invalid timestamp: {value}") from exc
     if parsed.utcoffset() is None:
@@ -133,7 +141,9 @@ def normalize_authorization_envelope(repository_root: Path, value: dict[str, Any
     return normalized
 
 
-def _validate_snapshot(snapshot: dict[str, Any], batch_base_commit: str) -> None:
+def _validate_snapshot(
+    snapshot: dict[str, Any], batch_base_commit: str
+) -> dict[str, dict[str, Any]]:
     fingerprint = _sha256({key: value for key, value in snapshot.items() if key != "snapshotFingerprint"})
     if snapshot["snapshotFingerprint"] != fingerprint:
         raise ControlledPlanningError("AUTHORITY_SNAPSHOT_FINGERPRINT_MISMATCH", "snapshot fingerprint mismatch")
@@ -142,10 +152,13 @@ def _validate_snapshot(snapshot: dict[str, Any], batch_base_commit: str) -> None
     if revision["authoritySetDigest"] != expected_set_digest:
         raise ControlledPlanningError("AUTHORITY_SET_DIGEST_MISMATCH", "authority set digest mismatch")
     authority_ids = [record["id"] for record in snapshot["authorities"]]
-    authority_paths = [record["path"] for record in snapshot["authorities"]]
-    for path in authority_paths:
-        _safe_path(path, "authoritySnapshot.authorities.path")
-    if len(authority_ids) != len(set(authority_ids)) or len(authority_paths) != len(set(authority_paths)):
+    canonical_authority_paths = [
+        _safe_path(record["path"], "authoritySnapshot.authorities.path")
+        for record in snapshot["authorities"]
+    ]
+    if len(authority_ids) != len(set(authority_ids)) or len(
+        canonical_authority_paths
+    ) != len(set(canonical_authority_paths)):
         raise ControlledPlanningError("AUTHORITY_RECORD_DUPLICATE", "authority records must have unique IDs and paths")
     if snapshot["gate"] != "PASS" or snapshot["conflicts"] or snapshot["missingFacts"]:
         raise ControlledPlanningError("AUTHORITY_SNAPSHOT_NO_GO", "authority snapshot is not an unconflicted PASS")
@@ -153,6 +166,12 @@ def _validate_snapshot(snapshot: dict[str, Any], batch_base_commit: str) -> None
         raise ControlledPlanningError("AUTHORITY_SOURCE_NOT_CLEAN_GIT", "authority snapshot is not a clean Git authority set")
     if revision["head"] != batch_base_commit:
         raise ControlledPlanningError("BATCH_BASE_MISMATCH", "batch base commit differs from authority snapshot head")
+    return {
+        canonical_path: record
+        for canonical_path, record in zip(
+            canonical_authority_paths, snapshot["authorities"], strict=True
+        )
+    }
 
 
 def _validate_authority_facts(request: dict[str, Any], descriptors: list[dict[str, Any]], envelope: dict[str, Any]) -> None:
@@ -175,19 +194,24 @@ def _validate_authority_facts(request: dict[str, Any], descriptors: list[dict[st
         source_path = fact.get("sourcePath")
         if not isinstance(source_path, str):
             raise ControlledPlanningError("AUTHORITY_FACT_MISMATCH", f"authority fact source path mismatch: {fact_id}")
-        _safe_path(source_path, f"authoritySnapshot.facts.{fact_id}.sourcePath")
+        canonical_source_path = _safe_path(
+            source_path, f"authoritySnapshot.facts.{fact_id}.sourcePath"
+        )
         if (
             fact.get("owner") != envelope["issuerId"]
-            or source_path != envelope["issuerAuthorityReference"]
+            or canonical_source_path != envelope["issuerAuthorityReference"]
             or not isinstance(fact.get("normalizedValue"), str)
             or fact["normalizedValue"] != expected[fact_id]
         ):
             raise ControlledPlanningError("AUTHORITY_FACT_MISMATCH", f"authority fact mismatch: {fact_id}")
 
 
-def _validate_authority_references(snapshot: dict[str, Any], descriptors: list[dict[str, Any]], envelope: dict[str, Any]) -> None:
-    by_path = {record["path"]: record for record in snapshot["authorities"]}
-    issuer = by_path.get(envelope["issuerAuthorityReference"])
+def _validate_authority_references(
+    authorities_by_path: dict[str, dict[str, Any]],
+    descriptors: list[dict[str, Any]],
+    envelope: dict[str, Any],
+) -> None:
+    issuer = authorities_by_path.get(envelope["issuerAuthorityReference"])
     if (
         issuer is None
         or issuer["id"] != envelope["issuerId"]
@@ -196,7 +220,7 @@ def _validate_authority_references(snapshot: dict[str, Any], descriptors: list[d
         raise ControlledPlanningError("AUTHORITY_REFERENCE_UNBOUND", "authorization envelope issuer is not bound to snapshot")
     for descriptor in descriptors:
         for reference in descriptor["authorityReferences"]:
-            if reference not in by_path:
+            if reference not in authorities_by_path:
                 raise ControlledPlanningError("AUTHORITY_REFERENCE_UNBOUND", f"unbound descriptor authority reference: {reference}")
 
 
@@ -211,7 +235,9 @@ def normalize_planning_request(repository_root: Path, value: dict[str, Any]) -> 
     normalized = copy.deepcopy(value)
     normalized["slices"] = descriptors
     normalized["authorizationEnvelope"] = envelope
-    _validate_snapshot(normalized["authoritySnapshot"], normalized["batchBaseCommit"])
+    authorities_by_path = _validate_snapshot(
+        normalized["authoritySnapshot"], normalized["batchBaseCommit"]
+    )
     if (
         normalized["projectId"] != normalized["authoritySnapshot"]["projectId"]
         or normalized["projectId"] != envelope["projectId"]
@@ -220,7 +246,7 @@ def normalize_planning_request(repository_root: Path, value: dict[str, Any]) -> 
     if dependency_graph_digest(descriptors) != normalized["dependencyGraphDigest"]:
         raise ControlledPlanningError("DEPENDENCY_GRAPH_DIGEST_MISMATCH", "dependency graph digest mismatch")
     _validate_authority_facts(normalized, descriptors, envelope)
-    _validate_authority_references(normalized["authoritySnapshot"], descriptors, envelope)
+    _validate_authority_references(authorities_by_path, descriptors, envelope)
     as_of = parse_rfc3339(normalized["asOf"])
     issued_at = parse_rfc3339(envelope["issuedAt"])
     expires_at = parse_rfc3339(envelope["expiresAt"])

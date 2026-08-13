@@ -7,6 +7,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
 import yaml
 
 
@@ -39,12 +40,58 @@ def _copy_repo(tmp_path: Path) -> tuple[Path, Path]:
     return root, root / "examples/project-fixture"
 
 
-def _tree_bytes(root: Path) -> dict[str, bytes]:
-    return {
-        path.relative_to(root).as_posix(): path.read_bytes()
-        for path in root.rglob("*")
-        if path.is_file()
-    }
+def _filesystem_snapshot(
+    root: Path,
+) -> dict[str, tuple[str, bytes | None, str | None]]:
+    snapshot: dict[str, tuple[str, bytes | None, str | None]] = {}
+
+    def visit(directory: Path) -> None:
+        for entry in sorted(os.scandir(directory), key=lambda item: item.name):
+            path = Path(entry.path)
+            relative_name = path.relative_to(root).as_posix()
+            if entry.is_symlink():
+                snapshot[relative_name] = ("symlink", None, os.readlink(path))
+            elif entry.is_dir(follow_symlinks=False):
+                snapshot[relative_name] = ("dir", None, None)
+                visit(path)
+            elif entry.is_file(follow_symlinks=False):
+                snapshot[relative_name] = ("file", path.read_bytes(), None)
+            else:
+                raise AssertionError(f"unexpected filesystem entry: {path}")
+
+    visit(root)
+    return snapshot
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ["sibling-file", "empty-directory", "symlink-target", "entry-type"],
+)
+def test_no_write_snapshot_detects_every_filesystem_entry_mutation(
+    tmp_path: Path, mutation: str
+):
+    root = tmp_path / "snapshot-root"
+    root.mkdir()
+    if mutation == "symlink-target":
+        (root / "target-a").write_bytes(b"same")
+        (root / "target-b").write_bytes(b"same")
+        (root / "entry").symlink_to("target-a")
+    elif mutation == "entry-type":
+        (root / "entry").mkdir()
+    before = _filesystem_snapshot(root)
+
+    if mutation == "sibling-file":
+        (root / "sibling.txt").write_bytes(b"created")
+    elif mutation == "empty-directory":
+        (root / "empty").mkdir()
+    elif mutation == "symlink-target":
+        (root / "entry").unlink()
+        (root / "entry").symlink_to("target-b")
+    else:
+        (root / "entry").rmdir()
+        (root / "entry").write_bytes(b"")
+
+    assert before != _filesystem_snapshot(root)
 
 
 def _run_cli(root: Path, *args: str) -> subprocess.CompletedProcess[str]:
@@ -73,10 +120,12 @@ def test_planning_cli_emits_provisional_plan_without_writing_inputs(
     tmp_path: Path, controlled_factory
 ):
     root = _copy_schema_root(tmp_path)
-    request_path = tmp_path / "controlled-request.yaml"
+    request_directory = tmp_path / "request"
+    request_directory.mkdir()
+    request_path = request_directory / "controlled-request.yaml"
     _write_request(request_path, controlled_factory.request(controlled_factory.descriptor()))
-    before = _tree_bytes(root)
-    request_before = request_path.read_bytes()
+    repository_before = _filesystem_snapshot(root)
+    request_before = _filesystem_snapshot(request_directory)
 
     result = _run_cli(
         root, "planning", "plan", "--request", str(request_path), "--format", "json"
@@ -89,20 +138,22 @@ def test_planning_cli_emits_provisional_plan_without_writing_inputs(
     assert payload["command"] == "planning plan"
     assert payload["data"]["executionPlan"]["provisional"] is True
     assert payload["data"]["executionPlan"]["requiresCoordinatorRecheck"] is True
-    assert before == _tree_bytes(root)
-    assert request_before == request_path.read_bytes()
+    assert repository_before == _filesystem_snapshot(root)
+    assert request_before == _filesystem_snapshot(request_directory)
 
 
 def test_planning_cli_rejects_partial_descriptor_without_writes(
     tmp_path: Path, controlled_factory
 ):
     root = _copy_schema_root(tmp_path)
-    request_path = tmp_path / "controlled-request.yaml"
+    request_directory = tmp_path / "request"
+    request_directory.mkdir()
+    request_path = request_directory / "controlled-request.yaml"
     request = controlled_factory.request(controlled_factory.descriptor())
     del request["slices"][0]["bindingSet"]
     _write_request(request_path, request)
-    before = _tree_bytes(root)
-    request_before = request_path.read_bytes()
+    repository_before = _filesystem_snapshot(root)
+    request_before = _filesystem_snapshot(request_directory)
 
     result = _run_cli(
         root, "planning", "plan", "--request", str(request_path), "--format", "json"
@@ -112,8 +163,8 @@ def test_planning_cli_rejects_partial_descriptor_without_writes(
     payload = json.loads(result.stdout)
     assert payload["ok"] is False
     assert "bindingSet" in payload["data"]["message"]
-    assert before == _tree_bytes(root)
-    assert request_before == request_path.read_bytes()
+    assert repository_before == _filesystem_snapshot(root)
+    assert request_before == _filesystem_snapshot(request_directory)
 
 
 def test_planning_cli_rejects_snapshot_fingerprint_drift(tmp_path: Path, controlled_factory):

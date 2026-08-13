@@ -205,3 +205,87 @@ def test_normalizes_authorization_envelope_sets(repository_root, controlled_fact
     envelope = controlled_factory.envelope(requiredReviewers=["reviewer:z", "reviewer:a"])
     normalized = normalize_authorization_envelope(repository_root, envelope)
     assert normalized["requiredReviewers"] == ["reviewer:a", "reviewer:z"]
+
+
+def test_authority_paths_reject_traversal_even_when_snapshot_is_self_consistent(
+    repository_root, controlled_factory
+):
+    request = controlled_factory.request(controlled_factory.descriptor())
+    envelope = request["authorizationEnvelope"]
+    envelope["issuerAuthorityReference"] = "../outside-authority.yaml"
+    envelope["envelopeDigest"] = "sha256:" + "9" * 64
+    snapshot = request["authoritySnapshot"]
+    envelope_fact = snapshot["facts"]["controlled_planning.authorization_envelope_digest"]
+    envelope_fact["rawValue"] = envelope["envelopeDigest"]
+    envelope_fact["normalizedValue"] = envelope["envelopeDigest"]
+    snapshot["authorities"][0]["path"] = envelope["issuerAuthorityReference"]
+    for fact in snapshot["facts"].values():
+        fact["sourcePath"] = envelope["issuerAuthorityReference"]
+    snapshot["sourceRevision"]["authoritySetDigest"] = "sha256:" + sha256_bytes(
+        canonical_json_bytes(snapshot["authorities"])
+    )
+    _refresh_snapshot(snapshot)
+    with pytest.raises(ControlledPlanningError) as exc:
+        normalize_planning_request(repository_root, request)
+    assert exc.value.code == "UNSAFE_DECLARED_PATH"
+
+
+@pytest.mark.parametrize("path_target", ["authority-record", "fact-source"])
+def test_snapshot_authority_paths_reject_traversal(repository_root, controlled_factory, path_target):
+    request = controlled_factory.request(controlled_factory.descriptor())
+    snapshot = request["authoritySnapshot"]
+    if path_target == "authority-record":
+        snapshot["authorities"][1]["path"] = "../outside-authority.yaml"
+        snapshot["sourceRevision"]["authoritySetDigest"] = "sha256:" + sha256_bytes(
+            canonical_json_bytes(snapshot["authorities"])
+        )
+    else:
+        snapshot["facts"]["controlled_planning.mode"]["sourcePath"] = "../outside-authority.yaml"
+    _refresh_snapshot(snapshot)
+    with pytest.raises(ControlledPlanningError) as exc:
+        normalize_planning_request(repository_root, request)
+    assert exc.value.code == "UNSAFE_DECLARED_PATH"
+
+
+def test_descriptor_paths_are_canonicalized_before_sorting_and_digesting(repository_root, controlled_factory):
+    repeated_separator = controlled_factory.descriptor(exactWriteSet=["a//z", "a/b"])
+    canonical = controlled_factory.descriptor(exactWriteSet=["a/b", "a/z"])
+    normalized = normalize_slice_descriptor(repository_root, repeated_separator)
+    assert normalized["exactWriteSet"] == ["a/b", "a/z"]
+    assert descriptor_digest(repeated_separator) == descriptor_digest(canonical)
+
+
+def test_envelope_prefixes_are_canonicalized_before_sorting_and_digesting(repository_root, controlled_factory):
+    repeated_separator = controlled_factory.envelope(permittedPathPrefixes=["a//z", "a/b"])
+    canonical = controlled_factory.envelope(permittedPathPrefixes=["a/b", "a/z"])
+    normalized = normalize_authorization_envelope(repository_root, repeated_separator)
+    assert normalized["permittedPathPrefixes"] == ["a/b", "a/z"]
+    assert envelope_digest(repeated_separator) == envelope_digest(canonical)
+
+
+def test_invalid_issuer_id_is_rejected_even_when_snapshot_binding_matches(repository_root, controlled_factory):
+    request = controlled_factory.request(controlled_factory.descriptor())
+    invalid_issuer = "INVALID ISSUER"
+    envelope = request["authorizationEnvelope"]
+    envelope["issuerId"] = invalid_issuer
+    envelope["envelopeDigest"] = envelope_digest(envelope)
+    snapshot = request["authoritySnapshot"]
+    envelope_fact = snapshot["facts"]["controlled_planning.authorization_envelope_digest"]
+    envelope_fact["rawValue"] = envelope["envelopeDigest"]
+    envelope_fact["normalizedValue"] = envelope["envelopeDigest"]
+    snapshot["authorities"][0]["id"] = invalid_issuer
+    for fact in snapshot["facts"].values():
+        fact["owner"] = invalid_issuer
+    snapshot["sourceRevision"]["authoritySetDigest"] = "sha256:" + sha256_bytes(
+        canonical_json_bytes(snapshot["authorities"])
+    )
+    _refresh_snapshot(snapshot)
+    with pytest.raises(SchemaValidationError, match="issuerId"):
+        normalize_planning_request(repository_root, request)
+
+
+def test_request_project_id_requires_controlled_id_grammar(repository_root, controlled_factory):
+    request = controlled_factory.request(controlled_factory.descriptor())
+    request["projectId"] = "INVALID PROJECT"
+    with pytest.raises(SchemaValidationError, match="projectId"):
+        normalize_planning_request(repository_root, request)

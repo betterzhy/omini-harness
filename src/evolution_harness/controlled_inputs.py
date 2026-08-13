@@ -57,22 +57,27 @@ def _safe_path(value: str, label: str) -> str:
 def _normalize_descriptor_fields(descriptor: dict[str, Any]) -> dict[str, Any]:
     payload = copy.deepcopy(descriptor)
     for field in SET_FIELDS:
-        payload[field] = sorted(payload[field])
+        if field not in PATH_FIELDS:
+            payload[field] = sorted(payload[field])
     payload["producerConsumerSet"] = sorted(
         payload["producerConsumerSet"], key=lambda item: (item["producer"], item["consumer"])
     )
     for field in PATH_FIELDS:
-        payload[field] = [_safe_path(path, field) for path in payload[field]]
+        payload[field] = sorted(_safe_path(path, field) for path in payload[field])
     return payload
 
 
 def _normalize_envelope_fields(envelope: dict[str, Any]) -> dict[str, Any]:
     payload = copy.deepcopy(envelope)
     for field in ENVELOPE_SET_FIELDS:
-        payload[field] = sorted(payload[field])
-    payload["permittedPathPrefixes"] = [
+        if field != "permittedPathPrefixes":
+            payload[field] = sorted(payload[field])
+    payload["issuerAuthorityReference"] = _safe_path(
+        payload["issuerAuthorityReference"], "issuerAuthorityReference"
+    )
+    payload["permittedPathPrefixes"] = sorted(
         _safe_path(path, "permittedPathPrefixes") for path in payload["permittedPathPrefixes"]
-    ]
+    )
     return payload
 
 
@@ -138,6 +143,8 @@ def _validate_snapshot(snapshot: dict[str, Any], batch_base_commit: str) -> None
         raise ControlledPlanningError("AUTHORITY_SET_DIGEST_MISMATCH", "authority set digest mismatch")
     authority_ids = [record["id"] for record in snapshot["authorities"]]
     authority_paths = [record["path"] for record in snapshot["authorities"]]
+    for path in authority_paths:
+        _safe_path(path, "authoritySnapshot.authorities.path")
     if len(authority_ids) != len(set(authority_ids)) or len(authority_paths) != len(set(authority_paths)):
         raise ControlledPlanningError("AUTHORITY_RECORD_DUPLICATE", "authority records must have unique IDs and paths")
     if snapshot["gate"] != "PASS" or snapshot["conflicts"] or snapshot["missingFacts"]:
@@ -165,9 +172,13 @@ def _validate_authority_facts(request: dict[str, Any], descriptors: list[dict[st
         fact = snapshot["facts"].get(fact_id)
         if not isinstance(fact, dict):
             raise ControlledPlanningError("AUTHORITY_FACT_MISSING", f"authority fact missing: {fact_id}")
+        source_path = fact.get("sourcePath")
+        if not isinstance(source_path, str):
+            raise ControlledPlanningError("AUTHORITY_FACT_MISMATCH", f"authority fact source path mismatch: {fact_id}")
+        _safe_path(source_path, f"authoritySnapshot.facts.{fact_id}.sourcePath")
         if (
             fact.get("owner") != envelope["issuerId"]
-            or fact.get("sourcePath") != envelope["issuerAuthorityReference"]
+            or source_path != envelope["issuerAuthorityReference"]
             or not isinstance(fact.get("normalizedValue"), str)
             or fact["normalizedValue"] != expected[fact_id]
         ):

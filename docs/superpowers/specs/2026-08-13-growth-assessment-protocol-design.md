@@ -231,7 +231,7 @@ distillation
 - `visibility`: `PRIVATE | PROJECT | SHARED | PUBLIC`.
 - `distillation`: 1–1000 characters.
 
-Phase 1 never follows an evidence reference merely because it looks like a path. For registered projects, `REPLAYABLE` is accepted only when `reference` matches exactly one live Authority Snapshot record path, `digest` equals `sha256:` plus that record's SHA-256, and `revision` equals `sourceRevision.head` from the validated snapshot. A claim with no exact match, multiple matches, a derived-only authority, or mismatched bytes/revision fails before the Inbox is opened. All other evidence is `OPAQUE`. `HARNESS_SELF` evidence is `OPAQUE` in Phase 1 because self mode has no equivalent authority allowlist. The receipt records a reference and digest, not the evidence body.
+Phase 1 never follows an evidence reference merely because it looks like a path. For registered projects, both the evidence reference and live record path first pass `safe_relative_path`; the two resulting safe POSIX strings must then be byte-for-byte equal to exactly one live `authorities[].path`. No filesystem resolution, case folding, Unicode folding, alias expansion, or additional path normalization is permitted. `digest` must equal `sha256:` plus that record's SHA-256, and `revision` must equal `sourceRevision.head` from the validated snapshot. A claim with no exact match, multiple matches, a derived-only authority, or mismatched bytes/revision fails before the Inbox is opened. All other evidence is `OPAQUE`. `HARNESS_SELF` evidence is `OPAQUE` in Phase 1 because self mode has no equivalent authority allowlist. The receipt records a reference and digest, not the evidence body.
 
 The schema has `additionalProperties: false`, bounded arrays, bounded strings, and no `transcript`, `messages`, `prompt`, `response`, `logBody`, `fileContent`, or arbitrary metadata field.
 
@@ -336,6 +336,8 @@ Raw receipts do not belong in either project Git history or the Harness worktree
 $CODEX_HOME/agent-evolution/growth/v1/
 ├── inbox/
 │   └── <assessment-key-hash>.json
+├── staging/
+│   └── <random-operation-id>.part
 └── locks/
     └── inbox.lock
 ```
@@ -361,13 +363,14 @@ State invariants:
 - root and directories are owned by the current user and mode `0700`;
 - receipt files are regular owner-only files with mode `0600`;
 - root and every path component are opened no-follow from a directory descriptor;
-- one process lock covers key lookup and exclusive creation;
-- receipt creation is atomic, fsynced, and no-replace;
+- one process lock covers key lookup and staged publication;
+- receipt publication is atomic, fsynced, and no-replace: write and fsync a random owner-only regular file under the same-root `staging/` directory, atomically hard-link it to the absent final Inbox name, fsync `inbox/`, then unlink the staging name and fsync `staging/`;
 - existing bytes are read once and validated before idempotent replay;
 - symlinks, unexpected file types, unsafe permissions, corrupt records, and key collisions fail closed;
-- no cleanup, overwrite, rename-over-existing, or destructive recovery occurs in Phase 1.
+- the scanner never enumerates `staging/`; a crash before publication leaves no visible receipt, while a final entry observed after hard-link publication is always complete. Durability is committed only after the Inbox directory fsync;
+- no startup cleanup, overwrite, rename-over-existing, partial-file repair, or destructive recovery occurs in Phase 1. Stale staging links are a reported storage limitation until an explicit retention/recovery policy exists.
 
-Because one append-only file contains both the assessment and its receipt identity, Phase 1 has no multi-file commit protocol. The scan index is derived in memory; there is no authoritative mutable index.
+Because the final append-only file contains both the assessment and its receipt identity, Phase 1 has no authoritative multi-file transaction or mutable index. `staging/` is non-authoritative publication scratch space on the same filesystem; hard-link publication is the single visibility commit point.
 
 ## Registered-project validation
 
@@ -393,7 +396,7 @@ Gate determines R0/R1/R2
   -> normalize and derive key/id/digest
   -> open safe state root
   -> acquire key-independent Inbox lock
-  -> if key absent: exclusive create + fsync -> RECORDED
+  -> if key absent: stage + file fsync + hard-link no-replace + inbox fsync -> RECORDED
   -> if same key and same bytes: DUPLICATE
   -> if same key and different bytes: fail closed
   -> release lock
@@ -489,6 +492,10 @@ A later Hook may verify or remind that an R2 task report contains a valid receip
 | Transcript/unknown/oversized field | Schema reject, do not persist raw bytes |
 | Same key and same normalized content | Return existing receipt as `DUPLICATE` |
 | Same key and different content | `ASSESSMENT_KEY_CONFLICT`, preserve existing record |
+| Crash after staging create or during staging write | No final Inbox entry is visible; later retry may publish normally; partial staging file is never scanned |
+| Crash after staging fsync but before publish | No final Inbox entry is visible; later retry may publish normally; complete staging file is never authority |
+| Crash after hard-link but before Inbox-directory fsync | On restart the final name is absent or contains the complete inode, never partial; retry safely records or returns `DUPLICATE` |
+| Crash after Inbox-directory fsync but before staging unlink | Complete durable final receipt remains visible and validates; later retry is `DUPLICATE`; stale staging link is not scanned |
 | Concurrent identical writers | One `RECORDED`; a lock loser returns `DEFERRED`, and its later exact retry returns `DUPLICATE`; one durable record |
 | Concurrent conflicting writers | At most one `RECORDED`; a lock loser is `DEFERRED`, and its later retry fails with key conflict; no partial record |
 | Corrupt existing receipt | Scan/assess fail closed; no automatic repair |
@@ -535,7 +542,7 @@ Only if real evidence shows missed R2 receipts, evaluate a minimal Hook or runti
 2. Both `SIGNAL` and `NO_SIGNAL` produce durable, traceable receipts.
 3. One assessment obligation produces at most one append-only record.
 4. Exact replay is idempotent; conflicting replay fails closed.
-5. Concurrent submissions cannot overwrite, orphan, or misattribute a receipt.
+5. Same-filesystem staged hard-link publication prevents a partial final receipt; concurrent submissions cannot overwrite, orphan, or misattribute an authoritative receipt.
 6. Assessment and scan write neither the source project nor the Harness Git worktree.
 7. Registered-project assessment reads only the existing authority allowlist, exactly verifies `REPLAYABLE` evidence, and excludes configured paths such as `temp-input/**`.
 8. The state root is rejected before creation when it is inside Harness, the source project, or any other Git worktree.

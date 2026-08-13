@@ -351,7 +351,7 @@ Tests must prove:
 - registration/integration/runtime/lock mismatch fails;
 - live authority drift, dirty authority set, missing authority, excluded authority, or symlinked authority fails;
 - a request fingerprint from a prior snapshot fails;
-- `REPLAYABLE` evidence passes only when its reference matches one live Authority Snapshot authority path, its digest equals `sha256:` plus that record's SHA-256, and its revision equals the snapshot `sourceRevision.head`;
+- `REPLAYABLE` evidence passes only when both strings pass `safe_relative_path` and the resulting safe POSIX reference is byte-for-byte equal to exactly one live `authorities[].path`; no filesystem resolution, case/Unicode folding, alias expansion, or other normalization is allowed. Its digest must equal `sha256:` plus that record's SHA-256, and its revision must equal the snapshot `sourceRevision.head`;
 - an absent, duplicate, derived-only, mismatched-digest, or mismatched-revision `REPLAYABLE` claim fails before the Inbox is opened;
 - `OPAQUE` evidence is never opened merely because its reference resembles a path;
 - excluded `temp-input/**`-style paths are never read, enumerated, or hashed;
@@ -389,7 +389,7 @@ For registered projects, reuse:
 - the existing integration loader and exact-lock validation already reached by registration;
 - `build_authority_snapshot(...)` using only the registered integration authority map.
 
-Compare every request source identity to validated live values. For each `REPLAYABLE` evidence item, require exactly one non-`DERIVED` live authority record with the same normalized path, `sha256:`-prefixed SHA-256, and snapshot `sourceRevision.head`; never resolve or read the evidence reference again. Reject `REPLAYABLE` in `HARNESS_SELF` during Phase 1. Do not introduce a second source scanner or duplicate registration semantics.
+Compare every request source identity to validated live values. For each `REPLAYABLE` evidence item, validate both reference strings with `safe_relative_path`, then require exact safe-string equality with exactly one non-`DERIVED` live `authorities[].path`, the `sha256:`-prefixed record SHA-256, and snapshot `sourceRevision.head`; never resolve or read the evidence reference again. Reject aliases even if they would resolve to the same file, and reject `REPLAYABLE` in `HARNESS_SELF` during Phase 1. Do not introduce a second source scanner or duplicate registration semantics.
 
 For Harness self, obtain only `git rev-parse HEAD` and `git rev-parse HEAD^{tree}` through non-interactive read-only subprocess calls. Do not run Git cleanup, checkout, reset, add, commit, update-index, or status commands that refresh the index.
 
@@ -428,13 +428,14 @@ git commit -m "feat: validate growth assessment provenance"
 - Modify: `tests/test_anchored_fs.py`
 - Create: `tests/test_growth_store.py`
 
-- [ ] **Step 1: Write anchored exclusive-create tests**
+- [ ] **Step 1: Write anchored staged-publication tests**
 
 Add tests for a minimal new primitive such as:
 
 ```python
-AnchoredRoot.create_bytes(
-    relative: str,
+AnchoredRoot.publish_bytes_no_replace(
+    staging_directory: str,
+    destination: str,
     data: bytes,
     *,
     mode: int = 0o600,
@@ -443,19 +444,27 @@ AnchoredRoot.create_bytes(
 
 Tests must prove:
 
-- first create succeeds with requested owner-only mode;
+- the staging and destination directories are already-opened, no-follow directories on the same device;
+- data is written to a random `O_CREAT | O_EXCL | O_NOFOLLOW` staging file with the requested owner-only mode and fsynced before publication;
+- one `os.link(..., follow_symlinks=False)` publishes the complete inode to the absent final name without replacement;
+- the destination directory is fsynced before success can return;
+- the current operation's staging link is removed only after publication, and the staging directory is then fsynced;
 - existing regular file is never replaced;
 - symlink final target and symlink parent fail without touching the referent;
 - directory and special-file targets fail;
-- file and containing directory are fsynced;
-- a losing concurrent creator cannot overwrite the winner;
-- the method requires an already anchored parent and creates no temporary file.
+- a losing publisher cannot overwrite the winner;
+- a crash during staging write exposes no final Inbox entry;
+- a crash after staging fsync but before link exposes no final Inbox entry;
+- a crash after link but before destination-directory fsync leaves the final entry either absent or complete after restart, never partial;
+- a crash after destination-directory fsync but before staging unlink leaves one complete durable final receipt and a harmless non-authoritative staging link.
 
 Expected: FAIL because the primitive does not exist.
 
-- [ ] **Step 2: Implement only the reusable no-replace primitive**
+- [ ] **Step 2: Implement only the reusable staged no-replace primitive**
 
-Use directory-relative `os.open` with `O_CREAT | O_EXCL | O_NOFOLLOW`, write all bytes, `fsync` the file, close it, then `fsync` the parent. Do not use `os.replace`, `Path.write_text`, or a check-then-write sequence.
+Use directory-relative operations throughout. Create a random staging name with `O_CREAT | O_EXCL | O_NOFOLLOW`; keep and verify its inode while writing; `fsync` the complete file; compare the opened staging and destination directory devices; publish with a hard link that fails when the destination exists; then `fsync` the destination directory. Only after the visibility commit may the method unlink its own still-inode-matched staging name and `fsync` the staging directory.
+
+Do not use direct `O_EXCL` creation of the final Inbox name, `os.replace`, rename-over-existing, `Path.write_text`, or a check-then-write final publication. Do not scan or treat staging bytes as authority. On an ordinary handled failure, the method may unlink only the current operation's random staging name after verifying that name still references the opened inode. A process crash may leave a staging link; Phase 1 performs no startup cleanup.
 
 Do not change existing `write_bytes` semantics in this task.
 
@@ -469,13 +478,15 @@ Tests must cover:
 - a state root equal to or contained by the Harness repository, source repository, any linked worktree of either repository, or any other containing Git worktree is rejected before creating a directory or lock;
 - lexical aliases, `..`, symlink components, and a symlinked nearest-existing ancestor cannot bypass repository-containment checks;
 - existing state root with group/other permissions, wrong owner, symlink component, non-directory component, or unsafe Inbox/lock entry fails;
+- `staging`, `inbox`, and `locks` must be fixed owner-only anchored directories, and `staging`/`inbox` must be on the same device;
 - lock file is regular, current-user-owned, mode `0600`, and opened no-follow;
 - two processes contending on identical requests produce exactly one file; the lock loser returns `DEFERRED`, and its later exact retry returns `DUPLICATE`;
 - two processes contending on conflicting requests preserve exactly one valid winner; the lock loser returns `DEFERRED`, and its later retry returns `ASSESSMENT_KEY_CONFLICT`;
-- process death before exclusive create leaves no record;
-- a complete exclusive create is always readable and identity-valid;
+- deterministic process-death injection after staging create, mid-write, after file fsync, after hard-link, after Inbox-directory fsync, and after staging unlink proves that a final receipt is never partial;
+- staging files and links are never enumerated by receipt lookup or scan and never count as receipts;
+- a complete published receipt is always readable and identity-valid;
 - an existing corrupt or identity-mismatched record is never overwritten or repaired;
-- no operation removes, truncates, replaces, or renames an existing receipt;
+- no operation removes, truncates, replaces, hard-links from, or renames an existing final receipt;
 - scan enumerates only direct `inbox/*.json` entries through an anchored directory descriptor and rejects symlinks, subdirectories, special files, unsafe names, and unsafe modes;
 - scan has zero writes, including no index, mtime update by application logic, quarantine move, or repair.
 
@@ -507,16 +518,18 @@ class GrowthInbox:
 
 Requirements:
 
-- create only the fixed `inbox` and `locks` children;
+- create only the fixed `inbox`, `staging`, and `locks` children;
 - `open_for_record` may safely create the exact state root and fixed children; `open_read_only` used by receipt/scan must create nothing and fails if state is absent;
 - before creation, reject any intended state root inside the physical Harness/source roots, any of their Git common-directory worktrees, or a Git worktree discovered from the nearest existing ancestor; do not rely on a string-prefix check;
 - derive the receipt filename from the 24-hex key suffix, never from project text;
-- hold one non-blocking exclusive `flock` on `locks/inbox.lock` across existing-record validation and exclusive creation; receipt/scan use a shared lock on the already-existing safe lock file;
+- hold one non-blocking exclusive `flock` on `locks/inbox.lock` across existing-record validation and staged publication; receipt/scan use a shared lock on the already-existing safe lock file;
+- implement this Inbox-local lock directly against the anchored `locks/inbox.lock`; do not reuse `exclusive_process_lock`, whose temporary state root and exclusive-only contract do not satisfy GAP;
 - serialize the authoritative persisted receipt as canonical JSON plus one newline;
 - persist `status: RECORDED`; project `DUPLICATE` only in the returned copy;
 - when the key file exists, read its bytes once, validate schema/key/id/digest, and compare canonical bytes;
 - find `receipt --id` by safe anchored enumeration and require exactly one match;
 - derive scan counts in memory;
+- never enumerate or interpret `staging/` during receipt lookup or scan;
 - never read or write a source project.
 
 If state-root creation and worktree-containment safety cannot be proven with existing helpers, add the smallest private descriptor-anchored constructor and read-only Git worktree detector in `growth_store.py`; do not generalize unrelated filesystem APIs. Containment validation must complete before the first `mkdir` or lock-file open.
@@ -711,7 +724,8 @@ At minimum:
 - stale lock/source/snapshot;
 - transcript/unknown/oversized data;
 - identical and conflicting multiprocess races;
-- process exit at each pre-create boundary;
+- process exit at every staged-publication boundary, including mid-write and after hard-link but before directory fsync;
+- stale partial and complete staging entries proving scan isolation and retry safety;
 - corrupt existing receipt;
 - scan with unexpected entry types;
 - `CODEX_HOME` absent with no explicit root;
@@ -873,7 +887,7 @@ Phase 1 is complete only when:
 - all four protocol schemas are strict and validated;
 - normalized identities are deterministic;
 - registered and self provenance fail closed on drift;
-- the external Inbox is owner-only, no-follow, append-only, atomic, and concurrency-safe;
+- the external Inbox uses owner-only, no-follow, same-filesystem staged hard-link publication so final receipts are append-only, atomically visible, and concurrency-safe;
 - exact replay is idempotent and conflicting replay preserves the winner;
 - scan is read-only and deterministic;
 - source projects and the Harness Git worktree remain unchanged during assess/receipt/scan;

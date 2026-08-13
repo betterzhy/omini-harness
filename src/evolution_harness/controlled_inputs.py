@@ -28,7 +28,7 @@ _DESCRIPTOR_SCHEMA = "core/schemas/controlled-slice-descriptor.schema.json"
 _ENVELOPE_SCHEMA = "core/schemas/controlled-authorization-envelope.schema.json"
 _REQUEST_SCHEMA = "core/schemas/controlled-planning-request.schema.json"
 _RFC3339_PATTERN = re.compile(
-    r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$"
+    r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$"
 )
 _FACT_IDS = (
     "controlled_planning.mode",

@@ -312,8 +312,32 @@ def test_planning_request_rejects_non_rfc3339_timestamp_syntax(
 
 
 @pytest.mark.parametrize(
+    "timestamp",
+    [
+        "2026-08-13T12:00:00+00:60",
+        "2026-08-13T12:00:00+01:60",
+        "2026-08-13T12:00:00+12:99",
+        "2026-08-13T12:00:00-01:60",
+        "2026-08-13T12:00:00+24:00",
+        "2026-08-13T12:00:00-24:00",
+        "2026-08-13T12:00:00+23:60",
+        "2026-08-13T12:00:00-23:60",
+    ],
+)
+def test_parse_rfc3339_rejects_numeric_offsets_outside_component_ranges(timestamp):
+    with pytest.raises(ControlledPlanningError) as exc:
+        parse_rfc3339(timestamp)
+
+    assert exc.value.code == "TIMESTAMP_INVALID"
+
+
+@pytest.mark.parametrize(
     ("timestamp", "expected_isoformat"),
     [
+        ("2026-08-13T12:00:00+23:59", "2026-08-13T12:00:00+23:59"),
+        ("2026-08-13T12:00:00-23:59", "2026-08-13T12:00:00-23:59"),
+        ("2026-08-13T12:00:00+00:59", "2026-08-13T12:00:00+00:59"),
+        ("2026-08-13T12:00:00-00:59", "2026-08-13T12:00:00-00:59"),
         ("2026-08-13T12:00:00Z", "2026-08-13T12:00:00+00:00"),
         ("2026-08-13T12:00:00.123456Z", "2026-08-13T12:00:00.123456+00:00"),
         ("2026-08-13T12:00:00+08:30", "2026-08-13T12:00:00+08:30"),

@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-evolution.local/core/schemas/controlled-slice-descriptor.schema.json",
+  "$defs": {
+    "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._:-]*$"},
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "path": {"type": "string", "minLength": 1},
+    "stringSet": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
+    "orderedGate": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
+    "reviewPolicy": {"type": "object", "required": ["reviewerRole", "minimumVerdict"], "properties": {"reviewerRole": {"type": "string", "minLength": 1}, "minimumVerdict": {"const": "GO_ZERO_FINDINGS"}}, "additionalProperties": false},
+    "producerConsumer": {"type": "object", "required": ["producer", "consumer"], "properties": {"producer": {"$ref": "#/$defs/id"}, "consumer": {"$ref": "#/$defs/id"}}, "additionalProperties": false}
+  },
+  "type": "object",
+  "required": ["schemaVersion", "sliceId", "state", "portfolioId", "deliveryTrackId", "sliceClass", "priority", "ownerSet", "factFamilySet", "publicContractSet", "producerConsumerSet", "bindingSet", "exactWriteSet", "ephemeralWriteSet", "sharedArtifactSet", "dependencySet", "migrationResourceSet", "requiredGates", "reviewPolicy", "authorizationClass", "authorityReferences", "descriptorDigest"],
+  "properties": {
+    "schemaVersion": {"const": "controlled-slice-descriptor/v1"}, "sliceId": {"$ref": "#/$defs/id"},
+    "state": {"enum": ["PROPOSED", "READY", "ADMITTED", "ACTIVE", "FIXED_CANDIDATE", "REVIEW_GO", "QUEUED_FOR_INTEGRATION", "INTEGRATING", "CLOSED", "BLOCKED", "NO_GO", "STALE", "CANCELLED"]},
+    "portfolioId": {"$ref": "#/$defs/id"}, "deliveryTrackId": {"$ref": "#/$defs/id"}, "sliceClass": {"$ref": "#/$defs/id"}, "priority": {"type": "integer", "minimum": 0},
+    "ownerSet": {"$ref": "#/$defs/stringSet"}, "factFamilySet": {"$ref": "#/$defs/stringSet"}, "publicContractSet": {"$ref": "#/$defs/stringSet"},
+    "producerConsumerSet": {"type": "array", "items": {"$ref": "#/$defs/producerConsumer"}, "uniqueItems": true}, "bindingSet": {"$ref": "#/$defs/stringSet"},
+    "exactWriteSet": {"type": "array", "items": {"$ref": "#/$defs/path"}, "uniqueItems": true}, "ephemeralWriteSet": {"type": "array", "items": {"$ref": "#/$defs/path"}, "uniqueItems": true},
+    "sharedArtifactSet": {"$ref": "#/$defs/stringSet"}, "dependencySet": {"$ref": "#/$defs/stringSet"}, "migrationResourceSet": {"$ref": "#/$defs/stringSet"}, "requiredGates": {"$ref": "#/$defs/orderedGate"},
+    "reviewPolicy": {"$ref": "#/$defs/reviewPolicy"}, "authorizationClass": {"$ref": "#/$defs/id"}, "authorityReferences": {"type": "array", "items": {"$ref": "#/$defs/path"}, "uniqueItems": true}, "descriptorDigest": {"$ref": "#/$defs/digest"}
+  },
+  "additionalProperties": false
+}

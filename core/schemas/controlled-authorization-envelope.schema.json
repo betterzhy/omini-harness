@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-evolution.local/core/schemas/controlled-authorization-envelope.schema.json",
+  "$defs": {
+    "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._:-]*$"}, "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}, "path": {"type": "string", "minLength": 1},
+    "stringSet": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true}, "orderedGate": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true}
+  },
+  "type": "object",
+  "required": ["schemaVersion", "envelopeId", "issuerId", "issuerAuthorityReference", "issuerAuthorityDigest", "projectId", "portfolioId", "permittedDeliveryTracks", "permittedSliceClasses", "permittedPathPrefixes", "permittedActionClasses", "maxParallelLanes", "requiredTests", "requiredGates", "requiredReviewers", "minimumReviewVerdict", "refreshPolicy", "issuedAt", "expiresAt", "deniedActions", "stopConditions", "envelopeDigest"],
+  "properties": {
+    "schemaVersion": {"const": "controlled-authorization-envelope/v1"}, "envelopeId": {"$ref": "#/$defs/id"}, "issuerId": {"type": "string", "minLength": 1}, "issuerAuthorityReference": {"$ref": "#/$defs/path"}, "issuerAuthorityDigest": {"$ref": "#/$defs/digest"}, "projectId": {"$ref": "#/$defs/id"}, "portfolioId": {"$ref": "#/$defs/id"},
+    "permittedDeliveryTracks": {"$ref": "#/$defs/stringSet"}, "permittedSliceClasses": {"$ref": "#/$defs/stringSet"}, "permittedPathPrefixes": {"type": "array", "items": {"$ref": "#/$defs/path"}, "uniqueItems": true}, "permittedActionClasses": {"$ref": "#/$defs/stringSet"}, "maxParallelLanes": {"type": "integer", "minimum": 1, "maximum": 3}, "requiredTests": {"$ref": "#/$defs/stringSet"}, "requiredGates": {"$ref": "#/$defs/orderedGate"}, "requiredReviewers": {"$ref": "#/$defs/stringSet"},
+    "minimumReviewVerdict": {"const": "GO_ZERO_FINDINGS"}, "refreshPolicy": {"const": "REVALIDATE_NO_SCOPE_WIDENING"}, "issuedAt": {"type": "string", "minLength": 1}, "expiresAt": {"type": "string", "minLength": 1}, "deniedActions": {"$ref": "#/$defs/stringSet"}, "stopConditions": {"$ref": "#/$defs/stringSet"}, "envelopeDigest": {"$ref": "#/$defs/digest"}
+  },
+  "additionalProperties": false
+}

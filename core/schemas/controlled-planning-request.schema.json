@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-evolution.local/core/schemas/controlled-planning-request.schema.json",
+  "$defs": {"digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}, "commit": {"type": "string", "pattern": "^[0-9a-f]{40}([0-9a-f]{24})?$"}},
+  "type": "object",
+  "required": ["schemaVersion", "planningMode", "projectId", "batchBaseCommit", "authoritySnapshot", "contractRegistryDigest", "dependencyGraphDigest", "conflictPolicyVersion", "harnessVersion", "asOf", "authorizationEnvelope", "slices"],
+  "properties": {
+    "schemaVersion": {"const": "controlled-planning-request/v1"}, "planningMode": {"const": "CONTROLLED_PARALLEL"}, "projectId": {"type": "string", "minLength": 1}, "batchBaseCommit": {"$ref": "#/$defs/commit"},
+    "authoritySnapshot": {"$ref": "https://agent-evolution.local/core/schemas/authority-snapshot.schema.json"}, "contractRegistryDigest": {"$ref": "#/$defs/digest"}, "dependencyGraphDigest": {"$ref": "#/$defs/digest"}, "conflictPolicyVersion": {"const": "controlled-conflict-policy/v1"}, "harnessVersion": {"const": "agent-evolution-harness/0.1.0"}, "asOf": {"type": "string", "minLength": 1},
+    "authorizationEnvelope": {"$ref": "https://agent-evolution.local/core/schemas/controlled-authorization-envelope.schema.json"}, "slices": {"type": "array", "minItems": 1, "items": {"$ref": "https://agent-evolution.local/core/schemas/controlled-slice-descriptor.schema.json"}}
+  },
+  "additionalProperties": false
+}

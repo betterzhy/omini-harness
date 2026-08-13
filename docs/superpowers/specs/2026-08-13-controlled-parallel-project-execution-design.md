@@ -124,7 +124,7 @@ The Harness derives a `batchPlanId` from these inputs and records the source byt
 
 For each Slice, the Harness calculates a normalized lock footprint from the declared sets. Public producer-consumer closure and dependency relationships are expanded only from explicit project graphs. A diagnostic `conflictFootprintId` is a digest of the project identity, normalized footprint, and conflict-policy version. It excludes batch and authority-snapshot identities; it is not itself a lease key because two different footprints may still overlap.
 
-Repository paths are compared after the existing safe-relative-path normalization. Directory and file ancestry counts as overlap. Globs must be deterministically expanded against `batchBaseCommit`; unresolved, escaping, or filesystem-dependent patterns are invalid. `sharedArtifactSet` names every shared output affected by the Slice even when that output is generated later rather than written in the lane.
+Repository paths are compared after the existing safe-relative-path normalization. Directory and file ancestry counts as overlap. Globs must be deterministically expanded against `batchBaseCommit`; unresolved, escaping, or filesystem-dependent patterns are invalid. Every declared write path is checked component by component from an opened lane-root directory descriptor; a symlink ancestor or final target is invalid even when it resolves inside the worktree. `sharedArtifactSet` names every shared output affected by the Slice even when that output is generated later rather than written in the lane.
 
 Two Slices conflict if any of the following is true:
 
@@ -149,7 +149,7 @@ The Harness produces a plan; it does not execute it.
 3. Build the symmetric conflict graph and its connected conflict clusters.
 4. Enforce dependency order inside and across clusters.
 5. Select at most one Slice from each cluster.
-6. Select no more than `maxParallelLanes`, capped at three in policy version 1.
+6. Read the current project coordinator journal and select no more than the remaining project-wide capacity: `max(0, min(envelope.maxParallelLanes, 3) - nonterminalLaneLeaseCount)` in policy version 1.
 7. Sort equally eligible Slices by project priority, dependency depth, then canonical `sliceId`.
 8. Compare the proposed batch with every recorded nonterminal lease from earlier batches and plans.
 9. Emit proposed admissions, serialized Slices, blocked Slices, and rejected Slices with exact reason codes.
@@ -183,9 +183,10 @@ Lease acquisition is a project-scoped compare-and-swap transaction:
 2. reject a missing, corrupt, or pending-recovery journal;
 3. revalidate the plan, current authority, envelope, and source identity;
 4. compare the proposed full footprint against every nonterminal lease across all batches and plans using the current conflict predicate;
-5. reject admission if an active lease uses a different conflict-policy version;
-6. append the new lease and increment its fencing token through a journaled, fsynced, atomic replacement;
-7. release the short-lived OS lock only after the durable receipt is readable and valid.
+5. recompute the effective lane cap from the unchanged envelope and reject when the number of nonterminal lane leases across all batches and plans is already at that cap;
+6. reject admission if an active lease uses a different conflict-policy version;
+7. append the new lease and increment its fencing token through a journaled, fsynced, atomic replacement;
+8. release the short-lived OS lock only after the durable receipt is readable and valid.
 
 The idempotency key is `(projectExecutionKey, batchPlanId, sliceId, attemptId)`. Replaying it returns the existing lease and never starts a second lane. Replaying a terminal attempt is rejected; retry requires a new attempt explicitly present in project authority. Every mutating runtime boundary and every lifecycle transition must present the current fencing token. A stale or missing token denies the mutation or transition.
 
@@ -264,11 +265,13 @@ Lanes do not merge into one another and do not update shared generated aggregate
 
 ### WriteSet containment and invalidation
 
-Every command that may mutate state is a managed foreground operation in the isolated lane worktree. Before it starts, the runtime validates the current fencing token and restricts filesystem writes to the lane root plus a lane-exclusive temporary root. Detached child processes and writes to the registered source root, another worktree, the integration worktree, or undeclared external resources are denied in policy version 1.
+Every command that may mutate state is a managed foreground operation in the isolated lane worktree. Before it starts, the runtime validates the current fencing token and constructs an OS-enforced write sandbox from descriptor-anchored `exactWriteSet` and `ephemeralWriteSet` targets. Authorization follows the physical target, not lexical path text: every existing ancestor and final target is opened no-follow from the lane-root descriptor, its device/inode/type is captured, and any symlink or path swap invalidates the command. Creation is permitted only beneath an already anchored, non-symlink directory whose normalized path is declared. The sandbox denies all other writes, including writes reached through a symlink created after preflight. If the host cannot enforce this boundary for the full process tree, concurrent mutation is unsupported and the lane is not admitted.
 
-After each mutating command, before another command or lifecycle transition, the runtime inventories tracked and untracked changes in the isolated lane and compares their normalized paths with `exactWriteSet`. Only paths explicitly declared in `ephemeralWriteSet` may be excluded; they must be Git-ignored, lane-exclusive, non-symlinked, absent from the fixed candidate, and removed at closure. Shared caches or output directories are not permitted. The before/after guard and isolated filesystem boundary limit a violation to its lane, but the declared conflict footprint is still considered disproved.
+Detached child processes and writes to the registered source root, another worktree, the integration worktree, or undeclared external resources are denied in policy version 1. The managed process tree must terminate before the fencing token can transition.
 
-If any persistent path falls outside `exactWriteSet`, the coordinator atomically records `QUARANTINED_WRITESET_BREACH`, revokes every fencing token in the batch, and stops new admission and integration. An in-flight command may finish only inside its already isolated roots; it cannot begin another mutation or transition. The original conflict graph may not justify continued work.
+After each mutating command, before another command or lifecycle transition, the runtime performs a descriptor-anchored, no-follow inventory of tracked and untracked changes in the isolated lane and compares their normalized physical paths with `exactWriteSet`. Only paths explicitly declared in `ephemeralWriteSet` may be excluded; they must be Git-ignored, lane-exclusive, non-symlinked, absent from the fixed candidate, and removed at closure. Shared caches or output directories are not permitted. The before/after guard and isolated filesystem boundary limit a violation to its lane, but the declared conflict footprint is still considered disproved.
+
+If any persistent path falls outside `exactWriteSet`, the coordinator takes the project-scoped lock and atomically records `PROJECT_WRITESET_RECOVERY`. Because the actual footprint is not yet known, it revokes every nonterminal lease fencing token for the project across all batches and plans, then stops every new admission and integration transaction. An in-flight command may finish only inside its already isolated roots; it cannot begin another mutation or transition. No original conflict graph may justify continued work.
 
 Recovery preserves all lane evidence, calculates an `observedWriteSet`, rebuilds the conflict graph against every active and queued footprint, and marks every overlapping or authority-affected lane `STALE`. Even a non-overlapping lane resumes only under a newly validated plan and fresh lease after the project-authorized recovery receipt is recorded. Widening `exactWriteSet` always requires a new project-authorized descriptor and attempt; the envelope cannot approve it implicitly.
 
@@ -287,10 +290,14 @@ For each candidate the controller:
 7. marks the candidate `STALE` when relevant inputs changed;
 8. generates shared projections or aggregates exactly once in staging;
 9. runs affected gates and the full project integration gate suite in staging;
-10. creates and independently reviews a fixed integration candidate;
-11. reacquires the project-scoped lock, revalidates the journal and current authority, and checks that the target ref still equals `expectedIntegrationHead`;
-12. publishes with an atomic compare-and-swap ref update from `expectedIntegrationHead` to the reviewed candidate;
-13. fsyncs the published receipt before releasing the integration and lane leases.
+10. creates a `reviewBindingDigest` and independently reviews the fixed integration candidate against it;
+11. reacquires the project-scoped lock and recomputes the complete `reviewBindingDigest` from live inputs;
+12. marks the transaction `STALE` without publication if any bound input changed, expired, or was revoked;
+13. checks that the target ref still equals `expectedIntegrationHead`;
+14. publishes with an atomic compare-and-swap ref update from `expectedIntegrationHead` to the reviewed candidate;
+15. fsyncs the published receipt before releasing the integration and lane leases.
+
+`reviewBindingDigest` is canonical JSON over the integration candidate commit and tree, `expectedIntegrationHead`, authority snapshot, complete `envelopeDigest` and expiry status, authorization-source digest, conflict-policy version, contract-registry digest, dependency-graph digest, lane and observed WriteSets, generated-artifact manifest, gate definitions, and gate receipts. The independent review receipt is valid only for that exact digest. Any mismatch after review—including a narrower or revoked authorization—abandons the prepared transaction; a refreshed transaction must rerun generation, all gates, and independent review before it can publish.
 
 The integration idempotency key is `(projectExecutionKey, laneCandidateCommit, expectedIntegrationHead, conflictPolicyVersion)`. Replaying a prepared or published key resumes or returns its recorded outcome; it never reapplies the candidate, regenerates aggregates, or publishes twice. A new target head produces a new refresh decision, not an implicit retry.
 
@@ -340,7 +347,7 @@ Planning and refresh outputs are advisory control artifacts. Lease and transacti
 - Missing, corrupt, divergent, or unavailable coordinator state: deny every new mutation and admission pending explicit recovery.
 - Lane process loss: preserve the fixed base, task identity, evidence, and lease; resume only after process-quiescence and snapshot validation.
 - Authority drift during execution: accept no transition, revoke the affected fencing token, and mark the candidate `STALE` through a journaled recovery decision.
-- WriteSet breach: quarantine the complete batch and rebuild from `observedWriteSet`; never continue from the original graph.
+- WriteSet breach: freeze every nonterminal project lease and rebuild from `observedWriteSet`; never continue from an original graph.
 - Reviewer finding: mark `NO_GO`; do not release a successor in the same conflict cluster.
 - Integration conflict or compare-and-swap failure: leave the target ref unchanged and do not auto-resolve semantic conflicts.
 - Generated-artifact drift: regenerate only at the integration barrier, then rerun full validation.
@@ -354,9 +361,9 @@ For a project adopting the model, the existing single dynamic Slice maps to one 
 
 For Pay-Nexus specifically:
 
-- the current DEV-S02 work and its candidate chain remain untouched;
 - Harness implementation begins with project-neutral fixtures;
-- Pay-Nexus adoption starts only from a clean, project-authorized checkpoint after the active candidate chain closes or is explicitly superseded;
+- immediately before any Pay-Nexus-specific phase, a fresh live Authority Snapshot must identify the then-active, dirty, reviewed, or fixed Slice chain because the existing Harness sidecar may lag the project's current Slice;
+- every such pre-existing Slice chain remains untouched, and Pay-Nexus adoption starts only from a clean, project-authorized checkpoint after that chain closes or is explicitly superseded;
 - Pay-Nexus authority files, not the Harness sidecar, declare the portfolio, lane, Slice, envelope, and stop facts;
 - the sidecar remains read-only and projects those facts into the generic Harness schemas.
 
@@ -380,7 +387,7 @@ Add integration refresh decisions, exclusive integration leases, staging transac
 
 ### Phase 2 — Pay-Nexus read-only projection
 
-After Phase 1A through Phase 1C fixed-candidate acceptance, extend the Harness-owned Pay-Nexus sidecar to extract the project's current admission facts and validate a read-only planning scenario. Do not write Pay-Nexus.
+After Phase 1A through Phase 1C fixed-candidate acceptance, first prove a fresh Pay-Nexus Authority Snapshot from live project-owned sources, then extend the Harness-owned sidecar to extract those admission facts and validate a read-only planning scenario. Do not treat the pre-existing DEV-S01 sidecar projection as proof of the current Slice, and do not write Pay-Nexus.
 
 ### Phase 3 — Project authority adoption
 
@@ -414,9 +421,9 @@ Phase 1A acceptance requires tests for:
 - unchanged registry, catalog, resolver, projection, learning, and engineering gates;
 - full test-suite success from a clean candidate checkout.
 
-Phase 1B acceptance additionally requires concurrent-process tests for cross-target, cross-plan, cross-batch, replay, snapshot change, policy change, fencing, lease retention through `INTEGRATING`, crash, state loss, and project-authorized recovery. WriteSet tests must cover tracked and untracked breaches, in-flight fencing, complete-batch quarantine, `observedWriteSet` recomputation, affected-lane staleness, and fresh-plan-only recovery.
+Phase 1B acceptance additionally requires concurrent-process tests for cross-target, cross-plan, cross-batch, project-wide lane-cap enforcement, replay, snapshot change, policy change, fencing, lease retention through `INTEGRATING`, crash, state loss, and project-authorized recovery. WriteSet tests must cover tracked and untracked breaches, symlink ancestor/final-target/path-swap escape attempts, unavailable process-tree sandbox rejection, in-flight fencing, project-wide cross-batch freeze, `observedWriteSet` recomputation, affected-lane staleness, and fresh-plan-only recovery.
 
-Phase 1C acceptance additionally requires competing integration-controller, changed-head, apply failure, generated-artifact failure, review failure, crash at every journal commit point, replay-before-publication, replay-after-publication, atomic ref compare-and-swap, and target-ref-unchanged negatives.
+Phase 1C acceptance additionally requires competing integration-controller, changed-head, apply failure, generated-artifact failure, review failure, authority and every envelope field changing after review, expiry/revocation after review, `reviewBindingDigest` mismatch, mandatory gate/review rerun, crash at every journal commit point, replay-before-publication, replay-after-publication, atomic ref compare-and-swap, and target-ref-unchanged negatives.
 
 Later Pay-Nexus acceptance additionally requires exact read allowlists, zero unauthorized project writes, authority-source freshness, project-specific negative scenarios, and independent review of both the lane candidate and the serial integration candidate.
 
@@ -447,4 +454,4 @@ The runtime stops admitting new work when any of the following occurs:
 - the user or project authority pauses or revokes execution;
 - the integration barrier cannot prove a clean, current candidate.
 
-These stops are safety behavior, not permission to silently expand scope. For an ordinary lane-local stop, independent lanes may continue only when the current project authority, coordinator leases, and still-valid conflict graph prove that the condition does not affect them. A WriteSet breach, coordinator-state inconsistency, shared-authority drift, or pending integration recovery invalidates that proof and stops the complete affected batch until a fresh plan and recovery receipt exist.
+These stops are safety behavior, not permission to silently expand scope. For an ordinary lane-local stop, independent lanes may continue only when the current project authority, coordinator leases, and still-valid conflict graph prove that the condition does not affect them. A WriteSet breach or coordinator-state inconsistency stops every nonterminal project lane; shared-authority drift or pending integration recovery stops every affected batch. Work resumes only after a fresh plan and recovery receipt exist.

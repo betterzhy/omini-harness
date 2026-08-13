@@ -25,8 +25,6 @@ def _copy_repo(tmp_path: Path) -> tuple[Path, Path]:
         "design",
         "engineering",
         "runtime",
-        "examples",
-        "integrations",
         "contracts",
         "policies",
         "skills",
@@ -35,6 +33,9 @@ def _copy_repo(tmp_path: Path) -> tuple[Path, Path]:
         source_path = source / name
         if source_path.exists():
             shutil.copytree(source_path, root / name)
+    shutil.copytree(
+        source / "examples/project-fixture", root / "examples/project-fixture"
+    )
     return root, root / "examples/project-fixture"
 
 
@@ -134,6 +135,8 @@ def test_planning_cli_rejects_snapshot_fingerprint_drift(tmp_path: Path, control
 
 def test_existing_validate_and_resolve_cli_contracts_are_unchanged(tmp_path: Path):
     root, project = _copy_repo(tmp_path)
+    assert not (root / "integrations").exists()
+    assert [path.name for path in (root / "examples").iterdir()] == ["project-fixture"]
 
     validate = _run_cli(root, "validate", "--format", "json")
     assert validate.returncode == 0, validate.stderr

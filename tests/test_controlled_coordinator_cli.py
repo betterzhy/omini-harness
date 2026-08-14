@@ -92,6 +92,22 @@ def _run_subprocess(factory: CoordinationCliFactory, *args: str):
     )
 
 
+def _assert_coordination_argument_error(result, *, command: str) -> None:
+    assert result.returncode == 1
+    assert result.stderr == ""
+    assert len(result.stdout.splitlines()) == 1
+    assert json.loads(result.stdout) == {
+        "schemaVersion": "harness-cli/v1",
+        "ok": False,
+        "command": command,
+        "data": {
+            "code": "COORDINATION_ARGUMENT_INVALID",
+            "message": "invalid coordination command arguments",
+            "data": {},
+        },
+    }
+
+
 def test_coordination_status_invalid_registration_is_json_not_argparse_text(
     coordination_cli_factory,
 ):
@@ -154,9 +170,19 @@ def test_coordination_status_reports_uninitialized_safe_state(
                 "fencingToken": 7,
                 "state": "ADMITTED",
                 "released": False,
+                "leaseRetained": True,
                 "recoveryStatus": "CLEAR",
+                "receiptId": "coordinator-receipt:" + "1" * 24,
+                "journalVersion": 1,
             },
-            {"fencingToken": 7, "released": False, "recoveryStatus": "CLEAR"},
+            {
+                "fencingToken": 7,
+                "released": False,
+                "leaseRetained": True,
+                "recoveryStatus": "CLEAR",
+                "receiptId": "coordinator-receipt:" + "1" * 24,
+                "journalVersion": 1,
+            },
         ),
         (
             "transition",
@@ -168,8 +194,16 @@ def test_coordination_status_reports_uninitialized_safe_state(
                 "released": False,
                 "leaseRetained": True,
                 "recoveryStatus": "CLEAR",
+                "receiptId": "coordinator-receipt:" + "4" * 24,
+                "journalVersion": 4,
             },
-            {"fencingToken": 7, "leaseRetained": True, "released": False},
+            {
+                "fencingToken": 7,
+                "leaseRetained": True,
+                "released": False,
+                "receiptId": "coordinator-receipt:" + "4" * 24,
+                "journalVersion": 4,
+            },
         ),
         (
             "observe",
@@ -252,7 +286,10 @@ def test_coordination_acquire_exact_replay_is_preserved(
         "fencingToken": 11,
         "state": "ADMITTED",
         "released": False,
+        "leaseRetained": True,
         "recoveryStatus": "CLEAR",
+        "receiptId": "coordinator-receipt:" + "8" * 24,
+        "journalVersion": 8,
     }
     calls = []
 
@@ -304,6 +341,51 @@ def test_coordination_errors_preserve_closed_json_codes(
     }
 
 
+@pytest.mark.parametrize(
+    ("raised", "expected_code", "expected_message"),
+    [
+        (
+            OSError("/private/secret/coordinator-state"),
+            "SYSTEM_ERROR",
+            "coordination system operation failed",
+        ),
+        (
+            RuntimeError("programmer failure at /private/secret/source"),
+            "INTERNAL_ERROR",
+            "coordination internal failure",
+        ),
+    ],
+)
+def test_unexpected_coordination_failures_use_redacted_json_channel(
+    coordination_cli_factory,
+    monkeypatch,
+    capsys,
+    raised,
+    expected_code,
+    expected_message,
+):
+    def fail(*_):
+        raise raised
+
+    monkeypatch.setattr(cli, "acquire_lane_lease", fail)
+
+    return_code = cli.main(
+        coordination_cli_factory.argv("acquire", request=True)
+    )
+    captured = capsys.readouterr()
+
+    assert return_code == 1
+    assert captured.err == ""
+    assert len(captured.out.splitlines()) == 1
+    assert "/private/secret" not in captured.out
+    payload = json.loads(captured.out)
+    assert payload["data"] == {
+        "code": expected_code,
+        "message": expected_message,
+        "data": {},
+    }
+
+
 def test_coordination_status_exposes_recovery_pending_without_mutation(
     coordination_cli_factory, monkeypatch, capsys
 ):
@@ -335,21 +417,61 @@ def test_coordination_status_exposes_recovery_pending_without_mutation(
     assert payload["data"]["data"]["journalVersion"] == 2
 
 
+def test_coordination_missing_request_is_one_json_error_on_stdout(
+    coordination_cli_factory,
+):
+    result = _run_subprocess(
+        coordination_cli_factory,
+        *coordination_cli_factory.argv("acquire"),
+    )
+
+    assert result.returncode == 1
+    assert result.stderr == ""
+    assert len(result.stdout.splitlines()) == 1
+    payload = json.loads(result.stdout)
+    assert payload == {
+        "schemaVersion": "harness-cli/v1",
+        "ok": False,
+        "command": "coordination acquire",
+        "data": {
+            "code": "COORDINATION_ARGUMENT_INVALID",
+            "message": "invalid coordination command arguments",
+            "data": {},
+        },
+    }
+
+
 def test_coordination_parser_requires_explicit_inputs_and_has_no_execution_options(
     coordination_cli_factory,
 ):
-    parser = cli.build_parser()
-    required_failures = [
-        ["coordination", "status"],
-        ["coordination", "acquire", "--source", str(coordination_cli_factory.source)],
-        ["coordination", "transition", "--request", str(coordination_cli_factory.request)],
-        ["coordination", "observe", "--source", str(coordination_cli_factory.source)],
-        ["coordination", "recover", "--request", str(coordination_cli_factory.request)],
+    root_args = [
+        "--repository-root",
+        str(coordination_cli_factory.repository_root),
     ]
-    for argv in required_failures:
-        with pytest.raises(SystemExit) as caught:
-            parser.parse_args(argv)
-        assert caught.value.code == 2
+    required_failures = [
+        (["coordination", "status"], "coordination status"),
+        (
+            ["coordination", "acquire", "--source", str(coordination_cli_factory.source)],
+            "coordination acquire",
+        ),
+        (
+            ["coordination", "transition", "--request", str(coordination_cli_factory.request)],
+            "coordination transition",
+        ),
+        (
+            ["coordination", "observe", "--source", str(coordination_cli_factory.source)],
+            "coordination observe",
+        ),
+        (
+            ["coordination", "recover", "--request", str(coordination_cli_factory.request)],
+            "coordination recover",
+        ),
+    ]
+    for argv, command in required_failures:
+        _assert_coordination_argument_error(
+            _run_subprocess(coordination_cli_factory, *root_args, *argv),
+            command=command,
+        )
 
     forbidden = [
         "--apply",
@@ -365,23 +487,50 @@ def test_coordination_parser_requires_explicit_inputs_and_has_no_execution_optio
         "--authority",
         "--mutate-authority",
         "--format",
+        "--not-a-coordination-option",
     ]
     for option in forbidden:
-        with pytest.raises(SystemExit) as caught:
-            parser.parse_args(
-                coordination_cli_factory.argv("acquire", request=True) + [option]
-            )
-        assert caught.value.code == 2
+        _assert_coordination_argument_error(
+            _run_subprocess(
+                coordination_cli_factory,
+                *coordination_cli_factory.argv("acquire", request=True),
+                option,
+            ),
+            command="coordination acquire",
+        )
 
     for action in (
         "launch",
+        "worktree",
         "create-worktree",
         "integrate",
+        "ref",
         "git-ref",
         "merge",
         "push",
+        "authority",
         "mutate-authority",
     ):
-        with pytest.raises(SystemExit) as caught:
-            parser.parse_args(["coordination", action])
-        assert caught.value.code == 2
+        _assert_coordination_argument_error(
+            _run_subprocess(
+                coordination_cli_factory,
+                *root_args,
+                "coordination",
+                action,
+            ),
+            command="coordination",
+        )
+
+
+def test_legacy_parser_errors_remain_argparse_text(coordination_cli_factory):
+    result = _run_subprocess(
+        coordination_cli_factory,
+        "--repository-root",
+        str(coordination_cli_factory.repository_root),
+        "validate",
+        "--not-a-legacy-option",
+    )
+
+    assert result.returncode == 2
+    assert result.stdout == ""
+    assert "unrecognized arguments" in result.stderr

@@ -62,6 +62,52 @@ def _initialize(store, coordinator_state_factory, version=1):
     return persisted
 
 
+def test_read_only_open_absent_root_returns_none_without_creating_it(
+    tmp_path, monkeypatch
+):
+    from evolution_harness.coordinator_state import CoordinatorStateStore
+
+    root = tmp_path / "absent-state"
+    monkeypatch.setenv("AGENT_EVOLUTION_COORDINATOR_ROOT", str(root))
+    open_read_only = getattr(CoordinatorStateStore, "open_read_only", None)
+    assert callable(open_read_only), "read-only no-create state opening is absent"
+
+    store = open_read_only(IDENTITY)
+
+    assert store is None
+    assert not root.exists()
+
+
+def test_existing_project_lock_reports_uninitialized_without_creating_files(
+    tmp_path, monkeypatch
+):
+    from evolution_harness.coordinator_state import CoordinatorStateStore
+
+    root = tmp_path / "state"
+    with _open_store(
+        root,
+        monkeypatch,
+        identity={"projectExecutionKey": OTHER_PROJECT_KEY},
+    ):
+        pass
+    before = {
+        path.name: path.read_bytes() for path in root.iterdir() if path.is_file()
+    }
+    store = CoordinatorStateStore.open_read_only(IDENTITY)
+    assert store is not None
+    existing_lock = getattr(store, "exclusive_existing_project_lock", None)
+    assert callable(existing_lock), "read-only no-create project locking is absent"
+
+    with store:
+        with existing_lock() as initialized:
+            assert initialized is False
+            assert store.read_journal() is None
+
+    assert {
+        path.name: path.read_bytes() for path in root.iterdir() if path.is_file()
+    } == before
+
+
 def test_state_root_rejects_symlink_and_permissive_mode(tmp_path, monkeypatch):
     from evolution_harness.controlled_coordinator_inputs import ControlledCoordinationError
     from evolution_harness.coordinator_state import CoordinatorStateStore

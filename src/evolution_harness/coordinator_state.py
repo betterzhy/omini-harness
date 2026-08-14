@@ -756,6 +756,40 @@ def _open_or_create_root(path: Path) -> int:
         raise
 
 
+def _open_existing_root(path: Path) -> int | None:
+    current = os.open("/", _DIRECTORY_FLAGS)
+    try:
+        parts = path.parts[1:]
+        if not parts:
+            raise ControlledCoordinationError(
+                "UNSAFE_COORDINATOR_ROOT", "filesystem root cannot be coordinator state"
+            )
+        for index, part in enumerate(parts):
+            try:
+                following = os.open(part, _DIRECTORY_FLAGS, dir_fd=current)
+            except FileNotFoundError:
+                os.close(current)
+                return None
+            except OSError as exc:
+                raise ControlledCoordinationError(
+                    "UNSAFE_COORDINATOR_ROOT",
+                    f"coordinator root component is unsafe: {part}",
+                ) from exc
+            try:
+                if index == len(parts) - 1:
+                    _validate_directory(os.fstat(following), uid=_current_uid())
+            except BaseException:
+                os.close(following)
+                raise
+            previous = current
+            current = following
+            os.close(previous)
+        return current
+    except BaseException:
+        os.close(current)
+        raise
+
+
 class CoordinatorStateStore:
     def __init__(self, root: Path, root_descriptor: int, identity: dict[str, Any]):
         self.root = root
@@ -787,6 +821,31 @@ class CoordinatorStateStore:
         store = cls(root, descriptor, identity)
         try:
             store._open_or_validate_root_identity()
+        except BaseException:
+            store.close()
+            raise
+        return store
+
+    @classmethod
+    def open_read_only(
+        cls, identity: dict[str, Any]
+    ) -> "CoordinatorStateStore | None":
+        if (
+            not isinstance(identity, dict)
+            or not isinstance(identity.get("projectExecutionKey"), str)
+            or not _PROJECT_KEY.fullmatch(identity["projectExecutionKey"])
+        ):
+            raise ControlledCoordinationError(
+                "PROJECT_EXECUTION_IDENTITY_INVALID",
+                "identity must contain a canonical projectExecutionKey",
+            )
+        root = _configured_root()
+        descriptor = _open_existing_root(root)
+        if descriptor is None:
+            return None
+        store = cls(root, descriptor, identity)
+        try:
+            store._verify_root_identity()
         except BaseException:
             store.close()
             raise
@@ -894,6 +953,16 @@ class CoordinatorStateStore:
 
     def _path_stat(self, name: str) -> os.stat_result:
         return os.stat(name, dir_fd=self._root_descriptor, follow_symlinks=False)
+
+    def _optional_regular_stat(
+        self, name: str, *, code: str = "UNSAFE_COORDINATOR_STATE_FILE"
+    ) -> os.stat_result | None:
+        try:
+            current = self._path_stat(name)
+        except FileNotFoundError:
+            return None
+        _validate_regular(current, uid=self._owner_uid, code=code)
+        return current
 
     def _assert_journal_inode(self, expected: os.stat_result | None) -> None:
         try:
@@ -1174,6 +1243,159 @@ class CoordinatorStateStore:
             if not _same_inode(opened, named):
                 raise ControlledCoordinationError(
                     "COORDINATOR_STATE_INODE_CHANGED", "project lock inode changed while held"
+                )
+        finally:
+            if self._lock_descriptor is not None:
+                try:
+                    fcntl.flock(self._lock_descriptor, fcntl.LOCK_UN)
+                finally:
+                    os.close(self._lock_descriptor)
+                    self._lock_descriptor = None
+
+    @contextmanager
+    def exclusive_existing_project_lock(self) -> Iterator[bool]:
+        """Lock initialized state without creating root or project artifacts."""
+        self._verify_root_identity()
+        if self._lock_descriptor is not None:
+            raise ControlledCoordinationError(
+                "COORDINATOR_LOCK_BUSY", "project lock is not reentrant"
+            )
+        initialized = self._read_marker()
+        lock_identity = self._read_lock_identity()
+        lock_stat = self._optional_regular_stat(
+            self._lock_name, code="COORDINATOR_LOCK_IDENTITY_MISMATCH"
+        )
+        journal_stat = self._optional_regular_stat(self._journal_name)
+        if initialized is None:
+            if (
+                lock_identity is not None
+                and lock_stat is not None
+                and journal_stat is None
+            ):
+                descriptor = -1
+                try:
+                    descriptor = os.open(
+                        self._lock_name,
+                        os.O_RDWR | _NOFOLLOW | _CLOEXEC,
+                        dir_fd=self._root_descriptor,
+                    )
+                    opened = os.fstat(descriptor)
+                    _validate_regular(
+                        opened,
+                        uid=self._owner_uid,
+                        code="COORDINATOR_LOCK_IDENTITY_MISMATCH",
+                    )
+                    if not _same_inode(lock_stat, opened):
+                        raise ControlledCoordinationError(
+                            "COORDINATOR_LOCK_IDENTITY_MISMATCH",
+                            "project lock inode changed before read-only flock",
+                        )
+                    try:
+                        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    except BlockingIOError as exc:
+                        raise ControlledCoordinationError(
+                            "COORDINATOR_LOCK_BUSY",
+                            "another process holds the project coordinator lock",
+                        ) from exc
+                    self._bind_or_validate_lock_identity(
+                        descriptor, opened, lock_identity
+                    )
+                except ControlledCoordinationError:
+                    raise
+                except OSError as exc:
+                    raise ControlledCoordinationError(
+                        "UNSAFE_COORDINATOR_STATE_FILE",
+                        "cannot safely inspect existing project coordinator lock",
+                    ) from exc
+                finally:
+                    if descriptor >= 0:
+                        try:
+                            fcntl.flock(descriptor, fcntl.LOCK_UN)
+                        finally:
+                            os.close(descriptor)
+                raise ControlledCoordinationError(
+                    "COORDINATOR_STATE_INCONSISTENT",
+                    "uninitialized coordinator has persistent project state",
+                )
+            if (
+                lock_identity is not None
+                or lock_stat is not None
+                or journal_stat is not None
+            ):
+                raise ControlledCoordinationError(
+                    "COORDINATOR_STATE_INCONSISTENT",
+                    "uninitialized coordinator has persistent project state",
+                )
+            yield False
+            self._verify_root_identity()
+            if (
+                self._read_marker() is not None
+                or self._read_lock_identity() is not None
+                or self._optional_regular_stat(
+                    self._lock_name, code="COORDINATOR_LOCK_IDENTITY_MISMATCH"
+                )
+                is not None
+                or self._optional_regular_stat(self._journal_name) is not None
+            ):
+                raise ControlledCoordinationError(
+                    "COORDINATOR_STATE_INODE_CHANGED",
+                    "coordinator state appeared during read-only inspection",
+                )
+            return
+        if lock_identity is None or lock_stat is None:
+            raise ControlledCoordinationError(
+                "COORDINATOR_LOCK_IDENTITY_MISMATCH",
+                "initialized project is missing its persistent lock identity",
+            )
+
+        descriptor = -1
+        try:
+            descriptor = os.open(
+                self._lock_name,
+                os.O_RDWR | _NOFOLLOW | _CLOEXEC,
+                dir_fd=self._root_descriptor,
+            )
+            opened = os.fstat(descriptor)
+            _validate_regular(
+                opened, uid=self._owner_uid, code="COORDINATOR_LOCK_IDENTITY_MISMATCH"
+            )
+            if not _same_inode(lock_stat, opened):
+                raise ControlledCoordinationError(
+                    "COORDINATOR_LOCK_IDENTITY_MISMATCH",
+                    "project lock inode changed before read-only flock",
+                )
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError as exc:
+                raise ControlledCoordinationError(
+                    "COORDINATOR_LOCK_BUSY",
+                    "another process holds the project coordinator lock",
+                ) from exc
+            self._bind_or_validate_lock_identity(descriptor, opened, lock_identity)
+        except ControlledCoordinationError:
+            if descriptor >= 0:
+                os.close(descriptor)
+            raise
+        except OSError as exc:
+            if descriptor >= 0:
+                os.close(descriptor)
+            raise ControlledCoordinationError(
+                "UNSAFE_COORDINATOR_STATE_FILE",
+                "cannot safely open existing project coordinator lock",
+            ) from exc
+
+        self._lock_descriptor = descriptor
+        try:
+            self._verify_root_identity()
+            self._bind_or_validate_lock_identity(
+                descriptor, opened, self._read_lock_identity()
+            )
+            yield True
+            named = self._path_stat(self._lock_name)
+            if not _same_inode(opened, named):
+                raise ControlledCoordinationError(
+                    "COORDINATOR_STATE_INODE_CHANGED",
+                    "project lock inode changed while held",
                 )
         finally:
             if self._lock_descriptor is not None:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +15,7 @@ from .controlled_coordinator import (
     inspect_project_coordinator,
     transition_lane_lease,
 )
+from .controlled_coordinator_inputs import ControlledCoordinationError
 from .controlled_inputs import load_planning_request
 from .controlled_planner import build_provisional_execution_plan
 from .controlled_recovery import observe_lane_writes, record_project_recovery
@@ -54,6 +56,29 @@ def _emit(data: Any, *, fmt: str, ok: bool = True, command: str = "") -> int:
     return 0 if ok else 1
 
 
+class _HarnessArgumentParser(argparse.ArgumentParser):
+    def error(self, message: str) -> None:
+        command = self.prog.removeprefix("harness ")
+        coordination_command = getattr(
+            self, "_coordination_error_command", None
+        )
+        if command == "coordination" or command.startswith("coordination "):
+            coordination_command = command
+        if coordination_command is not None:
+            _emit(
+                {
+                    "code": "COORDINATION_ARGUMENT_INVALID",
+                    "message": "invalid coordination command arguments",
+                    "data": {},
+                },
+                fmt="json",
+                ok=False,
+                command=coordination_command,
+            )
+            raise SystemExit(1)
+        super().error(message)
+
+
 def _add_format(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--format", choices=["text", "json"], default="text")
 
@@ -84,6 +109,26 @@ def _add_coordination_mutation_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--request", required=True)
 
 
+def _coordination_command_from_argv(argv: list[str]) -> str | None:
+    index = 0
+    if index < len(argv) and argv[index] == "--repository-root":
+        index += 2
+    elif index < len(argv) and argv[index].startswith("--repository-root="):
+        index += 1
+    if index >= len(argv) or argv[index] != "coordination":
+        return None
+    index += 1
+    if index < len(argv) and argv[index] in {
+        "status",
+        "acquire",
+        "transition",
+        "observe",
+        "recover",
+    }:
+        return f"coordination {argv[index]}"
+    return "coordination"
+
+
 def _emit_coordination(
     data: dict[str, Any], *, message: str, command: str
 ) -> int:
@@ -110,8 +155,11 @@ def _registered_integration_root(root: Path, args) -> Path:
     return loaded["integrationRoot"]
 
 
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="harness")
+def build_parser(
+    *, coordination_error_command: str | None = None
+) -> argparse.ArgumentParser:
+    parser = _HarnessArgumentParser(prog="harness")
+    parser._coordination_error_command = coordination_error_command
     parser.add_argument("--repository-root", default=".")
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -169,8 +217,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv=None) -> int:
-    parser = build_parser()
-    args = parser.parse_args(argv)
+    arguments = list(sys.argv[1:] if argv is None else argv)
+    parser = build_parser(
+        coordination_error_command=_coordination_command_from_argv(arguments)
+    )
+    args = parser.parse_args(arguments)
     root = Path(args.repository_root)
     fmt = getattr(args, "format", "text")
     if args.command == "coordination":
@@ -371,10 +422,20 @@ def main(argv=None) -> int:
         if args.command == "revalidation":
             return _emit(check_revalidation(root, as_of=args.as_of, triggers=args.trigger), fmt=fmt, command=command)
     except Exception as exc:
-        code = getattr(exc, "code", "INTERNAL_ERROR")
-        error = {"code": code, "message": str(exc)}
         if args.command == "coordination":
-            error["data"] = {}
+            if isinstance(exc, ControlledCoordinationError):
+                code = exc.code
+                message = str(exc)
+            elif isinstance(exc, OSError):
+                code = "SYSTEM_ERROR"
+                message = "coordination system operation failed"
+            else:
+                code = "INTERNAL_ERROR"
+                message = "coordination internal failure"
+            error = {"code": code, "message": message, "data": {}}
+        else:
+            code = getattr(exc, "code", "INTERNAL_ERROR")
+            error = {"code": code, "message": str(exc)}
         return _emit(error, fmt=fmt, ok=False, command=command)
     return 2
 

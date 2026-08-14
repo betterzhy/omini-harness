@@ -151,6 +151,8 @@ Task 6 Review Fix Round 1 persisted-signature migration: the closed recovery com
 
 Task 7 public-inspection migration (fixed base/parent `ae46bdb5ec9286d8a4bd27389ff6d262d45d7d17`): the locked Phase 1B interface already requires `inspect_project_coordinator`, but the fixed parent contains no implementation. The CLI must not create a second status projection, so the authorized Task 7 WriteSet expands to exactly `src/evolution_harness/controlled_coordinator.py`, `tests/test_controlled_coordinator_acquire.py`, `src/evolution_harness/cli.py`, `tests/test_controlled_coordinator_cli.py`, `README.md`, and this formal plan. The public inspection API resolves the registered physical project identity, acquires the existing non-blocking project lock, and reads the durable journal through `CoordinatorStateStore`; an uninitialized project returns a structured, read-only safety status without creating a journal. Corrupt or unsafe state and lock contention fail closed through the existing coordinator error codes. The CLI consumes only that public status API and the four existing mutation APIs.
 
+Task 7 Review Fix Round 1 Authority + WriteSet migration (fixed base/parent `a5a9351970a5f6da19f39b8003107c5b1b78baf2`): the exact authorized eight-path WriteSet is `src/evolution_harness/controlled_coordinator.py`, `tests/test_controlled_coordinator_acquire.py`, `src/evolution_harness/cli.py`, `tests/test_controlled_coordinator_cli.py`, `src/evolution_harness/coordinator_state.py`, `tests/test_coordinator_state.py`, `README.md`, and this formal plan. Inspection uses a descriptor-anchored no-create state-root open plus a no-create existing-project lock: an absent root creates nothing, and an existing root for an uninitialized project creates no project lock, lock identity, initialization marker, or journal; initialized corrupt/unsafe state and lock contention still fail closed. Coordination-only argparse failures emit one stable JSON object on stdout with empty stderr while all legacy command parse behavior remains unchanged. Acquire and transition results bind `receiptId` and `journalVersion` to the exact original durable receipt and reconstruct that receipt's lease/fencing/released/recovery projection on first execution and exact replay; a later lease state may not rewrite historical output. Only `ControlledCoordinationError` supplies a coordinator protocol code; OS/environment failures use a stable redacted `SYSTEM_ERROR` channel and unexpected programmer failures use a stable redacted `INTERNAL_ERROR` channel.
+
 Coordinator-projection migration (2026-08-14): `ACTIVE_LEASE_CONFLICT` is a locked closed-enum projection reason and `PROJECT_CAPACITY_LIMIT` remains the distinct project-wide capacity reason. The optional planner input is a closed `controlled-coordinator-snapshot/v1` object that binds project, project execution key, base provisional plan, journal version/digest/recovery state, envelope, conflict policy, source base, and the complete journal. When absent, the returned bundle and provisional execution-plan bytes are unchanged. When present, `bundle.executionPlan` is still that original provisional plan and the read-only result is added separately as `bundle.coordinatorProjection` with schema `controlled-coordinator-projection/v1`. A projection is not an Acquire `executionPlan`, never mutates coordinator state, and never removes `requiresCoordinatorRecheck=true`.
 
 ### Journal invariants
@@ -566,6 +568,8 @@ git commit -m "feat: quarantine controlled project write breaches"
 
 - Modify: `src/evolution_harness/controlled_coordinator.py`
 - Modify: `tests/test_controlled_coordinator_acquire.py`
+- Modify: `src/evolution_harness/coordinator_state.py`
+- Modify: `tests/test_coordinator_state.py`
 - Modify: `src/evolution_harness/cli.py`
 - Create: `tests/test_controlled_coordinator_cli.py`
 - Modify: `README.md`
@@ -619,6 +623,20 @@ git add src/evolution_harness/controlled_coordinator.py \
   README.md \
   docs/superpowers/plans/2026-08-14-controlled-parallel-project-execution-phase-1b.md
 git commit -m "feat: expose controlled coordination safety"
+```
+
+Review Fix Round 1 uses the fixed Task 7 candidate as parent and commits only actually changed paths from the exact authorized eight-path WriteSet:
+
+```bash
+git add src/evolution_harness/controlled_coordinator.py \
+  tests/test_controlled_coordinator_acquire.py \
+  src/evolution_harness/coordinator_state.py \
+  tests/test_coordinator_state.py \
+  src/evolution_harness/cli.py \
+  tests/test_controlled_coordinator_cli.py \
+  README.md \
+  docs/superpowers/plans/2026-08-14-controlled-parallel-project-execution-phase-1b.md
+git commit -m "fix: harden controlled coordination cli evidence"
 ```
 
 ### Task 8: Phase 1B acceptance, fixed candidate, and release decision

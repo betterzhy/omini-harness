@@ -445,6 +445,8 @@ def test_inspect_uninitialized_project_returns_safe_status_without_journal(
 ):
     inspect = getattr(controlled_coordinator, "inspect_project_coordinator", None)
     assert callable(inspect), "locked inspect_project_coordinator API is absent"
+    state_root = Path(os.environ["AGENT_EVOLUTION_COORDINATOR_ROOT"])
+    assert not state_root.exists()
 
     status = inspect(
         acquisition_factory.repository_root,
@@ -454,8 +456,6 @@ def test_inspect_uninitialized_project_returns_safe_status_without_journal(
         acquisition_factory.repository_root,
         acquisition_factory.source_root,
     )
-    with CoordinatorStateStore.open(identity) as store:
-        journal = store.read_journal()
 
     assert status == {
         "schemaVersion": "controlled-coordinator-status/v1",
@@ -470,7 +470,31 @@ def test_inspect_uninitialized_project_returns_safe_status_without_journal(
         "releasedLeaseIds": [],
         "leases": [],
     }
-    assert journal is None
+    assert not state_root.exists()
+
+
+def test_inspect_existing_root_uninitialized_project_creates_no_project_state(
+    acquisition_factory,
+):
+    state_root = Path(os.environ["AGENT_EVOLUTION_COORDINATOR_ROOT"])
+    other_identity = {
+        "projectExecutionKey": "project-execution:" + "f" * 64,
+    }
+    with CoordinatorStateStore.open(other_identity):
+        pass
+    before = {
+        path.name: path.read_bytes() for path in state_root.iterdir() if path.is_file()
+    }
+
+    status = controlled_coordinator.inspect_project_coordinator(
+        acquisition_factory.repository_root,
+        acquisition_factory.source_root,
+    )
+
+    assert status["initialized"] is False
+    assert {
+        path.name: path.read_bytes() for path in state_root.iterdir() if path.is_file()
+    } == before
 
 
 def test_inspect_initialized_project_projects_durable_receipt_and_lease_status(
@@ -594,6 +618,9 @@ def test_acquire_persists_fenced_lease_and_same_command_replays(
     assert first == replay
     assert first["fencingToken"] == 1
     assert first["state"] == "ADMITTED"
+    assert first["receiptId"] == journal["receipts"][0]["receiptId"]
+    assert first["journalVersion"] == 1
+    assert first["leaseRetained"] is True
     assert first["lanePhysicalIdentity"] == {
         "device": os.lstat(command["laneRoot"]).st_dev,
         "inode": os.lstat(command["laneRoot"]).st_ino,
@@ -601,11 +628,130 @@ def test_acquire_persists_fenced_lease_and_same_command_replays(
     }
     assert journal["journalVersion"] == 1
     assert journal["nextFencingToken"] == 2
-    assert journal["leases"] == [first]
+    durable_lease = copy.deepcopy(first)
+    for projection_field in ("receiptId", "journalVersion", "leaseRetained"):
+        durable_lease.pop(projection_field)
+    assert journal["leases"] == [durable_lease]
     assert journal["receipts"][0]["receiptType"] == "ACQUIRE"
     digest_payload = copy.deepcopy(journal)
     digest_payload["receipts"][0]["journalDigest"] = "sha256:" + "0" * 64
     assert journal["receipts"][0]["journalDigest"] == _sha256(digest_payload)
+
+
+def test_exact_replays_after_later_transition_project_original_receipts(
+    acquisition_factory, tmp_path
+):
+    from test_controlled_coordinator_lifecycle import _transition_command
+
+    for private_name, public_name in (
+        ("lifecycle-private.pem", "lifecycle-authority-public.pem"),
+        ("reviewer-private.pem", "deep-reviewer-public.pem"),
+    ):
+        private_path = tmp_path / private_name
+        subprocess.run(
+            [
+                "/usr/bin/ssh-keygen",
+                "-q",
+                "-t",
+                "ed25519",
+                "-N",
+                "",
+                "-f",
+                str(private_path),
+            ],
+            check=True,
+        )
+        public_parts = Path(str(private_path) + ".pub").read_text(
+            encoding="utf-8"
+        ).split()
+        (acquisition_factory.source_root / public_name).write_text(
+            f"{public_parts[0]} {public_parts[1]}\n", encoding="utf-8"
+        )
+    _git(
+        acquisition_factory.source_root,
+        "add",
+        "lifecycle-authority-public.pem",
+        "deep-reviewer-public.pem",
+    )
+    _git(acquisition_factory.source_root, "commit", "-qm", "signing authorities")
+    acquisition_factory.lifecycle_private_key = tmp_path / "lifecycle-private.pem"
+    acquisition_factory.reviewer_private_key = tmp_path / "reviewer-private.pem"
+
+    command = acquisition_factory.acquire(create_lane=False)
+    lane = Path(command["laneRoot"])
+    lane.parent.mkdir(parents=True, exist_ok=True)
+    _git(
+        lane.parent,
+        "clone",
+        "-q",
+        "--no-hardlinks",
+        str(acquisition_factory.source_root),
+        str(lane),
+    )
+    first = acquire_lane_lease(
+        acquisition_factory.repository_root,
+        acquisition_factory.source_root,
+        command,
+    )
+    active_command = _transition_command(acquisition_factory, first, "ACTIVE")
+    active = controlled_coordinator.transition_lane_lease(
+        acquisition_factory.repository_root,
+        acquisition_factory.source_root,
+        active_command,
+    )
+    fixed = controlled_coordinator.transition_lane_lease(
+        acquisition_factory.repository_root,
+        acquisition_factory.source_root,
+        _transition_command(acquisition_factory, active, "FIXED_CANDIDATE"),
+    )
+
+    replay = acquire_lane_lease(
+        acquisition_factory.repository_root,
+        acquisition_factory.source_root,
+        copy.deepcopy(command),
+    )
+    active_replay = controlled_coordinator.transition_lane_lease(
+        acquisition_factory.repository_root,
+        acquisition_factory.source_root,
+        copy.deepcopy(active_command),
+    )
+    journal = acquisition_factory.journal()
+
+    assert active["state"] == "ACTIVE"
+    assert active["receiptId"] == journal["receipts"][1]["receiptId"]
+    assert active["journalVersion"] == 2
+    assert fixed["state"] == "FIXED_CANDIDATE"
+    assert fixed["journalVersion"] == 3
+    assert replay == first
+    assert replay["state"] == "ADMITTED"
+    assert replay["receiptId"] == journal["receipts"][0]["receiptId"]
+    assert replay["journalVersion"] == 1
+    assert active_replay == active
+    assert active_replay["candidateIdentity"] is None
+    assert active_replay["receiptId"] == journal["receipts"][1]["receiptId"]
+    assert active_replay["journalVersion"] == 2
+
+
+def test_receipt_projection_rejects_command_not_associated_with_lease(
+    acquisition_factory,
+):
+    acquire_lane_lease(
+        acquisition_factory.repository_root,
+        acquisition_factory.source_root,
+        acquisition_factory.acquire(),
+    )
+    journal = acquisition_factory.journal()
+    lease = journal["leases"][0]
+    mismatched = copy.deepcopy(journal["receipts"][0])
+    command = mismatched["evidence"]["command"]
+    command["authoritySnapshotFingerprint"] = "sha256:" + "f" * 64
+    _command_digest(command)
+    mismatched["commandDigest"] = command["commandDigest"]
+
+    with pytest.raises(ControlledCoordinationError) as caught:
+        controlled_coordinator._lease_result_for_receipt(lease, mismatched)
+
+    assert caught.value.code == "COORDINATOR_STATE_CORRUPT"
 
 
 def test_read_rejects_orphan_lease_without_exactly_one_acquire_receipt(

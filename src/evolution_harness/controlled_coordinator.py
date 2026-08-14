@@ -166,55 +166,57 @@ def inspect_project_coordinator(
 ) -> dict[str, object]:
     """Read one project's durable coordinator safety status under its lock."""
     identity = resolve_project_execution_identity(repository_root, source_root)
-    with CoordinatorStateStore.open(identity) as store:
-        with store.exclusive_project_lock():
-            journal = store.read_journal()
-            if journal is not None:
-                leases = [
-                    {
-                        "leaseId": lease["leaseId"],
-                        "batchPlanId": lease["batchPlanId"],
-                        "sliceId": lease["sliceId"],
-                        "attemptId": lease["attemptId"],
-                        "fencingToken": lease["fencingToken"],
-                        "state": lease["state"],
-                        "released": lease["released"],
-                        "retained": not lease["released"],
-                        "recoveryStatus": lease["recoveryStatus"],
+    store = CoordinatorStateStore.open_read_only(identity)
+    if store is not None:
+        with store:
+            with store.exclusive_existing_project_lock() as initialized:
+                journal = store.read_journal() if initialized else None
+                if journal is not None:
+                    leases = [
+                        {
+                            "leaseId": lease["leaseId"],
+                            "batchPlanId": lease["batchPlanId"],
+                            "sliceId": lease["sliceId"],
+                            "attemptId": lease["attemptId"],
+                            "fencingToken": lease["fencingToken"],
+                            "state": lease["state"],
+                            "released": lease["released"],
+                            "retained": not lease["released"],
+                            "recoveryStatus": lease["recoveryStatus"],
+                        }
+                        for lease in journal["leases"]
+                    ]
+                    latest_receipt = journal["receipts"][-1]
+                    return {
+                        "schemaVersion": "controlled-coordinator-status/v1",
+                        "projectExecutionKey": identity["projectExecutionKey"],
+                        "initialized": True,
+                        "journalVersion": journal["journalVersion"],
+                        "nextFencingToken": journal["nextFencingToken"],
+                        "recoveryState": journal["recoveryState"],
+                        "latestReceiptId": latest_receipt["receiptId"],
+                        "journalDigest": latest_receipt["journalDigest"],
+                        "retainedLeaseIds": [
+                            lease["leaseId"] for lease in leases if lease["retained"]
+                        ],
+                        "releasedLeaseIds": [
+                            lease["leaseId"] for lease in leases if lease["released"]
+                        ],
+                        "leases": leases,
                     }
-                    for lease in journal["leases"]
-                ]
-                latest_receipt = journal["receipts"][-1]
-                return {
-                    "schemaVersion": "controlled-coordinator-status/v1",
-                    "projectExecutionKey": identity["projectExecutionKey"],
-                    "initialized": True,
-                    "journalVersion": journal["journalVersion"],
-                    "nextFencingToken": journal["nextFencingToken"],
-                    "recoveryState": journal["recoveryState"],
-                    "latestReceiptId": latest_receipt["receiptId"],
-                    "journalDigest": latest_receipt["journalDigest"],
-                    "retainedLeaseIds": [
-                        lease["leaseId"] for lease in leases if lease["retained"]
-                    ],
-                    "releasedLeaseIds": [
-                        lease["leaseId"] for lease in leases if lease["released"]
-                    ],
-                    "leases": leases,
-                }
-            return {
-                "schemaVersion": "controlled-coordinator-status/v1",
-                "projectExecutionKey": identity["projectExecutionKey"],
-                "initialized": False,
-                "journalVersion": 0,
-                "nextFencingToken": 1,
-                "recoveryState": "CLEAR",
-                "latestReceiptId": None,
-                "journalDigest": None,
-                "retainedLeaseIds": [],
-                "releasedLeaseIds": [],
-                "leases": [],
-            }
+    return {
+        "schemaVersion": "controlled-coordinator-status/v1",
+        "projectExecutionKey": identity["projectExecutionKey"],
+        "initialized": False,
+        "journalVersion": 0,
+        "nextFencingToken": 1,
+        "recoveryState": "CLEAR",
+        "latestReceiptId": None,
+        "journalDigest": None,
+        "retainedLeaseIds": [],
+        "releasedLeaseIds": [],
+        "leases": [],
+    }
 
 
 def _git_identity(source_root: Path) -> tuple[Path, str]:
@@ -500,8 +502,87 @@ def _journal_digest(journal: dict[str, Any], receipt_index: int) -> str:
     return _sha256(payload)
 
 
-def _transition_result(lease: dict[str, Any]) -> dict[str, Any]:
+def _lease_result_for_receipt(
+    lease: dict[str, Any], receipt: dict[str, Any]
+) -> dict[str, Any]:
+    """Project one historical lease result from its durable authority receipt."""
+    command = receipt.get("evidence", {}).get("command")
+    if (
+        not isinstance(command, dict)
+        or receipt.get("projectExecutionKey") != lease.get("projectExecutionKey")
+        or receipt.get("fencingToken") != lease.get("fencingToken")
+        or command.get("authoritySnapshotFingerprint")
+        != receipt.get("authoritySnapshotFingerprint")
+        or receipt.get("commandDigest") != command.get("commandDigest")
+    ):
+        raise ControlledCoordinationError(
+            "COORDINATOR_STATE_CORRUPT",
+            "durable receipt is not associated with its lease",
+        )
     result = copy.deepcopy(lease)
+    if receipt.get("receiptType") == "ACQUIRE":
+        if (
+            receipt.get("previousState") is not None
+            or receipt.get("nextState") != "ADMITTED"
+            or receipt.get("authoritySnapshotFingerprint")
+            != lease.get("authoritySnapshotFingerprint")
+            or (
+                command.get("batchPlanId"),
+                command.get("sliceId"),
+                command.get("attemptId"),
+            )
+            != (
+                lease.get("batchPlanId"),
+                lease.get("sliceId"),
+                lease.get("attemptId"),
+            )
+            or receipt.get("recordedAt") != command.get("asOf")
+        ):
+            raise ControlledCoordinationError(
+                "COORDINATOR_STATE_CORRUPT",
+                "acquisition receipt is not associated with its lease",
+            )
+        result.update(
+            {
+                "state": "ADMITTED",
+                "candidateIdentity": None,
+                "acquiredAt": command["asOf"],
+                "lastTransitionAt": command["asOf"],
+                "released": False,
+                "recoveryStatus": "CLEAR",
+            }
+        )
+    elif receipt.get("receiptType") == "TRANSITION":
+        proof = command.get("lifecycleAuthorityProof")
+        if (
+            not isinstance(proof, dict)
+            or command.get("leaseId") != lease.get("leaseId")
+            or command.get("attemptId") != lease.get("attemptId")
+            or command.get("fencingToken") != lease.get("fencingToken")
+            or receipt.get("previousState") != command.get("expectedState")
+            or receipt.get("nextState") != command.get("nextState")
+            or receipt.get("recordedAt") != proof.get("assertedAt")
+        ):
+            raise ControlledCoordinationError(
+                "COORDINATOR_STATE_CORRUPT",
+                "transition receipt is not associated with its lease",
+            )
+        result.update(
+            {
+                "state": receipt["nextState"],
+                "candidateIdentity": copy.deepcopy(command.get("candidateIdentity")),
+                "lastTransitionAt": receipt["recordedAt"],
+                "released": receipt["nextState"] == "CLOSED",
+                "recoveryStatus": "CLEAR",
+            }
+        )
+    else:
+        raise ControlledCoordinationError(
+            "COORDINATOR_STATE_CORRUPT",
+            "lease result requires an acquisition or transition receipt",
+        )
+    result["receiptId"] = receipt["receiptId"]
+    result["journalVersion"] = receipt["nextJournalVersion"]
     result["leaseRetained"] = not result["released"]
     return result
 
@@ -947,7 +1028,7 @@ def acquire_lane_lease(
                         "ACQUISITION_IDEMPOTENCY_CONFLICT",
                         "the acquisition idempotency key payload changed",
                     )
-                return copy.deepcopy(existing)
+                return _lease_result_for_receipt(existing, receipt)
 
             normalized = normalize_acquire_command(repository, raw)
             retired_batches, retired_attempts = _retired_recovery_identities(current)
@@ -1102,7 +1183,7 @@ def acquire_lane_lease(
                     "COORDINATOR_POST_WRITE_MISMATCH",
                     "persisted acquisition did not reproduce lease and receipt",
                 )
-            return copy.deepcopy(persisted_lease)
+            return _lease_result_for_receipt(persisted_lease, receipt)
 
 
 def transition_lane_lease(
@@ -1279,7 +1360,7 @@ def transition_lane_lease(
                 replay_candidate = normalized["candidateIdentity"]
                 if replay_candidate is not None:
                     _validate_live_lane_candidate(lease, replay_candidate)
-                return _transition_result(lease)
+                return _lease_result_for_receipt(lease, exact_replay)
             if conflicting_replay is not None:
                 raise ControlledCoordinationError(
                     "TRANSITION_IDEMPOTENCY_CONFLICT",
@@ -1390,4 +1471,4 @@ def transition_lane_lease(
                     "COORDINATOR_POST_WRITE_MISMATCH",
                     "persisted transition did not reproduce lease and receipt",
                 )
-            return _transition_result(persisted_lease)
+            return _lease_result_for_receipt(persisted_lease, receipt)

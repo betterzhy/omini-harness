@@ -127,9 +127,15 @@ def _acquire_planning_footprints(command: dict[str, Any]) -> list[dict[str, Any]
     return sorted(footprints, key=lambda item: item["sliceId"])
 
 
-def _validate_journal_integrity(journal: dict[str, Any]) -> None:
+def _validate_journal_integrity(
+    journal: dict[str, Any], *, persisted: bool = False
+) -> None:
     receipts = journal["receipts"]
     leases = journal["leases"]
+    if persisted and journal["journalVersion"] == 0:
+        _state_corrupt(
+            "an initialized store cannot persist the in-memory empty journal sentinel"
+        )
     if any(
         lease["projectExecutionKey"] != journal["projectExecutionKey"]
         for lease in leases
@@ -167,6 +173,7 @@ def _validate_journal_integrity(journal: dict[str, Any]) -> None:
         _state_corrupt("active lease lanes must be logically and physically unique")
     if journal["journalVersion"] != len(receipts):
         _state_corrupt("journal version does not match the complete receipt chain")
+    acquire_receipt_counts = {lease["leaseId"]: 0 for lease in leases}
     for index, receipt in enumerate(receipts, start=1):
         if (
             receipt["projectExecutionKey"] != journal["projectExecutionKey"]
@@ -210,6 +217,7 @@ def _validate_journal_integrity(journal: dict[str, Any]) -> None:
             _state_corrupt("receipt is not associated with exactly one fenced lease")
         if receipt["receiptType"] == "ACQUIRE":
             lease = associated[0]
+            acquire_receipt_counts[lease["leaseId"]] += 1
             expected_lease_bindings = {
                 "batchPlanId": command["batchPlanId"],
                 "sliceId": command["sliceId"],
@@ -242,6 +250,9 @@ def _validate_journal_integrity(journal: dict[str, Any]) -> None:
             != command["authoritySnapshotFingerprint"]
         ):
             _state_corrupt("transition receipt does not preserve its command binding")
+
+    if any(count != 1 for count in acquire_receipt_counts.values()):
+        _state_corrupt("every persisted lease must have exactly one ACQUIRE receipt")
 
     tokens = [lease["fencingToken"] for lease in leases]
     if len(tokens) != len(set(tokens)):
@@ -824,7 +835,7 @@ class CoordinatorStateStore:
                 "COORDINATOR_JOURNAL_IDENTITY_MISMATCH",
                 "journal belongs to a different project execution key",
             )
-        _validate_journal_integrity(journal)
+        _validate_journal_integrity(journal, persisted=True)
         if initialized is None:
             raise ControlledCoordinationError(
                 "COORDINATOR_STATE_INCONSISTENT",
@@ -861,7 +872,7 @@ class CoordinatorStateStore:
                 "COORDINATOR_JOURNAL_IDENTITY_MISMATCH",
                 "journal or receipt belongs to a different project",
             )
-        _validate_journal_integrity(journal)
+        _validate_journal_integrity(journal, persisted=True)
         if (
             journal["journalVersion"] != expected_version + 1
             or receipt["previousJournalVersion"] != expected_version

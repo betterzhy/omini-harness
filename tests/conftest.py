@@ -11,6 +11,7 @@ from evolution_harness.controlled_inputs import (
     descriptor_digest,
     envelope_digest,
 )
+from evolution_harness.controlled_planner import build_provisional_execution_plan
 from evolution_harness.hashing import canonical_json_bytes, sha256_bytes
 
 
@@ -150,106 +151,120 @@ class ControlledPlanningFactory:
 
 @dataclass(frozen=True)
 class CoordinatorStateFactory:
+    repository_root: Path
+    controlled_factory: object
     project_execution_key: str = "project-execution:" + "1" * 64
+
+    def acquire_command(
+        self, token: int, *, project_execution_key: str | None = None
+    ):
+        del project_execution_key
+        suffix = f"neutral-{token}"
+        descriptor = self.controlled_factory.descriptor(
+            sliceId=f"slice:{suffix}",
+            ownerSet=[f"owner:{suffix}"],
+            factFamilySet=[f"fact:{suffix}"],
+            exactWriteSet=[f"services/{suffix}"],
+            ephemeralWriteSet=[f"build/{suffix}"],
+        )
+        request = self.controlled_factory.request(descriptor)
+        bundle = build_provisional_execution_plan(self.repository_root, request)
+        plan = bundle["executionPlan"]
+        footprint = bundle["conflictReport"]["footprints"][0]
+        admission_binding = {
+            "projectId": plan["projectId"],
+            "sliceId": descriptor["sliceId"],
+            "attemptId": f"attempt:{suffix}",
+            "originalSourceRoot": "/projects/neutral",
+            "laneRoot": f"/projects/neutral-lanes/{suffix}",
+        }
+        proof = {
+            "factId": "controlled_coordination.admission.bindings",
+            "manifestAuthorityId": "authority-planning",
+            "manifestAuthorityReference": "authority/controlled-planning.yaml",
+            "manifestAuthorityDigest": "sha256:" + "6" * 64,
+            "binding": admission_binding,
+        }
+        proof["proofDigest"] = "sha256:" + sha256_bytes(canonical_json_bytes(proof))
+        command = {
+            "schemaVersion": "controlled-coordinator-acquire-command/v1",
+            "projectId": plan["projectId"],
+            "batchPlanId": plan["batchPlanId"],
+            "sliceId": descriptor["sliceId"],
+            "attemptId": admission_binding["attemptId"],
+            "authoritySnapshotFingerprint": plan["authoritySnapshotFingerprint"],
+            "authorizationEnvelopeDigest": plan["authorizationEnvelopeDigest"],
+            "conflictPolicyVersion": plan["conflictPolicyVersion"],
+            "asOf": plan["asOf"],
+            "planningRequest": request,
+            "executionPlan": plan,
+            "sliceDescriptor": descriptor,
+            "authorizationEnvelope": request["authorizationEnvelope"],
+            "authoritySnapshot": request["authoritySnapshot"],
+            "admissionAuthorityProof": proof,
+            "fullFootprint": footprint,
+            "originalSourceRoot": admission_binding["originalSourceRoot"],
+            "laneRoot": admission_binding["laneRoot"],
+            "expectedLaneBase": plan["batchBaseCommit"],
+        }
+        command["commandDigest"] = "sha256:" + sha256_bytes(
+            canonical_json_bytes(command)
+        )
+        return command
 
     def receipt(self, version: int, *, project_execution_key: str | None = None):
         key = project_execution_key or self.project_execution_key
-        digest = "sha256:" + "3" * 64
-        candidate = {"commit": "4" * 40, "parent": "5" * 40, "tree": "6" * 40}
-        command = {
-            "schemaVersion": "controlled-coordinator-transition-command/v1",
-            "projectExecutionKey": key,
-            "leaseId": "lease:" + f"{version:024x}",
-            "attemptId": f"attempt:neutral-{version}",
-            "fencingToken": version,
-            "expectedState": "ACTIVE",
-            "nextState": "FIXED_CANDIDATE",
-            "authoritySnapshotFingerprint": digest,
-            "candidateIdentity": candidate,
-            "processQuiescence": {
-                "status": "QUIESCENT",
-                "observedAt": "2026-08-13T12:30:00Z",
-                "processIds": [],
-            },
-            "lifecycleAuthorityProof": {
-                "authorityReference": "authority/lifecycle.yaml",
-                "authorityDigest": "sha256:" + "a" * 64,
-                "attemptId": "attempt:neutral-a",
-                "expectedState": "ACTIVE",
-                "nextState": "FIXED_CANDIDATE",
-                "candidateIdentity": candidate,
-                "reviewBindingDigest": None,
-                "reviewEvidenceDigest": None,
-                "reviewerId": None,
-                "reviewerAuthorityReference": None,
-                "reviewerAuthorityDigest": None,
-                "assertedAt": "2026-08-13T12:29:00Z",
-                "proofDigest": "sha256:" + "b" * 64,
-            },
-            "reviewEvidence": None,
-            "commandDigest": "sha256:" + "c" * 64,
-        }
+        command = self.acquire_command(version, project_execution_key=key)
         return {
             "schemaVersion": "controlled-coordinator-receipt/v1",
             "receiptId": "coordinator-receipt:" + f"{version:024x}",
-            "receiptType": "TRANSITION",
+            "receiptType": "ACQUIRE",
             "projectExecutionKey": key,
             "previousJournalVersion": version - 1,
             "nextJournalVersion": version,
             "commandDigest": command["commandDigest"],
             "fencingToken": version,
-            "previousState": "ACTIVE",
-            "nextState": "FIXED_CANDIDATE",
-            "authoritySnapshotFingerprint": digest,
+            "previousState": None,
+            "nextState": "ADMITTED",
+            "authoritySnapshotFingerprint": command[
+                "authoritySnapshotFingerprint"
+            ],
             "journalDigest": "sha256:" + "d" * 64,
-            "recordedAt": "2026-08-13T12:31:00Z",
+            "recordedAt": command["asOf"],
             "evidence": {"command": command},
         }
 
     def lease(self, token: int, *, project_execution_key: str | None = None):
         key = project_execution_key or self.project_execution_key
-        suffix = f"neutral-{token}"
-        footprint = {
-            "conflictFootprintId": "footprint:" + f"{token:024x}",
-            "sliceId": f"slice:{suffix}",
-            "ownerSet": [f"owner:{suffix}"],
-            "factFamilySet": [f"fact:{suffix}"],
-            "publicContractSet": [],
-            "producerConsumerSet": [],
-            "bindingSet": [],
-            "exactWriteSet": [f"services/{suffix}"],
-            "ephemeralWriteSet": [f"build/{suffix}"],
-            "sharedArtifactSet": [],
-            "dependencySet": [],
-            "migrationResourceSet": [],
-            "authorityReferences": ["status.md"],
-        }
+        command = self.acquire_command(token, project_execution_key=key)
         return {
             "schemaVersion": "controlled-execution-lease/v1",
             "projectExecutionKey": key,
             "leaseId": "lease:" + f"{token:024x}",
-            "batchPlanId": "batch-plan:" + f"{token:024x}",
-            "sliceId": f"slice:{suffix}",
-            "attemptId": f"attempt:neutral-{token}",
-            "authoritySnapshotFingerprint": "sha256:" + "3" * 64,
-            "authorizationEnvelopeDigest": "sha256:" + "7" * 64,
-            "conflictPolicyVersion": "controlled-conflict-policy/v1",
-            "descriptorDigest": "sha256:" + "8" * 64,
-            "fullFootprint": footprint,
-            "planningFootprints": [copy.deepcopy(footprint)],
-            "originalSourceRoot": "/projects/neutral",
-            "laneRoot": f"/projects/neutral-lanes/{suffix}",
+            "batchPlanId": command["batchPlanId"],
+            "sliceId": command["sliceId"],
+            "attemptId": command["attemptId"],
+            "authoritySnapshotFingerprint": command[
+                "authoritySnapshotFingerprint"
+            ],
+            "authorizationEnvelopeDigest": command[
+                "authorizationEnvelopeDigest"
+            ],
+            "conflictPolicyVersion": command["conflictPolicyVersion"],
+            "descriptorDigest": command["sliceDescriptor"]["descriptorDigest"],
+            "fullFootprint": copy.deepcopy(command["fullFootprint"]),
+            "planningFootprints": [copy.deepcopy(command["fullFootprint"])],
+            "originalSourceRoot": command["originalSourceRoot"],
+            "laneRoot": command["laneRoot"],
             "lanePhysicalIdentity": {
                 "device": 1, "inode": token, "type": "DIRECTORY"
             },
-            "expectedLaneBase": "a" * 40,
+            "expectedLaneBase": command["expectedLaneBase"],
             "fencingToken": token,
-            "state": "FIXED_CANDIDATE",
-            "candidateIdentity": {
-                "commit": "4" * 40, "parent": "5" * 40, "tree": "6" * 40
-            },
-            "acquiredAt": "2026-08-13T12:00:00Z",
-            "lastTransitionAt": "2026-08-13T12:31:00Z",
+            "state": "ADMITTED",
+            "candidateIdentity": None,
+            "acquiredAt": command["asOf"],
+            "lastTransitionAt": command["asOf"],
             "released": False,
             "recoveryStatus": "CLEAR",
         }
@@ -298,5 +313,5 @@ def controlled_factory():
 
 
 @pytest.fixture
-def coordinator_state_factory():
-    return CoordinatorStateFactory()
+def coordinator_state_factory(repository_root, controlled_factory):
+    return CoordinatorStateFactory(repository_root, controlled_factory)

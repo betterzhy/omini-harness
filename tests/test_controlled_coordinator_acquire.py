@@ -53,6 +53,32 @@ def _coordinator_snapshot(factory, command):
     }
 
 
+def _persist_tampered_journal(factory, journal):
+    if journal["receipts"]:
+        journal["receipts"][-1]["journalDigest"] = "sha256:" + "0" * 64
+        journal["receipts"][-1]["journalDigest"] = _sha256(journal)
+    state_root = Path(os.environ["AGENT_EVOLUTION_COORDINATOR_ROOT"])
+    journal_path = next(state_root.glob("*.journal.json"))
+    journal_path.write_bytes(canonical_json_bytes(journal) + b"\n")
+
+
+def _empty_journal(factory):
+    identity = resolve_project_execution_identity(
+        factory.repository_root, factory.source_root
+    )
+    return {
+        "schemaVersion": "controlled-coordinator-journal/v1",
+        "projectExecutionKey": identity["projectExecutionKey"],
+        "journalVersion": 0,
+        "nextFencingToken": 1,
+        "recoveryState": "CLEAR",
+        "recoveryEvidence": None,
+        "leases": [],
+        "receipts": [],
+        "integrationTransactions": [],
+    }
+
+
 def _git(path: Path, *argv: str) -> str:
     return subprocess.run(
         ["git", "-C", str(path), *argv],
@@ -445,6 +471,145 @@ def test_acquire_persists_fenced_lease_and_same_command_replays(
     digest_payload = copy.deepcopy(journal)
     digest_payload["receipts"][0]["journalDigest"] = "sha256:" + "0" * 64
     assert journal["receipts"][0]["journalDigest"] == _sha256(digest_payload)
+
+
+def test_read_rejects_orphan_lease_without_exactly_one_acquire_receipt(
+    acquisition_factory,
+):
+    first = acquisition_factory.acquire()
+    second = acquisition_factory.acquire(
+        slice_id="slice:neutral-b",
+        attempt_id="attempt:neutral-b",
+        owner="owner:neutral-b",
+        exact_write_set="services/neutral-b",
+    )
+    acquire_lane_lease(
+        acquisition_factory.repository_root, acquisition_factory.source_root, first
+    )
+    acquire_lane_lease(
+        acquisition_factory.repository_root, acquisition_factory.source_root, second
+    )
+    journal = acquisition_factory.journal()
+    journal["receipts"] = journal["receipts"][1:]
+    journal["journalVersion"] = 1
+    journal["receipts"][0]["previousJournalVersion"] = 0
+    journal["receipts"][0]["nextJournalVersion"] = 1
+    _persist_tampered_journal(acquisition_factory, journal)
+
+    identity = resolve_project_execution_identity(
+        acquisition_factory.repository_root, acquisition_factory.source_root
+    )
+    with CoordinatorStateStore.open(identity) as store:
+        with pytest.raises(ControlledCoordinationError) as caught:
+            store.read_journal()
+
+    assert caught.value.code == "COORDINATOR_STATE_CORRUPT"
+
+
+def test_read_rejects_duplicate_acquire_receipts_for_one_lease(
+    acquisition_factory,
+):
+    acquire_lane_lease(
+        acquisition_factory.repository_root,
+        acquisition_factory.source_root,
+        acquisition_factory.acquire(),
+    )
+    journal = acquisition_factory.journal()
+    duplicate = copy.deepcopy(journal["receipts"][0])
+    duplicate["receiptId"] = "coordinator-receipt:" + "f" * 24
+    duplicate["previousJournalVersion"] = 1
+    duplicate["nextJournalVersion"] = 2
+    journal["receipts"].append(duplicate)
+    journal["journalVersion"] = 2
+    _persist_tampered_journal(acquisition_factory, journal)
+
+    identity = resolve_project_execution_identity(
+        acquisition_factory.repository_root, acquisition_factory.source_root
+    )
+    with CoordinatorStateStore.open(identity) as store:
+        with pytest.raises(ControlledCoordinationError) as caught:
+            store.read_journal()
+
+    assert caught.value.code == "COORDINATOR_STATE_CORRUPT"
+
+
+def test_read_rejects_initialized_persisted_version_zero_journal(
+    acquisition_factory,
+):
+    acquire_lane_lease(
+        acquisition_factory.repository_root,
+        acquisition_factory.source_root,
+        acquisition_factory.acquire(),
+    )
+    _persist_tampered_journal(
+        acquisition_factory, _empty_journal(acquisition_factory)
+    )
+
+    identity = resolve_project_execution_identity(
+        acquisition_factory.repository_root, acquisition_factory.source_root
+    )
+    with CoordinatorStateStore.open(identity) as store:
+        with pytest.raises(ControlledCoordinationError) as caught:
+            store.read_journal()
+
+    assert caught.value.code == "COORDINATOR_STATE_CORRUPT"
+
+
+def test_planner_accepts_unpersisted_version_zero_snapshot(
+    acquisition_factory,
+):
+    command = acquisition_factory.acquire()
+    journal = _empty_journal(acquisition_factory)
+    snapshot = {
+        "schemaVersion": "controlled-coordinator-snapshot/v1",
+        "projectId": command["projectId"],
+        "projectExecutionKey": journal["projectExecutionKey"],
+        "baseBatchPlanId": command["batchPlanId"],
+        "journalVersion": 0,
+        "journalDigest": _sha256(journal),
+        "recoveryState": "CLEAR",
+        "authorizationEnvelopeDigest": command["authorizationEnvelopeDigest"],
+        "conflictPolicyVersion": command["conflictPolicyVersion"],
+        "expectedLaneBase": command["expectedLaneBase"],
+        "journal": journal,
+    }
+
+    bundle = build_provisional_execution_plan(
+        acquisition_factory.repository_root,
+        command["planningRequest"],
+        coordinator_snapshot=snapshot,
+    )
+
+    assert bundle["coordinatorProjection"]["journalVersion"] == 0
+    assert bundle["coordinatorProjection"]["proposedAdmissions"]
+
+
+def test_acquire_rejects_fully_rolled_back_initialized_journal_before_token_reuse(
+    acquisition_factory,
+):
+    acquire_lane_lease(
+        acquisition_factory.repository_root,
+        acquisition_factory.source_root,
+        acquisition_factory.acquire(),
+    )
+    _persist_tampered_journal(
+        acquisition_factory, _empty_journal(acquisition_factory)
+    )
+    next_command = acquisition_factory.acquire(
+        slice_id="slice:neutral-b",
+        attempt_id="attempt:neutral-b",
+        owner="owner:neutral-b",
+        exact_write_set="services/neutral-b",
+    )
+
+    with pytest.raises(ControlledCoordinationError) as caught:
+        acquire_lane_lease(
+            acquisition_factory.repository_root,
+            acquisition_factory.source_root,
+            next_command,
+        )
+
+    assert caught.value.code == "COORDINATOR_STATE_CORRUPT"
 
 
 def test_cross_plan_same_owner_is_serialized(acquisition_factory):

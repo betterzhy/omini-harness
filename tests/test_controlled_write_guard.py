@@ -419,6 +419,39 @@ def test_git_inventory_uses_sealed_environment(guarded_lane, monkeypatch, tmp_pa
     assert caught.value.observedPaths == ["tracked.txt"]
 
 
+def test_git_inventory_disables_repo_local_executable_extensions(
+    guarded_lane, tmp_path
+):
+    sentinel = tmp_path / "fsmonitor-sentinel"
+    helper = tmp_path / "fsmonitor-helper.sh"
+    helper.write_text(
+        "#!/bin/sh\n"
+        'sentinel="${0%/*}/fsmonitor-sentinel"\n'
+        '/usr/bin/touch "$sentinel"\n'
+        "printf '\\n'\n",
+        encoding="utf-8",
+    )
+    helper.chmod(0o755)
+    _git(guarded_lane.root, "config", "core.fsmonitor", str(helper))
+
+    helper_was_started = False
+    try:
+        result = guard.run_guarded_command(
+            guarded_lane.lease,
+            guarded_lane.root,
+            ["/usr/bin/true"],
+            cwd=guarded_lane.root,
+            environment=guarded_lane.environment,
+        )
+        helper_was_started = sentinel.exists()
+    finally:
+        sentinel.unlink(missing_ok=True)
+
+    assert result.returncode == 0
+    assert helper_was_started is False
+    assert not sentinel.exists()
+
+
 def test_git_admin_symlink_is_rejected_no_follow(guarded_lane):
     git_admin = guarded_lane.root / ".git"
     moved_admin = guarded_lane.root / ".git-real"

@@ -33,9 +33,24 @@ _SEALED_GIT_ENVIRONMENT = {
     "HOME": "/var/empty",
     "LANG": "C",
     "LC_ALL": "C",
+    "GIT_PAGER": "",
+    "PAGER": "",
     "PATH": "/usr/bin:/bin",
     "XDG_CONFIG_HOME": "/var/empty",
 }
+_GIT_DISABLED_EXECUTABLE_EXTENSIONS = (
+    "-c",
+    "core.fsmonitor=false",
+    "-c",
+    "core.hooksPath=/dev/null",
+    "-c",
+    "submodule.recurse=false",
+    "-c",
+    "status.submoduleSummary=false",
+    "-c",
+    "protocol.allow=never",
+    "--no-pager",
+)
 
 
 class GuardedCommandResult(subprocess.CompletedProcess[bytes]):
@@ -469,6 +484,7 @@ def _run_git(
         completed = subprocess.run(
             [
                 _GIT_PATH,
+                *_GIT_DISABLED_EXECUTABLE_EXTENSIONS,
                 f"--git-dir={boundary.admin_root}",
                 f"--work-tree={boundary.lane_root}",
                 *args,

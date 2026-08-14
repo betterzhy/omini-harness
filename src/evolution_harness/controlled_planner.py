@@ -5,7 +5,12 @@ import heapq
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from .controlled_conflicts import build_conflict_report
+from .controlled_conflicts import (
+    _conflict_reasons,
+    _dependency_closure,
+    _owner_closure,
+    build_conflict_report,
+)
 from .controlled_inputs import (
     ControlledPlanningError,
     exact_writeset_digest,
@@ -198,10 +203,26 @@ def _execution_requirements(
 
 
 def build_provisional_execution_plan(
-    repository_root: Path, request: dict[str, Any]
+    repository_root: Path,
+    request: dict[str, Any],
+    coordinator_snapshot: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build deterministic coordinator inputs without admitting or executing work."""
     normalized = normalize_planning_request(repository_root, request)
+    snapshot = None
+    if coordinator_snapshot is not None:
+        snapshot = copy.deepcopy(coordinator_snapshot)
+        SchemaStore(repository_root).validate(
+            "core/schemas/controlled-coordinator-journal.schema.json", snapshot
+        )
+    active_leases = [] if snapshot is None else [
+        lease
+        for lease in snapshot["leases"]
+        if not (
+            lease["state"] in {"CLOSED", "CANCELLED"}
+            and lease["released"] is True
+        )
+    ]
     descriptors = normalized["slices"]
     by_id = {item["sliceId"]: item for item in descriptors}
     depths = _dependency_depths(descriptors)
@@ -220,6 +241,11 @@ def build_provisional_execution_plan(
         for cluster in conflict_report["clusters"]
         for slice_id in cluster["sliceIds"]
     }
+    footprint_by_slice = (
+        {item["sliceId"]: item for item in conflict_report["footprints"]}
+        if active_leases
+        else {}
+    )
 
     blocked = []
     rejected = []
@@ -251,11 +277,27 @@ def build_provisional_execution_plan(
         key=lambda item: (item["priority"], depths[item["sliceId"]], item["sliceId"]),
     ):
         cluster_id = cluster_by_slice[descriptor["sliceId"]]
-        if cluster_id in occupied_clusters:
+        active_conflict = False
+        if active_leases:
+            footprint = footprint_by_slice[descriptor["sliceId"]]
+            active_conflict = any(
+                _conflict_reasons(
+                    footprint,
+                    lease["fullFootprint"],
+                    _dependency_closure([footprint, lease["fullFootprint"]]),
+                    _owner_closure([footprint, lease["fullFootprint"]]),
+                )
+                for lease in active_leases
+            )
+        if active_conflict:
+            queued.append(
+                {"sliceId": descriptor["sliceId"], "reasons": ["ACTIVE_LEASE_CONFLICT"]}
+            )
+        elif cluster_id in occupied_clusters:
             queued.append(
                 {"sliceId": descriptor["sliceId"], "reasons": ["CONFLICT_CLUSTER_BUSY"]}
             )
-        elif len(proposed_descriptors) >= lane_cap:
+        elif len(active_leases) + len(proposed_descriptors) >= lane_cap:
             queued.append(
                 {"sliceId": descriptor["sliceId"], "reasons": ["PROJECT_CAPACITY_LIMIT"]}
             )

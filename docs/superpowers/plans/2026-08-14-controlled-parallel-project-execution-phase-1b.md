@@ -123,6 +123,8 @@ All schemas use Draft 2020-12, `additionalProperties: false`, explicit enums, ca
 
 Authority/WriteSet migration (2026-08-14): the locked Acquire identity now carries the complete Phase 1A `planningRequest` plus its normalized descriptor, envelope, snapshot, admission proof, and full conflict footprint. Validation replays Phase 1A canonical input checks and rebuilding of the target admission instead of trusting a caller-rehashed plan. The locked Transition lifecycle proof carries Candidate/Parent/Tree and, for `REVIEW_GO`, the review binding digest, full evidence digest, reviewer identity, and reviewer authority reference/digest; the review evidence carries the same reviewer authority binding. These are schema and command-identity evidence migrations only. Live authority-file lookup, lease CAS/fencing, process quiescence enforcement, protected execution, and recovery execution remain owned by their later Phase 1B tasks.
 
+Coordinator-projection migration (2026-08-14): `ACTIVE_LEASE_CONFLICT` is a locked closed-enum execution-plan reason. It identifies a conflict with a nonterminal lease from the immutable coordinator snapshot; `PROJECT_CAPACITY_LIMIT` remains the distinct project-wide capacity reason. This migration extends only the Phase 1A plan reason vocabulary and does not make planning mutating or remove the coordinator recheck requirement.
+
 ### Journal invariants
 
 ```text
@@ -267,6 +269,8 @@ git commit -m "feat: persist project coordinator journals"
 - Create: `src/evolution_harness/controlled_coordinator.py`
 - Create: `tests/test_controlled_coordinator_acquire.py`
 - Modify: `src/evolution_harness/controlled_planner.py`
+- Modify: `core/schemas/controlled-execution-plan.schema.json`
+- Modify: `docs/superpowers/plans/2026-08-14-controlled-parallel-project-execution-phase-1b.md`
 
 **Interfaces:**
 
@@ -311,7 +315,9 @@ Expected: PASS with unchanged Phase 1A plan identities when no coordinator snaps
 ```bash
 git add src/evolution_harness/controlled_coordinator.py \
   src/evolution_harness/controlled_planner.py \
-  tests/test_controlled_coordinator_acquire.py
+  tests/test_controlled_coordinator_acquire.py \
+  core/schemas/controlled-execution-plan.schema.json \
+  docs/superpowers/plans/2026-08-14-controlled-parallel-project-execution-phase-1b.md
 git commit -m "feat: acquire fenced project lane leases"
 ```
 

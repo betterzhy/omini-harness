@@ -531,6 +531,11 @@ def record_project_recovery(
                     "RECOVERY_LEASE_SET_MISMATCH",
                     "recovery proofs must name the complete revoked lease set",
                 )
+            from .controlled_write_guard import (
+                _complete_persistent_breach_inventory,
+            )
+
+            remaining_ephemeral: list[str] = []
             for lease in typed_leases:
                 proof = proof_by_id[lease["leaseId"]]
                 if proof["fencingToken"] != lease["fencingToken"]:
@@ -539,6 +544,13 @@ def record_project_recovery(
                         "recovery proof does not bind the historical lease token",
                     )
                 _validate_lane_physical_identity(lease)
+                _, _, lease_remaining = _complete_persistent_breach_inventory(lease)
+                remaining_ephemeral.extend(lease_remaining)
+            if remaining_ephemeral:
+                raise ControlledCoordinationError(
+                    "EPHEMERAL_PATH_NOT_REMOVED",
+                    "declared ephemeral paths must be absent before recovery",
+                )
 
             decisions = {
                 item["leaseId"]: item

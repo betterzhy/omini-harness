@@ -762,6 +762,15 @@ def _path_exists_no_follow(lane_descriptor: int, relative: str) -> bool:
         os.close(current)
 
 
+def _declared_ephemeral_presence(
+    lane_descriptor: int, ephemeral: list[str]
+) -> tuple[list[str], list[str]]:
+    existing = {
+        item for item in ephemeral if _path_exists_no_follow(lane_descriptor, item)
+    }
+    return sorted(set(ephemeral) - existing), sorted(existing)
+
+
 def _open_relative_no_follow(
     lane_descriptor: int, relative: str, *, directory: bool
 ) -> int:
@@ -973,6 +982,7 @@ def _quarantine_guard_breach(
     lease: dict[str, Any],
     inventory: dict[str, object],
     observed_paths: list[str],
+    ephemeral_paths_removed: list[str],
 ) -> None:
     from .controlled_coordinator_inputs import normalize_write_observation_command
     from .controlled_recovery import quarantine_observed_writes_locked
@@ -988,9 +998,7 @@ def _quarantine_guard_breach(
         "beforeInventoryDigest": "sha256:"
         + hashlib.sha256(canonical_json_bytes(inventory)).hexdigest(),
         "observedPaths": sorted(observed_paths),
-        "ephemeralPathsRemoved": sorted(
-            lease["fullFootprint"]["ephemeralWriteSet"]
-        ),
+        "ephemeralPathsRemoved": sorted(ephemeral_paths_removed),
         "processQuiescence": {
             "status": "QUIESCENT",
             "observedAt": observed_at,
@@ -1080,8 +1088,16 @@ def run_guarded_command(
                     before["paths"], exact, ephemeral
                 )
                 if before_breaches:
+                    removed_ephemeral, _remaining_ephemeral = (
+                        _declared_ephemeral_presence(lane_descriptor, ephemeral)
+                    )
                     _quarantine_guard_breach(
-                        store, journal, durable, before, before_breaches
+                        store,
+                        journal,
+                        durable,
+                        before,
+                        before_breaches,
+                        removed_ephemeral,
                     )
                     raise _error(
                         "WRITESET_BREACH",
@@ -1098,8 +1114,16 @@ def run_guarded_command(
                 _revalidate_targets(lane_descriptor, targets)
                 after_breaches = _persistent_breaches(after["paths"], exact, ephemeral)
                 if after_breaches:
+                    removed_ephemeral, _remaining_ephemeral = (
+                        _declared_ephemeral_presence(lane_descriptor, ephemeral)
+                    )
                     _quarantine_guard_breach(
-                        store, journal, durable, before, after_breaches
+                        store,
+                        journal,
+                        durable,
+                        before,
+                        after_breaches,
+                        removed_ephemeral,
                     )
                     raise _error(
                         "WRITESET_BREACH",

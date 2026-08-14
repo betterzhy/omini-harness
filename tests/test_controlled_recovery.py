@@ -444,6 +444,83 @@ def test_task5_quarantines_preexisting_breach_before_unlock_and_raise(
     assert journal["receipts"][-1]["receiptType"] == "WRITE_OBSERVATION"
 
 
+def test_task5_quarantine_receipt_only_claims_absent_ephemeral_paths(
+    recovery_factory,
+):
+    lease = _advance(recovery_factory, _acquire(recovery_factory), "ACTIVE")
+    Path(lease["laneRoot"], "services/neutral-a").mkdir(parents=True)
+    remaining = Path(lease["laneRoot"], "build/neutral-a")
+    remaining.mkdir(parents=True)
+    _untracked_breach(lease)
+
+    with pytest.raises(ControlledCoordinationError) as caught:
+        guard.run_guarded_command(
+            lease,
+            Path(lease["laneRoot"]),
+            [
+                sys.executable,
+                str(WRITER),
+                "write",
+                str(Path(lease["laneRoot"]) / "services/neutral-a/ok.txt"),
+            ],
+            cwd=Path(lease["laneRoot"]),
+            environment={
+                "PATH": os.environ.get("PATH", ""),
+                "PYTHONDONTWRITEBYTECODE": "1",
+            },
+        )
+
+    assert caught.value.code == "WRITESET_BREACH"
+    journal = _journal(recovery_factory)
+    command = journal["receipts"][-1]["evidence"]["command"]
+    assert command["ephemeralPathsRemoved"] == []
+    assert remaining.is_dir()
+
+
+def test_recovery_waits_for_task5_remaining_ephemeral_cleanup(recovery_factory):
+    lease = _advance(recovery_factory, _acquire(recovery_factory), "ACTIVE")
+    Path(lease["laneRoot"], "services/neutral-a").mkdir(parents=True)
+    remaining = Path(lease["laneRoot"], "build/neutral-a")
+    remaining.mkdir(parents=True)
+    _untracked_breach(lease)
+
+    with pytest.raises(ControlledCoordinationError) as breach:
+        guard.run_guarded_command(
+            lease,
+            Path(lease["laneRoot"]),
+            [
+                sys.executable,
+                str(WRITER),
+                "write",
+                str(Path(lease["laneRoot"]) / "services/neutral-a/ok.txt"),
+            ],
+            cwd=Path(lease["laneRoot"]),
+            environment={
+                "PATH": os.environ.get("PATH", ""),
+                "PYTHONDONTWRITEBYTECODE": "1",
+            },
+        )
+    assert breach.value.code == "WRITESET_BREACH"
+
+    command = _recovery_command(recovery_factory)
+    with pytest.raises(ControlledCoordinationError) as blocked:
+        record_project_recovery(
+            recovery_factory.repository_root,
+            recovery_factory.source_root,
+            command,
+        )
+    assert blocked.value.code == "EPHEMERAL_PATH_NOT_REMOVED"
+    assert _journal(recovery_factory)["recoveryState"] == "PROJECT_WRITESET_RECOVERY"
+
+    remaining.rmdir()
+    result = record_project_recovery(
+        recovery_factory.repository_root,
+        recovery_factory.source_root,
+        command,
+    )
+    assert result["recoveryState"] == "CLEAR"
+
+
 def test_task5_after_breach_receipt_binds_the_actual_before_inventory(
     tmp_path, monkeypatch, coordinator_state_factory
 ):

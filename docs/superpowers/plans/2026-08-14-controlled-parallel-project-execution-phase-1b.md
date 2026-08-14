@@ -1,0 +1,619 @@
+# Controlled Parallel Project Execution Phase 1B Implementation Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** Add a single-host, project-scoped coordination safety layer that turns a Phase 1A provisional plan into durable, fenced lane leases without launching project work or modifying a registered project.
+
+**Architecture:** Keep Phase 1A pure and read-only. Add strict coordinator command/receipt schemas, a durable owner-only state store outside repositories and system temporary storage, a project-scoped CAS journal, lease lifecycle validation, a guarded-command library boundary, WriteSet breach quarantine, and explicit recovery receipts. Every mutation is serialized by one OS lock keyed only by the canonical registered project identity; lifecycle authority remains project-owned.
+
+**Tech Stack:** Python 3.12+, standard library (`fcntl`, `os`, `stat`, `subprocess`, `json`, `pathlib`), PyYAML, jsonschema Draft 2020-12, pytest, existing `SchemaStore`, canonical hashing helpers, registration loader, Phase 1A controlled planner/conflict predicates, and macOS `/usr/bin/sandbox-exec` when a real process-tree write sandbox is exercised.
+
+## Global Constraints
+
+- Work only in an isolated Harness worktree created from the reviewed Phase 1A base. Never modify Pay-Nexus in Phase 1B.
+- Phase 1B may write only Harness-owned coordinator state below the configured per-user state root and synthetic test roots. It does not create project worktrees, launch agents, change project lifecycle files, integrate commits, update Git refs, or write registered project paths.
+- The default state root is `~/.codex/state/agent-evolution-harness/coordinator/v1`; tests override it with `AGENT_EVOLUTION_COORDINATOR_ROOT` pointing to a fresh temporary directory.
+- State-root, project-directory, journal, and receipt access is descriptor-anchored and no-follow. Owner, mode, inode/type, and single-root identity checks fail closed.
+- The project execution key is derived only from validated registration identity plus canonical registered source-root device/inode identity. It excludes plan, batch, snapshot, branch, worktree, and policy identities.
+- Every coordinator write uses one non-blocking OS process lock keyed by `projectExecutionKey`, then fsyncs a same-directory temporary file, atomically replaces the journal, fsyncs the directory, rereads the journal, and validates the persisted receipt before unlocking.
+- The acquisition idempotency key is `(projectExecutionKey, batchPlanId, sliceId, attemptId)`. A replay returns the existing nonterminal lease; a terminal replay is rejected.
+- Every transition and guarded command requires the current fencing token. Missing or stale tokens fail closed.
+- `BLOCKED`, `NO_GO`, and `STALE` retain the lease. Only `CLOSED`, or a project-authorized and quiescence-proven `CANCELLED`, releases it.
+- Any persistent WriteSet breach freezes all nonterminal leases for the project, revokes their tokens, blocks new admissions, records `PROJECT_WRITESET_RECOVERY`, and requires a fresh plan after explicit recovery.
+- Protected actions remain denied: formal database writes, migration application, destructive operations, production/secret access, Landing, Wave entry, push, release, and deployment.
+- Use RED -> GREEN for every behavior task. Run focused tests during iteration; run the full Harness suite and one `gpt-5.6-sol/xhigh` fixed-candidate gate only after the Phase 1B candidate stabilizes.
+- Stop after the reviewed Phase 1B local candidate. Phase 1C, Pay-Nexus Phase 2, and Pay-Nexus project writes remain separate later plans.
+
+## Delivery Roadmap and Release Gates
+
+```text
+Phase 1B reviewed GO
+  -> write Phase 1C plan
+  -> Phase 1C reviewed GO
+  -> write/run Pay-Nexus Phase 2 read-only projection plan
+  -> prove two independent authorized Slice descriptors
+  -> write Pay-Nexus Phase 3 adoption plan
+  -> project-owned authorization envelope + two-lane pilot
+```
+
+No later arrow is released by tests alone. Each arrow requires its predecessor's exact Candidate/Parent/Tree, complete WriteSet, full regression receipt, and `GO / P0=0 / P1=0 / P2=0` on the fixed candidate.
+
+## Locked Phase 1B Interfaces
+
+### Public Python interfaces
+
+```python
+class ControlledCoordinationError(RuntimeError):
+    code: str
+
+def resolve_project_execution_identity(
+    repository_root: Path,
+    source_root: Path,
+) -> dict[str, str | int]: ...
+
+def acquire_lane_lease(
+    repository_root: Path,
+    source_root: Path,
+    command: dict[str, object],
+) -> dict[str, object]: ...
+
+def transition_lane_lease(
+    repository_root: Path,
+    source_root: Path,
+    command: dict[str, object],
+) -> dict[str, object]: ...
+
+def inspect_project_coordinator(
+    repository_root: Path,
+    source_root: Path,
+) -> dict[str, object]: ...
+
+def observe_lane_writes(
+    repository_root: Path,
+    source_root: Path,
+    command: dict[str, object],
+) -> dict[str, object]: ...
+
+def record_project_recovery(
+    repository_root: Path,
+    source_root: Path,
+    command: dict[str, object],
+) -> dict[str, object]: ...
+
+def run_guarded_command(
+    lease: dict[str, object],
+    lane_root: Path,
+    argv: list[str],
+    *,
+    cwd: Path,
+    environment: dict[str, str],
+) -> subprocess.CompletedProcess[bytes]: ...
+```
+
+### Coordinator command identities
+
+```text
+Acquire command:
+  schemaVersion, projectId, batchPlanId, sliceId, attemptId,
+  authoritySnapshotFingerprint, authorizationEnvelopeDigest,
+  conflictPolicyVersion, asOf, executionPlan, fullFootprint,
+  originalSourceRoot, laneRoot, expectedLaneBase, commandDigest
+
+Transition command:
+  schemaVersion, projectExecutionKey, leaseId, attemptId, fencingToken,
+  expectedState, nextState, authoritySnapshotFingerprint,
+  candidateIdentity, processQuiescence, commandDigest
+
+Write observation command:
+  schemaVersion, projectExecutionKey, leaseId, fencingToken,
+  beforeInventoryDigest, observedPaths, ephemeralPathsRemoved,
+  processQuiescence, commandDigest
+
+Recovery command:
+  schemaVersion, projectExecutionKey, recoveryId, recoveryAuthorityReference,
+  recoveryAuthorityDigest, expectedJournalVersion, processQuiescenceProofs,
+  observedWriteSet, affectedLeaseDecisions, replacementPlanRequired,
+  commandDigest
+```
+
+All schemas use Draft 2020-12, `additionalProperties: false`, explicit enums, canonical set normalization, and SHA-256 command digests that cover every field except the digest itself.
+
+### Journal invariants
+
+```text
+schemaVersion = controlled-coordinator-journal/v1
+projectExecutionKey = immutable
+journalVersion = monotonically increasing integer
+nextFencingToken = monotonically increasing integer
+recoveryState = CLEAR | PROJECT_WRITESET_RECOVERY | STATE_RECOVERY_REQUIRED
+leases = append-only identities with immutable acquisition binding
+receipts = append-only ordered mutation receipts
+integrationTransactions = [] in Phase 1B
+```
+
+Every lease stores the complete normalized conflict footprint, not only its digest. Candidate identity is either `null` or exactly `{commit, parent, tree}`. A transition receipt stores the previous and next journal versions, command digest, fencing token, state transition, authority bindings, and journal digest.
+
+---
+
+### Task 1: Coordinator schemas and canonical command validation
+
+**Files:**
+
+- Create: `core/schemas/controlled-coordinator-acquire-command.schema.json`
+- Create: `core/schemas/controlled-coordinator-transition-command.schema.json`
+- Create: `core/schemas/controlled-write-observation-command.schema.json`
+- Create: `core/schemas/controlled-recovery-command.schema.json`
+- Create: `core/schemas/controlled-execution-lease.schema.json`
+- Create: `core/schemas/controlled-coordinator-journal.schema.json`
+- Create: `core/schemas/controlled-coordinator-receipt.schema.json`
+- Create: `src/evolution_harness/controlled_coordinator_inputs.py`
+- Create: `tests/test_controlled_coordinator_inputs.py`
+
+**Interfaces:**
+
+- Consumes: Phase 1A schema-validated `controlled-execution-plan/v1`, conflict footprint records, `SchemaStore`, `canonical_json_bytes`, `sha256_bytes`, `safe_relative_path`, and strict RFC 3339 parsing.
+- Produces: `normalize_acquire_command`, `normalize_transition_command`, `normalize_write_observation_command`, `normalize_recovery_command`, and `ControlledCoordinationError(code, message)`.
+
+- [ ] **Step 1: Add RED tests for schema closure and digest binding**
+
+```python
+def test_acquire_rejects_unknown_field_and_digest_mutation(coordinator_factory):
+    command = coordinator_factory.acquire()
+    command["surprise"] = True
+    with pytest.raises(ControlledCoordinationError) as unknown:
+        normalize_acquire_command(ROOT, command)
+    assert unknown.value.code == "COORDINATOR_COMMAND_INVALID"
+
+    command = coordinator_factory.acquire()
+    command["attemptId"] = "attempt:changed"
+    with pytest.raises(ControlledCoordinationError) as changed:
+        normalize_acquire_command(ROOT, command)
+    assert changed.value.code == "COMMAND_DIGEST_MISMATCH"
+```
+
+Add parameterized mutations for every acquire, transition, observation, and recovery authority-bearing field. Assert path aliases, empty identifiers, duplicate set entries, invalid state transitions, malformed Candidate/Parent/Tree values, protected action classes, and noncanonical timestamps fail closed.
+
+- [ ] **Step 2: Run the focused RED test**
+
+Run: `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 .venv/bin/pytest -q tests/test_controlled_coordinator_inputs.py`
+
+Expected: FAIL because the Phase 1B schemas and module do not exist.
+
+- [ ] **Step 3: Implement closed schemas and normalization**
+
+Normalization must deep-copy input, schema-validate before semantic checks, canonicalize only declared set-valued arrays, preserve ordered transitions/receipts, verify each command digest, reject protected action classes even when an envelope lists them, and bind every acquire field to the supplied execution plan and proposed admission.
+
+- [ ] **Step 4: Run the focused GREEN test**
+
+Run: `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 .venv/bin/pytest -q tests/test_controlled_coordinator_inputs.py`
+
+Expected: PASS with zero skipped tests.
+
+- [ ] **Step 5: Commit Task 1**
+
+```bash
+git add core/schemas/controlled-coordinator-*.json \
+  core/schemas/controlled-execution-lease.schema.json \
+  core/schemas/controlled-write-observation-command.schema.json \
+  core/schemas/controlled-recovery-command.schema.json \
+  src/evolution_harness/controlled_coordinator_inputs.py \
+  tests/test_controlled_coordinator_inputs.py
+git commit -m "feat: validate controlled coordinator commands"
+```
+
+### Task 2: Durable per-user state root and atomic journal store
+
+**Files:**
+
+- Create: `src/evolution_harness/coordinator_state.py`
+- Create: `tests/test_coordinator_state.py`
+- Modify: `tests/conftest.py`
+
+**Interfaces:**
+
+- Consumes: normalized journal dictionaries and project execution identities.
+- Produces: `CoordinatorStateStore.open(identity)`, `read_journal()`, `replace_journal(expected_version, journal, receipt)`, and `exclusive_project_lock()`.
+
+- [ ] **Step 1: Add RED tests for unsafe roots, atomicity, and loss detection**
+
+```python
+def test_state_root_rejects_symlink_and_permissive_mode(tmp_path, monkeypatch):
+    real = tmp_path / "real"
+    real.mkdir(mode=0o700)
+    alias = tmp_path / "alias"
+    alias.symlink_to(real, target_is_directory=True)
+    monkeypatch.setenv("AGENT_EVOLUTION_COORDINATOR_ROOT", str(alias))
+    with pytest.raises(ControlledCoordinationError) as caught:
+        CoordinatorStateStore.open(IDENTITY)
+    assert caught.value.code == "UNSAFE_COORDINATOR_ROOT"
+```
+
+Add real competing-process tests for one project lock, distinct-project independence, stale `expected_version`, fsync/replace failure injection, corrupt JSON, truncated journal, wrong owner/mode, inode swap, missing previously initialized journal, and state-root identity changing between processes.
+
+- [ ] **Step 2: Run the focused RED test**
+
+Run: `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 .venv/bin/pytest -q tests/test_coordinator_state.py`
+
+Expected: FAIL because `coordinator_state.py` does not exist.
+
+- [ ] **Step 3: Implement the descriptor-anchored store**
+
+Use `os.open(..., O_DIRECTORY | O_NOFOLLOW)`, `dir_fd` operations, owner-only `0700/0600`, a root identity file, project-key-derived filenames, non-blocking `flock`, same-directory temporary writes, `os.fsync` on file and directory, `os.replace` by descriptors, and a post-write reread validated by `SchemaStore`. Never reuse the temporary `_state_root()` in `process_lock.py`.
+
+- [ ] **Step 4: Run the focused GREEN test**
+
+Run: `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 .venv/bin/pytest -q tests/test_coordinator_state.py`
+
+Expected: PASS, including subprocess race tests.
+
+- [ ] **Step 5: Commit Task 2**
+
+```bash
+git add src/evolution_harness/coordinator_state.py tests/test_coordinator_state.py tests/conftest.py
+git commit -m "feat: persist project coordinator journals"
+```
+
+### Task 3: Project identity and lease acquisition CAS
+
+**Files:**
+
+- Create: `src/evolution_harness/controlled_coordinator.py`
+- Create: `tests/test_controlled_coordinator_acquire.py`
+- Modify: `src/evolution_harness/controlled_planner.py`
+
+**Interfaces:**
+
+- Consumes: `load_project_registration`, Phase 1A planning request/result, current live Authority Snapshot, full conflict footprints, and `CoordinatorStateStore`.
+- Produces: `resolve_project_execution_identity`, `acquire_lane_lease`, and a planner capacity projection that accounts for all nonterminal leases across plans and batches.
+
+- [ ] **Step 1: Add RED tests for project-wide admission**
+
+```python
+def test_cross_batch_same_owner_is_serialized(coordinator_factory):
+    first = acquire_lane_lease(ROOT, SOURCE, coordinator_factory.acquire(batch="batch:a"))
+    with pytest.raises(ControlledCoordinationError) as caught:
+        acquire_lane_lease(ROOT, SOURCE, coordinator_factory.acquire(batch="batch:b"))
+    assert caught.value.code == "ACTIVE_FOOTPRINT_CONFLICT"
+    assert first["fencingToken"] == 1
+```
+
+Cover cross-target aliases of the same repository, cross-plan and cross-batch capacity, disjoint project keys, full-footprint conflicts, changed policy version, stale snapshot, changed envelope, source HEAD drift, lane-root outside the approved isolation root, same-key replay, same key with changed payload, terminal replay, and two-process simultaneous acquisition where exactly one process succeeds.
+
+- [ ] **Step 2: Run the focused RED test**
+
+Run: `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 .venv/bin/pytest -q tests/test_controlled_coordinator_acquire.py`
+
+Expected: FAIL because acquisition is not implemented.
+
+- [ ] **Step 3: Implement identity and acquire CAS**
+
+Derive the project key from registration fields plus source-root `st_dev`, `st_ino`, and directory type captured no-follow. Under the project lock: reread the journal; reject recovery state; re-run normalization and live registration/authority bindings; compare the proposed full footprint against every nonterminal lease using the Phase 1A conflict predicate; enforce `min(envelope.maxParallelLanes, 3)` globally; allocate the next fencing token; append the lease and receipt; atomically persist and reread.
+
+- [ ] **Step 4: Make Phase 1A planning coordinator-aware without making it mutating**
+
+Add an optional immutable coordinator snapshot parameter to the planner. When supplied, subtract nonterminal leases from lane capacity and queue conflicting proposals with `ACTIVE_LEASE_CONFLICT` or `PROJECT_CAPACITY_LIMIT`. When absent, preserve the existing provisional behavior and `requiresCoordinatorRecheck: true`.
+
+- [ ] **Step 5: Run focused and Phase 1A compatibility tests**
+
+Run: `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 .venv/bin/pytest -q tests/test_controlled_coordinator_acquire.py tests/test_controlled_planner.py tests/test_controlled_inputs.py`
+
+Expected: PASS with unchanged Phase 1A plan identities when no coordinator snapshot is supplied.
+
+- [ ] **Step 6: Commit Task 3**
+
+```bash
+git add src/evolution_harness/controlled_coordinator.py \
+  src/evolution_harness/controlled_planner.py \
+  tests/test_controlled_coordinator_acquire.py
+git commit -m "feat: acquire fenced project lane leases"
+```
+
+### Task 4: Lease lifecycle, fencing, replay, and release rules
+
+**Files:**
+
+- Create: `tests/test_controlled_coordinator_lifecycle.py`
+- Modify: `src/evolution_harness/controlled_coordinator.py`
+
+**Interfaces:**
+
+- Consumes: a current lease, project-owned lifecycle evidence, current fencing token, process-quiescence evidence, and optional Candidate/Parent/Tree identity.
+- Produces: `transition_lane_lease` and immutable transition receipts.
+
+- [ ] **Step 1: Add RED transition-matrix tests**
+
+```python
+@pytest.mark.parametrize("exceptional", ["BLOCKED", "NO_GO", "STALE"])
+def test_exceptional_state_retains_lease(coordinator_factory, exceptional):
+    lease = coordinator_factory.acquired_lease()
+    result = transition_lane_lease(ROOT, SOURCE, coordinator_factory.transition(lease, exceptional))
+    assert result["leaseRetained"] is True
+    assert result["state"] == exceptional
+```
+
+Test every allowed normal transition, skipped-state rejection, stale/missing token, authority fingerprint drift, attempt mismatch, Candidate/Parent/Tree binding at `FIXED_CANDIDATE`, zero-finding review binding at `REVIEW_GO`, retained lease through `INTEGRATING`, `CLOSED` release, `CANCELLED` without authority/quiescence rejection, terminal immutability, and subprocess loss retaining the lease.
+
+- [ ] **Step 2: Run the lifecycle RED test**
+
+Run: `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 .venv/bin/pytest -q tests/test_controlled_coordinator_lifecycle.py`
+
+Expected: FAIL on missing lifecycle behavior.
+
+- [ ] **Step 3: Implement the explicit state machine**
+
+Keep allowed transitions in one immutable mapping. Never infer project lifecycle changes: require the transition command's authority reference and digest to exist in the current snapshot. Increment the fencing token when authority drift, cancellation, or recovery revokes an attempt; otherwise retain the current token. Release capacity only for valid `CLOSED` or recovered `CANCELLED` receipts.
+
+- [ ] **Step 4: Run the lifecycle GREEN test**
+
+Run: `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 .venv/bin/pytest -q tests/test_controlled_coordinator_lifecycle.py`
+
+Expected: PASS with no implicit transitions.
+
+- [ ] **Step 5: Commit Task 4**
+
+```bash
+git add src/evolution_harness/controlled_coordinator.py tests/test_controlled_coordinator_lifecycle.py
+git commit -m "feat: enforce fenced lane lifecycle transitions"
+```
+
+### Task 5: Physical WriteSet inventory and guarded command boundary
+
+**Files:**
+
+- Create: `src/evolution_harness/controlled_write_guard.py`
+- Create: `tests/test_controlled_write_guard.py`
+- Create: `tests/fixtures/guarded_writer.py`
+
+**Interfaces:**
+
+- Consumes: active lease, fencing token, lane root, exact/ephemeral WriteSets, argv/cwd/environment, and current Git index/worktree state.
+- Produces: `run_guarded_command`, descriptor-anchored before/after inventories, and normalized `observedPaths`.
+
+- [ ] **Step 1: Add RED real-process negatives**
+
+```python
+def test_guard_blocks_write_outside_exact_set(guarded_lane):
+    result = run_guarded_command(
+        guarded_lane.lease,
+        guarded_lane.root,
+        [sys.executable, "tests/fixtures/guarded_writer.py", "outside.txt"],
+        cwd=guarded_lane.root,
+        environment=guarded_lane.environment,
+    )
+    assert result.returncode != 0
+    assert not (guarded_lane.root / "outside.txt").exists()
+```
+
+Add negatives for symlink ancestors, final-target symlinks, path swaps, writes through a newly created symlink, detached children, writes to the registered source root, another lane, integration roots, undeclared external paths, stale fencing tokens, and missing `/usr/bin/sandbox-exec`. Add positives for declared files/directories and Git-ignored, lane-exclusive ephemeral paths removed before closure.
+
+- [ ] **Step 2: Run the guard RED test**
+
+Run: `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 .venv/bin/pytest -q tests/test_controlled_write_guard.py`
+
+Expected: FAIL because no guard exists.
+
+- [ ] **Step 3: Implement descriptor anchoring and fail-closed sandbox selection**
+
+Open every existing ancestor and final target no-follow from the lane-root descriptor and capture device/inode/type. Permit creation only below an anchored declared directory. On macOS, generate a deny-default `sandbox-exec` profile that permits process execution/read access needed by the command but grants writes only to anchored exact/ephemeral targets and the process-private system locations required by the interpreter. If the complete child process tree cannot be contained, raise `PROCESS_SANDBOX_UNAVAILABLE` before executing it.
+
+- [ ] **Step 4: Implement before/after inventory**
+
+Inventory tracked and untracked lane changes without following symlinks. Compare normalized physical paths to exact/ephemeral WriteSets. Require ephemeral paths to be Git-ignored, lane-exclusive, non-symlinked, absent from the candidate, and removed before `FIXED_CANDIDATE`.
+
+- [ ] **Step 5: Run the guard GREEN test twice**
+
+Run: `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 .venv/bin/pytest -q tests/test_controlled_write_guard.py && PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 .venv/bin/pytest -q tests/test_controlled_write_guard.py`
+
+Expected: both runs PASS; no files remain outside each test's temporary lane root.
+
+- [ ] **Step 6: Commit Task 5**
+
+```bash
+git add src/evolution_harness/controlled_write_guard.py \
+  tests/test_controlled_write_guard.py tests/fixtures/guarded_writer.py
+git commit -m "feat: guard controlled lane write sets"
+```
+
+### Task 6: Project-wide breach quarantine and explicit recovery
+
+**Files:**
+
+- Create: `src/evolution_harness/controlled_recovery.py`
+- Create: `tests/test_controlled_recovery.py`
+- Modify: `src/evolution_harness/controlled_coordinator.py`
+- Modify: `src/evolution_harness/controlled_write_guard.py`
+
+**Interfaces:**
+
+- Consumes: observed persistent paths, all nonterminal full footprints, process-quiescence proofs, current recovery authority, and a recovery command.
+- Produces: project-wide quarantine receipts, `observedWriteSet`, affected-lane decisions, and fresh-plan-only recovery closure.
+
+- [ ] **Step 1: Add RED quarantine/recovery tests**
+
+```python
+def test_breach_revokes_every_project_token_and_blocks_admission(coordinator_factory):
+    first, second = coordinator_factory.two_disjoint_leases()
+    receipt = observe_lane_writes(ROOT, SOURCE, coordinator_factory.breach(first, "undeclared.txt"))
+    assert receipt["recoveryState"] == "PROJECT_WRITESET_RECOVERY"
+    assert set(receipt["revokedLeaseIds"]) == {first["leaseId"], second["leaseId"]}
+    with pytest.raises(ControlledCoordinationError) as caught:
+        acquire_lane_lease(ROOT, SOURCE, coordinator_factory.acquire_third())
+    assert caught.value.code == "PROJECT_RECOVERY_PENDING"
+```
+
+Cover tracked/untracked breaches, authority-path writes, cross-lane overlap recomputation, non-overlapping lanes still requiring a fresh plan, missing process quiescence, widened WriteSet rejection, changed recovery authority, journal loss/corruption, recovery replay, conflicting recovery payload, and a new admission succeeding only after a valid recovery receipt plus fresh plan identity.
+
+- [ ] **Step 2: Run the recovery RED test**
+
+Run: `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 .venv/bin/pytest -q tests/test_controlled_recovery.py`
+
+Expected: FAIL because quarantine/recovery is missing.
+
+- [ ] **Step 3: Implement atomic project-wide quarantine**
+
+On any breach, reacquire the project lock, recompute current journal state, increment fencing tokens for every nonterminal lease, set `PROJECT_WRITESET_RECOVERY`, persist the complete observed path set, and block transitions/admissions/integration preparation. Do not delete lane files or evidence.
+
+- [ ] **Step 4: Implement authorized recovery closure**
+
+Require current project-owned recovery authority, process-quiescence proof for every affected lease, expected journal version, explicit per-lease decisions, and `replacementPlanRequired=true`. Mark overlapping/authority-affected leases `STALE`; retain immutable evidence; clear recovery only after the receipt is durable. Never widen a descriptor or reuse the old plan.
+
+- [ ] **Step 5: Run recovery and race tests**
+
+Run: `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 .venv/bin/pytest -q tests/test_controlled_recovery.py tests/test_controlled_coordinator_acquire.py tests/test_coordinator_state.py`
+
+Expected: PASS, including concurrent breach/acquire and crash-replay cases.
+
+- [ ] **Step 6: Commit Task 6**
+
+```bash
+git add src/evolution_harness/controlled_recovery.py \
+  src/evolution_harness/controlled_coordinator.py \
+  src/evolution_harness/controlled_write_guard.py \
+  tests/test_controlled_recovery.py
+git commit -m "feat: quarantine controlled project write breaches"
+```
+
+### Task 7: Readable CLI for explicit coordinator operations
+
+**Files:**
+
+- Modify: `src/evolution_harness/cli.py`
+- Create: `tests/test_controlled_coordinator_cli.py`
+- Modify: `README.md`
+
+**Interfaces:**
+
+- Consumes: the Phase 1B public Python APIs.
+- Produces: JSON-only-safe CLI commands `coordination status`, `coordination acquire`, `coordination transition`, `coordination observe`, and `coordination recover`.
+
+- [ ] **Step 1: Add RED CLI tests**
+
+```python
+def test_coordination_acquire_writes_only_coordinator_root(cli_factory):
+    before = cli_factory.project_snapshot()
+    result = cli_factory.run("coordination", "acquire", "--source", str(cli_factory.source), "--request", str(cli_factory.request))
+    assert result.returncode == 0
+    assert json.loads(result.stdout)["data"]["schemaVersion"] == "controlled-execution-lease/v1"
+    assert cli_factory.project_snapshot() == before
+```
+
+Test invalid registration, stale authority, lock contention, protected actions, replay, status on an uninitialized project, recovery-pending output, JSON error codes, and absence of `--apply`, agent-launch, worktree-create, Git-ref, merge, push, or lifecycle-authority mutation options.
+
+- [ ] **Step 2: Run the CLI RED test**
+
+Run: `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 .venv/bin/pytest -q tests/test_controlled_coordinator_cli.py`
+
+Expected: FAIL because the commands are absent.
+
+- [ ] **Step 3: Wire the explicit commands**
+
+Every mutating command requires `--source` and `--request`; status requires `--source`. Emit structured `code`, `message`, receipt identity, journal version, fencing token, retained/released state, and recovery status. Keep project files byte-identical across every CLI test.
+
+- [ ] **Step 4: Document exact limits**
+
+README must state that Phase 1B records safety leases only; it does not launch work, create worktrees, mutate project authority, integrate candidates, or authorize Pay-Nexus. Document the durable state root, explicit recovery requirement, and protected actions.
+
+- [ ] **Step 5: Run the CLI GREEN test**
+
+Run: `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 .venv/bin/pytest -q tests/test_controlled_coordinator_cli.py tests/test_controlled_planning_cli.py`
+
+Expected: PASS with Phase 1A CLI compatibility preserved.
+
+- [ ] **Step 6: Commit Task 7**
+
+```bash
+git add src/evolution_harness/cli.py tests/test_controlled_coordinator_cli.py README.md
+git commit -m "feat: expose controlled coordination safety"
+```
+
+### Task 8: Phase 1B acceptance, fixed candidate, and release decision
+
+**Files:**
+
+- Modify only if evidence requires correction: files already listed in Tasks 1-7.
+- Create after verification: `docs/reviews/controlled-parallel-project-execution-phase-1b-final-review.md`
+
+**Interfaces:**
+
+- Consumes: the complete Phase 1B branch and the reviewed Phase 1A base.
+- Produces: exact Candidate/Parent/Tree/WriteSet evidence and a single `gpt-5.6-sol/xhigh` `GO/NO-GO` decision.
+
+- [ ] **Step 1: Run structural and generated checks**
+
+```bash
+.venv/bin/python -m evolution_harness.cli --repository-root . validate --check-generated --format json
+.venv/bin/python -m evolution_harness.cli --repository-root . registry build --check --format json
+.venv/bin/python -m evolution_harness.cli --repository-root . catalog build --check --format json
+./eng doctor --ci --json
+git diff --check
+```
+
+Expected: every command exits `0` and reports PASS/healthy according to its schema.
+
+- [ ] **Step 2: Run complete focused Phase 1A/1B tests**
+
+```bash
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 .venv/bin/pytest -q \
+  tests/test_controlled_inputs.py \
+  tests/test_controlled_conflicts.py \
+  tests/test_controlled_planner.py \
+  tests/test_controlled_planning_cli.py \
+  tests/test_controlled_coordinator_inputs.py \
+  tests/test_coordinator_state.py \
+  tests/test_controlled_coordinator_acquire.py \
+  tests/test_controlled_coordinator_lifecycle.py \
+  tests/test_controlled_write_guard.py \
+  tests/test_controlled_recovery.py \
+  tests/test_controlled_coordinator_cli.py
+```
+
+Expected: zero failures and zero skips.
+
+- [ ] **Step 3: Run the full Harness regression once**
+
+Run: `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 .venv/bin/pytest -q`
+
+Expected: zero failures. Do not rerun unchanged full regression unless candidate tree, environment, or evidence changes.
+
+- [ ] **Step 4: Prove registered projects are unchanged**
+
+Capture before/after SHA-256, size, mode, inode, mtime, and ctime for each exact allowlisted authority file in the neutral fixture and Pay-Nexus sidecar scenario. Assert registered project HEAD/tree/tracked status are unchanged. Do not read, enumerate, or hash Pay-Nexus `.git/**` or `temp-input/**` content.
+
+- [ ] **Step 5: Create the fixed candidate**
+
+```bash
+git status --short
+git diff --check
+git add core/schemas src/evolution_harness tests README.md
+git commit -m "feat: coordinate controlled project lanes"
+git rev-parse HEAD HEAD^ HEAD^{tree}
+git diff --name-only HEAD^ HEAD
+```
+
+Expected: a clean candidate with only the approved Phase 1B WriteSet.
+
+- [ ] **Step 6: Run one independent xhigh final gate**
+
+Review the exact detached Candidate/Parent/Tree with `deep_reviewer` at fixed `xhigh`. Require checks for cross-plan/cross-batch races, state loss, crash replay, symlink/path-swap escape, real process-tree write denial, protected actions, full regression evidence, registered-project no-write proof, and Phase 1C/Pay-Nexus exclusions.
+
+Expected verdict: `GO / P0=0 / P1=0 / P2=0`. Any finding returns to the owning task, forms one cumulative remediation candidate, reruns only affected gates plus the final full regression when the tree stabilizes, and receives a fresh xhigh review.
+
+- [ ] **Step 7: Record the review without changing the reviewed verdict**
+
+Write `docs/reviews/controlled-parallel-project-execution-phase-1b-final-review.md` with Candidate, Parent, Tree, exact WriteSet, commands/exit codes, concurrency negatives, no-write evidence, P0/P1/P2 counts, residual target-platform limits, and explicit statement that Phase 1C and Pay-Nexus remain unexecuted. Commit it separately with:
+
+```bash
+git add docs/reviews/controlled-parallel-project-execution-phase-1b-final-review.md
+git commit -m "docs: record controlled coordination review"
+```
+
+- [ ] **Step 8: Stop at the Phase 1C planning boundary**
+
+Report Phase 1B as complete only after the fixed candidate receives zero-finding GO and the review receipt commit is present. Then create a new Phase 1C plan from the accepted interfaces; do not begin integration-transaction implementation in the Phase 1B candidate.
+
+## Self-Review Record
+
+- Spec coverage: state root, project identity, CAS admission, fencing, lifecycle, capacity, WriteSet sandbox, quarantine, recovery, CLI, registered-project no-write proof, and fixed-candidate review are each owned by exactly one task.
+- Scope: Phase 1C, Pay-Nexus projection/adoption, task launching, worktree creation, Git integration, database work, push, and deployment are explicitly excluded.
+- Interface consistency: all later tasks consume the public functions and command shapes locked above; `projectExecutionKey`, `leaseId`, `attemptId`, `fencingToken`, journal versions, and Candidate/Parent/Tree identities retain one spelling.
+- Placeholder scan: the plan contains no unresolved implementation choices; platform inability to enforce the sandbox is a defined fail-closed result.

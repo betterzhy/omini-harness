@@ -579,18 +579,20 @@ Expected: zero failures. Do not rerun unchanged full regression unless candidate
 
 Capture before/after SHA-256, size, mode, inode, mtime, and ctime for each exact allowlisted authority file in the neutral fixture and Pay-Nexus sidecar scenario. Assert registered project HEAD/tree/tracked status are unchanged. Do not read, enumerate, or hash Pay-Nexus `.git/**` or `temp-input/**` content.
 
-- [ ] **Step 5: Create the fixed candidate**
+- [ ] **Step 5: Freeze the stable implementation HEAD as the fixed candidate**
 
 ```bash
 git status --short
 git diff --check
-git add core/schemas src/evolution_harness tests README.md
-git commit -m "feat: coordinate controlled project lanes"
 git rev-parse HEAD HEAD^ HEAD^{tree}
-git diff --name-only HEAD^ HEAD
+git diff --name-only ee1a29bd98e798598051d2ef3e56fd1c7fcb198d..HEAD
 ```
 
-Expected: a clean candidate with only the approved Phase 1B WriteSet.
+Expected: Task 1-7 implementation is already committed, the worktree is clean,
+and the stable `HEAD` is the fixed candidate with only the approved Phase 1B
+WriteSet. If verification required a code or test correction, commit that
+correction with its owning task before freezing `HEAD`; never create an empty
+or evidence-only implementation commit.
 
 - [ ] **Step 6: Run one independent xhigh final gate**
 

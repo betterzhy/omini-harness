@@ -1,10 +1,16 @@
 from __future__ import annotations
 
 import copy
+import json
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from .controlled_inputs import ControlledPlanningError, parse_rfc3339
+from .controlled_inputs import (
+    ControlledPlanningError,
+    normalize_authorization_envelope,
+    normalize_slice_descriptor,
+    parse_rfc3339,
+)
 from .hashing import canonical_json_bytes, sha256_bytes
 from .paths import PathBoundaryError, safe_relative_path
 from .schema import SchemaStore, SchemaValidationError
@@ -48,6 +54,19 @@ _CANDIDATE_STATES = frozenset(
         "QUEUED_FOR_INTEGRATION",
         "INTEGRATING",
         "CLOSED",
+    }
+)
+_PROTECTED_ACTION_CLASSES = frozenset(
+    {
+        "action:database-write",
+        "action:migration-apply",
+        "action:destructive",
+        "action:production-access",
+        "action:landing",
+        "action:wave-entry",
+        "action:push",
+        "action:release",
+        "action:deploy",
     }
 )
 
@@ -99,6 +118,7 @@ def _canonical_absolute_path(value: str, label: str) -> str:
     normalized = path.as_posix()
     if (
         not path.is_absolute()
+        or value.startswith("//")
         or normalized != value
         or any(part in {"", ".", ".."} for part in path.parts)
     ):
@@ -160,6 +180,180 @@ def _validate_timestamp(value: str) -> None:
         raise ControlledCoordinationError(exc.code, str(exc)) from exc
 
 
+def _normalize_acquire_evidence(
+    repository_root: Path, command: dict[str, Any]
+) -> None:
+    try:
+        command["sliceDescriptor"] = normalize_slice_descriptor(
+            repository_root, command["sliceDescriptor"]
+        )
+        command["authorizationEnvelope"] = normalize_authorization_envelope(
+            repository_root, command["authorizationEnvelope"]
+        )
+    except (ControlledPlanningError, SchemaValidationError) as exc:
+        code = getattr(exc, "code", "COORDINATOR_COMMAND_INVALID")
+        raise ControlledCoordinationError(code, str(exc)) from exc
+
+    proof = command["admissionAuthorityProof"]
+    proof["authorityReference"] = _canonical_relative_path(
+        proof["authorityReference"], "admissionAuthorityProof.authorityReference"
+    )
+    binding = proof["binding"]
+    binding["originalSourceRoot"] = _canonical_absolute_path(
+        binding["originalSourceRoot"],
+        "admissionAuthorityProof.binding.originalSourceRoot",
+    )
+    binding["laneRoot"] = _canonical_absolute_path(
+        binding["laneRoot"], "admissionAuthorityProof.binding.laneRoot"
+    )
+
+
+def _validate_admission_authority(command: dict[str, Any]) -> None:
+    snapshot = command["authoritySnapshot"]
+    expected_snapshot_fingerprint = _sha256(
+        {key: value for key, value in snapshot.items() if key != "snapshotFingerprint"}
+    )
+    if snapshot["snapshotFingerprint"] != expected_snapshot_fingerprint:
+        raise ControlledCoordinationError(
+            "ADMISSION_AUTHORITY_BINDING_MISMATCH",
+            "authority snapshot fingerprint is not canonical",
+        )
+    expected_authority_set_digest = _sha256(snapshot["authorities"])
+    if snapshot["sourceRevision"]["authoritySetDigest"] != expected_authority_set_digest:
+        raise ControlledCoordinationError(
+            "ADMISSION_AUTHORITY_BINDING_MISMATCH",
+            "authority set digest is not canonical",
+        )
+    if (
+        snapshot["snapshotFingerprint"] != command["authoritySnapshotFingerprint"]
+        or snapshot["projectId"] != command["projectId"]
+        or snapshot["sourceRevision"]["head"] != command["expectedLaneBase"]
+        or snapshot["sourceRevision"]["kind"] != "GIT"
+        or snapshot["sourceRevision"]["authoritySetStatus"]
+        != "CLEAN_FOR_AUTHORITY_SET"
+        or snapshot["gate"] != "PASS"
+        or snapshot["conflicts"]
+        or snapshot["missingFacts"]
+    ):
+        raise ControlledCoordinationError(
+            "ADMISSION_AUTHORITY_BINDING_MISMATCH",
+            "authority snapshot does not bind the acquire command",
+        )
+
+    proof = command["admissionAuthorityProof"]
+    expected_proof_digest = _sha256(
+        {key: value for key, value in proof.items() if key != "proofDigest"}
+    )
+    if proof["proofDigest"] != expected_proof_digest:
+        raise ControlledCoordinationError(
+            "ADMISSION_AUTHORITY_BINDING_MISMATCH",
+            "admission authority proof digest is not canonical",
+        )
+    binding = proof["binding"]
+    expected_binding = {
+        "projectId": command["projectId"],
+        "sliceId": command["sliceId"],
+        "attemptId": command["attemptId"],
+        "originalSourceRoot": command["originalSourceRoot"],
+        "laneRoot": command["laneRoot"],
+        "expectedLaneBase": command["expectedLaneBase"],
+    }
+    if binding != expected_binding:
+        raise ControlledCoordinationError(
+            "ADMISSION_AUTHORITY_BINDING_MISMATCH",
+            "admission authority proof does not bind acquire identity",
+        )
+    expected_fact_id = f"controlled_coordination.admission.{command['sliceId']}"
+    fact = snapshot["facts"].get(proof["factId"])
+    if proof["factId"] != expected_fact_id or not isinstance(fact, dict):
+        raise ControlledCoordinationError(
+            "ADMISSION_AUTHORITY_BINDING_MISMATCH",
+            "project-authorized admission fact is missing",
+        )
+    envelope = command["authorizationEnvelope"]
+    expected_fact_value = canonical_json_bytes(binding).decode("utf-8")
+    if (
+        fact.get("owner") != envelope["issuerId"]
+        or fact.get("sourcePath") != proof["authorityReference"]
+        or fact.get("rawValue") != expected_fact_value
+        or fact.get("normalizedValue") != expected_fact_value
+        or proof["authorityReference"] != envelope["issuerAuthorityReference"]
+        or proof["authorityDigest"] != envelope["issuerAuthorityDigest"]
+    ):
+        raise ControlledCoordinationError(
+            "ADMISSION_AUTHORITY_BINDING_MISMATCH",
+            "admission fact is not bound to envelope authority",
+        )
+    authority = next(
+        (
+            item
+            for item in snapshot["authorities"]
+            if item["path"] == proof["authorityReference"]
+        ),
+        None,
+    )
+    if (
+        authority is None
+        or authority["id"] != envelope["issuerId"]
+        or proof["authorityDigest"] != "sha256:" + authority["sha256"]
+    ):
+        raise ControlledCoordinationError(
+            "ADMISSION_AUTHORITY_BINDING_MISMATCH",
+            "admission authority record is not bound to snapshot",
+        )
+
+    def planning_fact_value(fact_id: str) -> str:
+        planning_fact = snapshot["facts"].get(fact_id)
+        if (
+            not isinstance(planning_fact, dict)
+            or planning_fact.get("owner") != envelope["issuerId"]
+            or planning_fact.get("sourcePath") != proof["authorityReference"]
+            or not isinstance(planning_fact.get("normalizedValue"), str)
+        ):
+            raise ControlledCoordinationError(
+                "ADMISSION_AUTHORITY_BINDING_MISMATCH",
+                f"planning authority fact is not bound: {fact_id}",
+            )
+        return planning_fact["normalizedValue"]
+
+    expected_facts = {
+        "controlled_planning.batch_base_commit": command["expectedLaneBase"],
+        "controlled_planning.authorization_envelope_digest": envelope[
+            "envelopeDigest"
+        ],
+        "controlled_planning.conflict_policy_version": command[
+            "conflictPolicyVersion"
+        ],
+    }
+    for fact_id, expected_value in expected_facts.items():
+        if planning_fact_value(fact_id) != expected_value:
+            raise ControlledCoordinationError(
+                "ADMISSION_AUTHORITY_BINDING_MISMATCH",
+                f"planning authority fact changed: {fact_id}",
+            )
+    descriptor_fact = planning_fact_value(
+        "controlled_planning.slice_descriptor_digests"
+    )
+    try:
+        descriptor_digests = json.loads(descriptor_fact)
+    except (TypeError, ValueError) as exc:
+        raise ControlledCoordinationError(
+            "ADMISSION_AUTHORITY_BINDING_MISMATCH",
+            "descriptor authority fact is not canonical JSON",
+        ) from exc
+    if (
+        not isinstance(descriptor_digests, list)
+        or any(not isinstance(item, str) for item in descriptor_digests)
+        or descriptor_digests != sorted(set(descriptor_digests))
+        or canonical_json_bytes(descriptor_digests).decode("utf-8") != descriptor_fact
+        or command["sliceDescriptor"]["descriptorDigest"] not in descriptor_digests
+    ):
+        raise ControlledCoordinationError(
+            "ADMISSION_AUTHORITY_BINDING_MISMATCH",
+            "descriptor is not present in authority snapshot facts",
+        )
+
+
 def _validate_plan_binding(command: dict[str, Any]) -> None:
     plan = command["executionPlan"]
     expected_plan_id = _stable_id(
@@ -214,6 +408,31 @@ def _validate_plan_binding(command: dict[str, Any]) -> None:
             "protected action cannot be acquired",
         )
     admission = admissions[0]
+    descriptor = command["sliceDescriptor"]
+    envelope = command["authorizationEnvelope"]
+    if (
+        descriptor["sliceId"] != command["sliceId"]
+        or admission["descriptorDigest"] != descriptor["descriptorDigest"]
+        or envelope["projectId"] != command["projectId"]
+        or envelope["envelopeDigest"] != command["authorizationEnvelopeDigest"]
+    ):
+        raise ControlledCoordinationError(
+            "EXECUTION_PLAN_BINDING_MISMATCH",
+            "descriptor or envelope does not match proposed admission",
+        )
+    action_class = descriptor["authorizationClass"]
+    if action_class in _PROTECTED_ACTION_CLASSES:
+        raise ControlledCoordinationError(
+            "PROTECTED_ACTION_DENIED", f"protected action cannot be acquired: {action_class}"
+        )
+    if (
+        action_class not in envelope["permittedActionClasses"]
+        or action_class in envelope["deniedActions"]
+    ):
+        raise ControlledCoordinationError(
+            "EXECUTION_PLAN_BINDING_MISMATCH",
+            "descriptor action is not permitted by authorization envelope",
+        )
     footprint = command["fullFootprint"]
     if footprint["sliceId"] != command["sliceId"]:
         raise ControlledCoordinationError(
@@ -226,21 +445,25 @@ def _validate_plan_binding(command: dict[str, Any]) -> None:
             "EXECUTION_PLAN_BINDING_MISMATCH",
             "full footprint exact WriteSet does not match proposed admission",
         )
-    footprint_payload = {
-        key: value for key, value in footprint.items() if key != "conflictFootprintId"
+    footprint_payload = {"sliceId": descriptor["sliceId"]}
+    for field in _FOOTPRINT_SET_FIELDS:
+        footprint_payload[field] = descriptor[field]
+    footprint_payload["producerConsumerSet"] = descriptor["producerConsumerSet"]
+    expected_footprint = {
+        **footprint_payload,
+        "conflictFootprintId": _stable_id(
+            "footprint",
+            {
+                "projectId": command["projectId"],
+                "conflictPolicyVersion": command["conflictPolicyVersion"],
+                **footprint_payload,
+            },
+        ),
     }
-    expected_footprint_id = _stable_id(
-        "footprint",
-        {
-            "projectId": command["projectId"],
-            "conflictPolicyVersion": command["conflictPolicyVersion"],
-            **footprint_payload,
-        },
-    )
-    if footprint["conflictFootprintId"] != expected_footprint_id:
+    if canonical_json_bytes(footprint) != canonical_json_bytes(expected_footprint):
         raise ControlledCoordinationError(
-            "CONFLICT_FOOTPRINT_ID_MISMATCH",
-            "full conflict footprint identity is not canonical",
+            "EXECUTION_PLAN_BINDING_MISMATCH",
+            "full conflict footprint does not match normalized descriptor",
         )
 
 
@@ -251,6 +474,7 @@ def normalize_acquire_command(
     _validate_schema(store, _ACQUIRE_SCHEMA, value)
     normalized = copy.deepcopy(value)
     normalized["fullFootprint"] = _normalize_footprint(normalized["fullFootprint"])
+    _normalize_acquire_evidence(repository_root, normalized)
     normalized["originalSourceRoot"] = _canonical_absolute_path(
         normalized["originalSourceRoot"], "originalSourceRoot"
     )
@@ -261,6 +485,7 @@ def normalize_acquire_command(
     _verify_command_digest(normalized)
     _validate_timestamp(normalized["asOf"])
     _validate_timestamp(normalized["executionPlan"]["asOf"])
+    _validate_admission_authority(normalized)
     _validate_plan_binding(normalized)
     return normalized
 
@@ -269,6 +494,64 @@ def _normalize_process_quiescence(value: dict[str, Any]) -> dict[str, Any]:
     normalized = copy.deepcopy(value)
     normalized["processIds"] = sorted(normalized["processIds"])
     return normalized
+
+
+def _validate_lifecycle_authority(command: dict[str, Any]) -> None:
+    proof = command["lifecycleAuthorityProof"]
+    proof["authorityReference"] = _canonical_relative_path(
+        proof["authorityReference"], "lifecycleAuthorityProof.authorityReference"
+    )
+    _validate_timestamp(proof["assertedAt"])
+    expected_digest = _sha256(
+        {key: value for key, value in proof.items() if key != "proofDigest"}
+    )
+    if proof["proofDigest"] != expected_digest or (
+        proof["attemptId"], proof["expectedState"], proof["nextState"]
+    ) != (
+        command["attemptId"],
+        command["expectedState"],
+        command["nextState"],
+    ):
+        raise ControlledCoordinationError(
+            "LIFECYCLE_AUTHORITY_BINDING_MISMATCH",
+            "lifecycle authority proof does not bind the transition",
+        )
+
+
+def _validate_review_evidence(command: dict[str, Any]) -> None:
+    evidence = command["reviewEvidence"]
+    if command["nextState"] != "REVIEW_GO":
+        if evidence is not None:
+            raise ControlledCoordinationError(
+                "REVIEW_EVIDENCE_UNEXPECTED",
+                "review evidence is accepted only for REVIEW_GO",
+            )
+        return
+    if evidence is None:
+        raise ControlledCoordinationError(
+            "REVIEW_EVIDENCE_REQUIRED",
+            "REVIEW_GO requires candidate-bound zero-finding review evidence",
+        )
+    _validate_timestamp(evidence["reviewedAt"])
+    expected_binding_digest = _sha256(
+        {
+            "candidateIdentity": command["candidateIdentity"],
+            "authoritySnapshotFingerprint": command["authoritySnapshotFingerprint"],
+            "attemptId": command["attemptId"],
+        }
+    )
+    expected_evidence_digest = _sha256(
+        {key: value for key, value in evidence.items() if key != "evidenceDigest"}
+    )
+    if (
+        evidence["candidateIdentity"] != command["candidateIdentity"]
+        or evidence["reviewBindingDigest"] != expected_binding_digest
+        or evidence["evidenceDigest"] != expected_evidence_digest
+    ):
+        raise ControlledCoordinationError(
+            "REVIEW_EVIDENCE_BINDING_MISMATCH",
+            "review evidence does not bind the transition candidate",
+        )
 
 
 def normalize_transition_command(
@@ -280,9 +563,14 @@ def normalize_transition_command(
     normalized["processQuiescence"] = _normalize_process_quiescence(
         normalized["processQuiescence"]
     )
+    normalized["lifecycleAuthorityProof"] = copy.deepcopy(
+        normalized["lifecycleAuthorityProof"]
+    )
+    normalized["reviewEvidence"] = copy.deepcopy(normalized["reviewEvidence"])
     _validate_schema(store, _TRANSITION_SCHEMA, normalized)
     _verify_command_digest(normalized)
     _validate_timestamp(normalized["processQuiescence"]["observedAt"])
+    _validate_lifecycle_authority(normalized)
 
     expected = normalized["expectedState"]
     next_state = normalized["nextState"]
@@ -299,6 +587,7 @@ def normalize_transition_command(
             "CANDIDATE_IDENTITY_REQUIRED",
             f"candidate identity is required for {next_state}",
         )
+    _validate_review_evidence(normalized)
     return normalized
 
 

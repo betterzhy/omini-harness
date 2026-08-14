@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import json
 from dataclasses import dataclass
 
 import pytest
@@ -12,6 +13,7 @@ from evolution_harness.controlled_coordinator_inputs import (
     normalize_transition_command,
     normalize_write_observation_command,
 )
+from evolution_harness.controlled_inputs import descriptor_digest, envelope_digest
 from evolution_harness.controlled_planner import build_provisional_execution_plan
 from evolution_harness.hashing import canonical_json_bytes, sha256_bytes
 from evolution_harness.schema import SchemaStore, SchemaValidationError
@@ -29,6 +31,37 @@ def _with_command_digest(command):
     return value
 
 
+def _refresh_batch_plan_id(plan):
+    plan["batchPlanId"] = (
+        "batch-plan:"
+        + sha256_bytes(
+            canonical_json_bytes(
+                {key: value for key, value in plan.items() if key != "batchPlanId"}
+            )
+        )[:24]
+    )
+
+
+def _refresh_footprint_id(command):
+    footprint = command["fullFootprint"]
+    footprint["conflictFootprintId"] = (
+        "footprint:"
+        + sha256_bytes(
+            canonical_json_bytes(
+                {
+                    "projectId": command["projectId"],
+                    "conflictPolicyVersion": command["conflictPolicyVersion"],
+                    **{
+                        key: value
+                        for key, value in footprint.items()
+                        if key != "conflictFootprintId"
+                    },
+                }
+            )
+        )[:24]
+    )
+
+
 @dataclass
 class CoordinatorFactory:
     repository_root: object
@@ -42,19 +75,65 @@ class CoordinatorFactory:
             permittedActionClasses=[action_class],
             deniedActions=[],
         )
+        envelope["permittedPathPrefixes"] = sorted(envelope["permittedPathPrefixes"])
         return build_provisional_execution_plan(
             self.repository_root,
             self.controlled_factory.request(descriptor, envelope=envelope),
         )
 
-    def acquire(self, **changes):
-        bundle = self._plan_bundle()
+    def acquire(
+        self,
+        *,
+        action_class="action:ordinary-development",
+        descriptor_changes=None,
+        **changes,
+    ):
+        descriptor = self.controlled_factory.descriptor(
+            authorizationClass=action_class,
+            **(descriptor_changes or {}),
+        )
+        envelope = self.controlled_factory.envelope(
+            permittedActionClasses=[action_class],
+            deniedActions=[],
+        )
+        envelope["permittedPathPrefixes"] = sorted(envelope["permittedPathPrefixes"])
+        binding = {
+            "projectId": "neutral-project",
+            "sliceId": descriptor["sliceId"],
+            "attemptId": "attempt:neutral-a",
+            "originalSourceRoot": "/projects/neutral",
+            "laneRoot": "/projects/neutral-lanes/slice-neutral-a",
+            "expectedLaneBase": "a" * 40,
+        }
+        request = self.controlled_factory.request(descriptor, envelope=envelope)
+        fact_id = f"controlled_coordination.admission.{descriptor['sliceId']}"
+        request["authoritySnapshot"]["facts"][fact_id] = {
+            "owner": envelope["issuerId"],
+            "sourcePath": envelope["issuerAuthorityReference"],
+            "rawValue": canonical_json_bytes(binding).decode("utf-8"),
+            "normalizedValue": canonical_json_bytes(binding).decode("utf-8"),
+        }
+        request["authoritySnapshot"]["snapshotFingerprint"] = _sha256(
+            {
+                key: value
+                for key, value in request["authoritySnapshot"].items()
+                if key != "snapshotFingerprint"
+            }
+        )
+        bundle = build_provisional_execution_plan(self.repository_root, request)
         plan = bundle["executionPlan"]
         footprint = next(
             item
             for item in bundle["conflictReport"]["footprints"]
             if item["sliceId"] == "slice:neutral-a"
         )
+        authority_proof = {
+            "factId": fact_id,
+            "authorityReference": envelope["issuerAuthorityReference"],
+            "authorityDigest": envelope["issuerAuthorityDigest"],
+            "binding": binding,
+        }
+        authority_proof["proofDigest"] = _sha256(authority_proof)
         value = {
             "schemaVersion": "controlled-coordinator-acquire-command/v1",
             "projectId": plan["projectId"],
@@ -70,6 +149,10 @@ class CoordinatorFactory:
             "conflictPolicyVersion": plan["conflictPolicyVersion"],
             "asOf": plan["asOf"],
             "executionPlan": plan,
+            "sliceDescriptor": descriptor,
+            "authorizationEnvelope": envelope,
+            "authoritySnapshot": request["authoritySnapshot"],
+            "admissionAuthorityProof": authority_proof,
             "fullFootprint": footprint,
             "originalSourceRoot": "/projects/neutral",
             "laneRoot": "/projects/neutral-lanes/slice-neutral-a",
@@ -100,6 +183,43 @@ class CoordinatorFactory:
             },
         }
         value.update(copy.deepcopy(changes))
+        authority_proof = value.get("lifecycleAuthorityProof") or {
+            "authorityReference": "authority/lifecycle.yaml",
+            "authorityDigest": "sha256:" + "a" * 64,
+            "attemptId": value["attemptId"],
+            "expectedState": value["expectedState"],
+            "nextState": value["nextState"],
+            "assertedAt": "2026-08-13T12:29:00Z",
+        }
+        authority_proof["proofDigest"] = _sha256(
+            {
+                key: item
+                for key, item in authority_proof.items()
+                if key != "proofDigest"
+            }
+        )
+        value["lifecycleAuthorityProof"] = authority_proof
+        if "reviewEvidence" not in value:
+            value["reviewEvidence"] = None
+            if value["nextState"] == "REVIEW_GO":
+                review = {
+                    "candidateIdentity": copy.deepcopy(value["candidateIdentity"]),
+                    "reviewerId": "reviewer:neutral",
+                    "verdict": "GO_ZERO_FINDINGS",
+                    "findingCounts": {"p0": 0, "p1": 0, "p2": 0},
+                    "reviewedAt": "2026-08-13T12:29:30Z",
+                    "reviewBindingDigest": _sha256(
+                        {
+                            "candidateIdentity": value["candidateIdentity"],
+                            "authoritySnapshotFingerprint": value[
+                                "authoritySnapshotFingerprint"
+                            ],
+                            "attemptId": value["attemptId"],
+                        }
+                    ),
+                }
+                review["evidenceDigest"] = _sha256(review)
+                value["reviewEvidence"] = review
         return _with_command_digest(value)
 
     def observation(self, **changes):
@@ -159,6 +279,31 @@ def coordinator_factory(repository_root, controlled_factory):
 
 
 def _mutate_acquire(command, field):
+    changed_descriptor = copy.deepcopy(command["sliceDescriptor"])
+    changed_descriptor["priority"] += 1
+    changed_descriptor["descriptorDigest"] = descriptor_digest(changed_descriptor)
+    changed_envelope = copy.deepcopy(command["authorizationEnvelope"])
+    changed_envelope["maxParallelLanes"] = 2
+    changed_envelope["envelopeDigest"] = envelope_digest(changed_envelope)
+    changed_snapshot = copy.deepcopy(command["authoritySnapshot"])
+    changed_snapshot["facts"]["controlled_coordination.extra"] = {
+        "owner": "authority-neutral",
+        "sourcePath": "authority/portfolio.yaml",
+        "rawValue": "changed",
+        "normalizedValue": "changed",
+    }
+    changed_snapshot["snapshotFingerprint"] = _sha256(
+        {
+            key: value
+            for key, value in changed_snapshot.items()
+            if key != "snapshotFingerprint"
+        }
+    )
+    changed_proof = copy.deepcopy(command["admissionAuthorityProof"])
+    changed_proof["authorityDigest"] = "sha256:" + "c" * 64
+    changed_proof["proofDigest"] = _sha256(
+        {key: value for key, value in changed_proof.items() if key != "proofDigest"}
+    )
     mutations = {
         "projectId": "neutral-project-changed",
         "batchPlanId": "batch-plan:" + "a" * 24,
@@ -169,6 +314,10 @@ def _mutate_acquire(command, field):
         "conflictPolicyVersion": "controlled-conflict-policy/v2",
         "asOf": "2026-08-13T12:00:01Z",
         "executionPlan": {**command["executionPlan"], "asOf": "2026-08-13T12:00:01Z"},
+        "sliceDescriptor": changed_descriptor,
+        "authorizationEnvelope": changed_envelope,
+        "authoritySnapshot": changed_snapshot,
+        "admissionAuthorityProof": changed_proof,
         "fullFootprint": {**command["fullFootprint"], "ownerSet": ["owner:changed"]},
         "originalSourceRoot": "/projects/changed",
         "laneRoot": "/projects/neutral-lanes/changed",
@@ -189,6 +338,10 @@ def _mutate_acquire(command, field):
         "conflictPolicyVersion",
         "asOf",
         "executionPlan",
+        "sliceDescriptor",
+        "authorizationEnvelope",
+        "authoritySnapshot",
+        "admissionAuthorityProof",
         "fullFootprint",
         "originalSourceRoot",
         "laneRoot",
@@ -231,36 +384,30 @@ def test_acquire_rejects_unknown_field_and_digest_mutation(
 def test_acquire_deep_copies_and_canonicalizes_only_footprint_sets(
     repository_root, coordinator_factory
 ):
-    command = coordinator_factory.acquire()
-    command["fullFootprint"]["ownerSet"] = ["owner:z", "owner:a"]
-    command["fullFootprint"]["producerConsumerSet"] = [
+    command = coordinator_factory.acquire(
+        descriptor_changes={
+            "ownerSet": ["owner:z", "owner:a"],
+            "producerConsumerSet": [
+                {"producer": "owner:z", "consumer": "owner:a"},
+                {"producer": "owner:a", "consumer": "owner:z"},
+            ],
+        }
+    )
+    unsorted_owners = ["owner:z", "owner:a"]
+    unsorted_relations = [
         {"producer": "owner:z", "consumer": "owner:a"},
         {"producer": "owner:a", "consumer": "owner:z"},
     ]
-    command["fullFootprint"]["conflictFootprintId"] = (
-        "footprint:"
-        + sha256_bytes(
-            canonical_json_bytes(
-                    {
-                        "projectId": command["projectId"],
-                        "conflictPolicyVersion": command["conflictPolicyVersion"],
-                        **{
-                            **{
-                                key: value
-                                for key, value in command["fullFootprint"].items()
-                                if key != "conflictFootprintId"
-                            },
-                        "ownerSet": ["owner:a", "owner:z"],
-                        "producerConsumerSet": [
-                            {"producer": "owner:a", "consumer": "owner:z"},
-                            {"producer": "owner:z", "consumer": "owner:a"},
-                        ],
-                    },
-                }
-            )
-        )[:24]
-    )
+    command["sliceDescriptor"]["ownerSet"] = unsorted_owners
+    command["sliceDescriptor"]["producerConsumerSet"] = unsorted_relations
+    command["fullFootprint"]["ownerSet"] = unsorted_owners
+    command["fullFootprint"]["producerConsumerSet"] = unsorted_relations
     digest_payload = copy.deepcopy(command)
+    digest_payload["sliceDescriptor"]["ownerSet"] = ["owner:a", "owner:z"]
+    digest_payload["sliceDescriptor"]["producerConsumerSet"] = [
+        {"producer": "owner:a", "consumer": "owner:z"},
+        {"producer": "owner:z", "consumer": "owner:a"},
+    ]
     digest_payload["fullFootprint"]["ownerSet"] = ["owner:a", "owner:z"]
     digest_payload["fullFootprint"]["producerConsumerSet"] = [
         {"producer": "owner:a", "consumer": "owner:z"},
@@ -289,7 +436,9 @@ def test_acquire_deep_copies_and_canonicalizes_only_footprint_sets(
     ("field", "value"),
     [
         ("originalSourceRoot", "/projects/neutral/../neutral"),
+        ("originalSourceRoot", "//projects/neutral"),
         ("laneRoot", "/projects//neutral-lanes/slice-neutral-a"),
+        ("laneRoot", "//projects/neutral-lanes/slice-neutral-a"),
     ],
 )
 def test_acquire_rejects_absolute_path_aliases(
@@ -318,6 +467,114 @@ def test_acquire_rejects_relative_path_aliases_and_duplicates(
         assert caught.value.code == "UNSAFE_COORDINATOR_PATH"
 
 
+def test_acquire_rejects_self_consistent_footprint_forged_away_from_descriptor(
+    repository_root, coordinator_factory
+):
+    command = coordinator_factory.acquire()
+    command["fullFootprint"]["ownerSet"] = ["owner:forged"]
+    _refresh_footprint_id(command)
+    command = _with_command_digest(command)
+
+    with pytest.raises(ControlledCoordinationError) as caught:
+        normalize_acquire_command(repository_root, command)
+
+    assert caught.value.code == "EXECUTION_PLAN_BINDING_MISMATCH"
+
+
+def test_acquire_rejects_self_consistent_descriptor_not_bound_to_snapshot_fact(
+    repository_root, controlled_factory, coordinator_factory
+):
+    command = coordinator_factory.acquire()
+    descriptor = controlled_factory.descriptor(ownerSet=["owner:forged"])
+    command["sliceDescriptor"] = descriptor
+    command["fullFootprint"]["ownerSet"] = descriptor["ownerSet"]
+    _refresh_footprint_id(command)
+    command["executionPlan"]["proposedAdmissions"][0]["descriptorDigest"] = (
+        descriptor["descriptorDigest"]
+    )
+    _refresh_batch_plan_id(command["executionPlan"])
+    command["batchPlanId"] = command["executionPlan"]["batchPlanId"]
+    command = _with_command_digest(command)
+
+    with pytest.raises(ControlledCoordinationError) as caught:
+        normalize_acquire_command(repository_root, command)
+
+    assert caught.value.code == "ADMISSION_AUTHORITY_BINDING_MISMATCH"
+
+
+def test_acquire_rejects_dirty_authority_snapshot_even_when_rehashed(
+    repository_root, coordinator_factory
+):
+    command = coordinator_factory.acquire()
+    snapshot = command["authoritySnapshot"]
+    snapshot["sourceRevision"]["authoritySetStatus"] = "DIRTY_AUTHORITY_SET"
+    snapshot["snapshotFingerprint"] = _sha256(
+        {
+            key: value
+            for key, value in snapshot.items()
+            if key != "snapshotFingerprint"
+        }
+    )
+    command["authoritySnapshotFingerprint"] = snapshot["snapshotFingerprint"]
+    command["executionPlan"]["authoritySnapshotFingerprint"] = snapshot[
+        "snapshotFingerprint"
+    ]
+    _refresh_batch_plan_id(command["executionPlan"])
+    command["batchPlanId"] = command["executionPlan"]["batchPlanId"]
+    command = _with_command_digest(command)
+
+    with pytest.raises(ControlledCoordinationError) as caught:
+        normalize_acquire_command(repository_root, command)
+
+    assert caught.value.code == "ADMISSION_AUTHORITY_BINDING_MISMATCH"
+
+
+def test_acquire_rejects_protected_descriptor_forged_into_proposed_admissions(
+    repository_root, coordinator_factory
+):
+    action_class = "action:database-write"
+    command = coordinator_factory.acquire(action_class=action_class)
+    plan = command["executionPlan"]
+    descriptor = command["sliceDescriptor"]
+    footprint = command["fullFootprint"]
+    plan["proposedAdmissions"] = [
+        {
+            "sliceId": descriptor["sliceId"],
+            "conflictClusterId": "conflict-cluster:" + "f" * 24,
+            "descriptorDigest": descriptor["descriptorDigest"],
+            "exactWriteSetDigest": _sha256(sorted(footprint["exactWriteSet"])),
+        }
+    ]
+    plan["rejected"] = []
+    _refresh_batch_plan_id(plan)
+    command["batchPlanId"] = plan["batchPlanId"]
+    command = _with_command_digest(command)
+
+    with pytest.raises(ControlledCoordinationError) as caught:
+        normalize_acquire_command(repository_root, command)
+
+    assert caught.value.code == "PROTECTED_ACTION_DENIED"
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("attemptId", "attempt:forged"),
+        ("originalSourceRoot", "/projects/forged"),
+        ("laneRoot", "/projects/forged-lane"),
+    ],
+)
+def test_acquire_rejects_self_consistent_unbound_admission_identity(
+    repository_root, coordinator_factory, field, value
+):
+    command = coordinator_factory.acquire(**{field: value})
+
+    with pytest.raises(ControlledCoordinationError) as caught:
+        normalize_acquire_command(repository_root, command)
+
+    assert caught.value.code == "ADMISSION_AUTHORITY_BINDING_MISMATCH"
+
+
 @pytest.mark.parametrize(
     "field",
     [
@@ -330,12 +587,26 @@ def test_acquire_rejects_relative_path_aliases_and_duplicates(
         "authoritySnapshotFingerprint",
         "candidateIdentity",
         "processQuiescence",
+        "lifecycleAuthorityProof",
+        "reviewEvidence",
     ],
 )
 def test_transition_digest_binds_every_authority_field(
     repository_root, coordinator_factory, field
 ):
     command = coordinator_factory.transition()
+    changed_authority = copy.deepcopy(command["lifecycleAuthorityProof"])
+    changed_authority["assertedAt"] = "2026-08-13T12:29:01Z"
+    changed_authority["proofDigest"] = _sha256(
+        {
+            key: value
+            for key, value in changed_authority.items()
+            if key != "proofDigest"
+        }
+    )
+    review_source = coordinator_factory.transition(
+        expectedState="FIXED_CANDIDATE", nextState="REVIEW_GO"
+    )["reviewEvidence"]
     mutations = {
         "projectExecutionKey": "project-execution:" + "a" * 64,
         "leaseId": "lease:" + "b" * 24,
@@ -352,6 +623,8 @@ def test_transition_digest_binds_every_authority_field(
             **command["processQuiescence"],
             "observedAt": "2026-08-13T12:30:01Z",
         },
+        "lifecycleAuthorityProof": changed_authority,
+        "reviewEvidence": review_source,
     }
     command[field] = mutations[field]
 
@@ -640,18 +913,8 @@ def test_commands_reject_noncanonical_timestamps(
 def test_acquire_rejects_protected_action_even_when_envelope_permits_it(
     repository_root, coordinator_factory, action_class
 ):
-    protected_bundle = coordinator_factory._plan_bundle(action_class=action_class)
-    assert protected_bundle["executionPlan"]["proposedAdmissions"] == []
-    command = coordinator_factory.acquire(
-        executionPlan=protected_bundle["executionPlan"],
-        batchPlanId=protected_bundle["executionPlan"]["batchPlanId"],
-        authoritySnapshotFingerprint=protected_bundle["executionPlan"][
-            "authoritySnapshotFingerprint"
-        ],
-        authorizationEnvelopeDigest=protected_bundle["executionPlan"][
-            "authorizationEnvelopeDigest"
-        ],
-    )
+    command = coordinator_factory.acquire(action_class=action_class)
+    assert command["executionPlan"]["proposedAdmissions"] == []
 
     with pytest.raises(ControlledCoordinationError) as caught:
         normalize_acquire_command(repository_root, command)
@@ -667,7 +930,7 @@ def test_acquire_does_not_misclassify_an_unproposed_ordinary_slice_as_protected(
     with pytest.raises(ControlledCoordinationError) as caught:
         normalize_acquire_command(repository_root, command)
 
-    assert caught.value.code == "EXECUTION_PLAN_BINDING_MISMATCH"
+    assert caught.value.code == "ADMISSION_AUTHORITY_BINDING_MISMATCH"
 
 
 def test_exceptional_states_cannot_transition_without_recovery(
@@ -683,6 +946,98 @@ def test_exceptional_states_cannot_transition_without_recovery(
         normalize_transition_command(repository_root, command)
 
     assert caught.value.code == "INVALID_STATE_TRANSITION"
+
+
+def test_transition_requires_digest_bound_lifecycle_authority(
+    repository_root, coordinator_factory
+):
+    command = coordinator_factory.transition()
+    command.pop("lifecycleAuthorityProof")
+    command = _with_command_digest(command)
+
+    with pytest.raises(ControlledCoordinationError) as caught:
+        normalize_transition_command(repository_root, command)
+
+    assert caught.value.code == "COORDINATOR_COMMAND_INVALID"
+
+
+def test_review_go_requires_candidate_bound_zero_finding_review_evidence(
+    repository_root, coordinator_factory
+):
+    command = coordinator_factory.transition(
+        expectedState="FIXED_CANDIDATE",
+        nextState="REVIEW_GO",
+        reviewEvidence=None,
+    )
+
+    with pytest.raises(ControlledCoordinationError) as caught:
+        normalize_transition_command(repository_root, command)
+
+    assert caught.value.code == "REVIEW_EVIDENCE_REQUIRED"
+
+
+def test_transition_rejects_lifecycle_authority_proof_for_another_transition(
+    repository_root, coordinator_factory
+):
+    command = coordinator_factory.transition()
+    command["lifecycleAuthorityProof"]["nextState"] = "REVIEW_GO"
+    command["lifecycleAuthorityProof"]["proofDigest"] = _sha256(
+        {
+            key: value
+            for key, value in command["lifecycleAuthorityProof"].items()
+            if key != "proofDigest"
+        }
+    )
+    command = _with_command_digest(command)
+
+    with pytest.raises(ControlledCoordinationError) as caught:
+        normalize_transition_command(repository_root, command)
+
+    assert caught.value.code == "LIFECYCLE_AUTHORITY_BINDING_MISMATCH"
+
+
+def test_review_go_rejects_review_evidence_for_another_candidate(
+    repository_root, coordinator_factory
+):
+    command = coordinator_factory.transition(
+        expectedState="FIXED_CANDIDATE", nextState="REVIEW_GO"
+    )
+    command["reviewEvidence"]["candidateIdentity"]["commit"] = "d" * 40
+    command["reviewEvidence"]["evidenceDigest"] = _sha256(
+        {
+            key: value
+            for key, value in command["reviewEvidence"].items()
+            if key != "evidenceDigest"
+        }
+    )
+    command = _with_command_digest(command)
+
+    with pytest.raises(ControlledCoordinationError) as caught:
+        normalize_transition_command(repository_root, command)
+
+    assert caught.value.code == "REVIEW_EVIDENCE_BINDING_MISMATCH"
+
+
+def test_review_go_rejects_nonzero_finding_counts(
+    repository_root, coordinator_factory
+):
+    command = coordinator_factory.transition(
+        expectedState="FIXED_CANDIDATE", nextState="REVIEW_GO"
+    )
+    command["reviewEvidence"]["findingCounts"]["p1"] = 1
+    command["reviewEvidence"]["evidenceDigest"] = _sha256(
+        {
+            key: value
+            for key, value in command["reviewEvidence"].items()
+            if key != "evidenceDigest"
+        }
+    )
+    command = _with_command_digest(command)
+
+    with pytest.raises(ControlledCoordinationError) as caught:
+        normalize_transition_command(repository_root, command)
+
+    assert caught.value.code == "COORDINATOR_COMMAND_INVALID"
 
 
 def test_lease_journal_and_receipt_schemas_are_closed(
@@ -728,6 +1083,7 @@ def test_lease_journal_and_receipt_schemas_are_closed(
         "authoritySnapshotFingerprint": acquire["authoritySnapshotFingerprint"],
         "journalDigest": "sha256:" + "b" * 64,
         "recordedAt": acquire["asOf"],
+        "evidence": {"command": acquire},
     }
     journal = {
         "schemaVersion": "controlled-coordinator-journal/v1",
@@ -752,3 +1108,119 @@ def test_lease_journal_and_receipt_schemas_are_closed(
         unknown = {**value, "surprise": True}
         with pytest.raises(SchemaValidationError):
             store.validate(schema_path, unknown)
+
+
+def test_journal_round_trips_full_quarantine_and_recovery_evidence(
+    repository_root, coordinator_factory
+):
+    observation = normalize_write_observation_command(
+        repository_root, coordinator_factory.observation()
+    )
+    recovery = normalize_recovery_command(
+        repository_root, coordinator_factory.recovery()
+    )
+    revoked = [observation["leaseId"]]
+    decisions = recovery["affectedLeaseDecisions"]
+    observed_write_set = recovery["observedWriteSet"]
+    common = {
+        "schemaVersion": "controlled-coordinator-receipt/v1",
+        "projectExecutionKey": observation["projectExecutionKey"],
+        "fencingToken": observation["fencingToken"],
+        "previousState": "ACTIVE",
+        "nextState": "STALE",
+        "authoritySnapshotFingerprint": "sha256:" + "3" * 64,
+        "journalDigest": "sha256:" + "b" * 64,
+        "recordedAt": "2026-08-13T12:33:00Z",
+    }
+    quarantine_receipt = {
+        **common,
+        "receiptId": "coordinator-receipt:" + "c" * 24,
+        "receiptType": "WRITE_OBSERVATION",
+        "previousJournalVersion": 11,
+        "nextJournalVersion": 12,
+        "commandDigest": observation["commandDigest"],
+        "evidence": {
+            "command": observation,
+            "observedWriteSet": observed_write_set,
+            "revokedLeaseIds": revoked,
+            "affectedLeaseDecisions": decisions,
+            "recoveryState": "PROJECT_WRITESET_RECOVERY",
+        },
+    }
+    recovery_receipt = {
+        **common,
+        "receiptId": "coordinator-receipt:" + "d" * 24,
+        "receiptType": "RECOVERY",
+        "previousJournalVersion": 12,
+        "nextJournalVersion": 13,
+        "commandDigest": recovery["commandDigest"],
+        "evidence": {
+            "command": recovery,
+            "observedWriteSet": observed_write_set,
+            "revokedLeaseIds": revoked,
+            "affectedLeaseDecisions": decisions,
+            "recoveryState": "CLEAR",
+        },
+    }
+    journal = {
+        "schemaVersion": "controlled-coordinator-journal/v1",
+        "projectExecutionKey": observation["projectExecutionKey"],
+        "journalVersion": 13,
+        "nextFencingToken": 9,
+        "recoveryState": "CLEAR",
+        "recoveryEvidence": {
+            "observedWriteSet": observed_write_set,
+            "revokedLeaseIds": revoked,
+            "affectedLeaseDecisions": decisions,
+            "quarantineCommand": observation,
+            "recoveryCommand": recovery,
+        },
+        "leases": [],
+        "receipts": [quarantine_receipt, recovery_receipt],
+        "integrationTransactions": [],
+    }
+    replayed = json.loads(canonical_json_bytes(journal))
+    store = SchemaStore(repository_root)
+
+    store.validate(
+        "core/schemas/controlled-coordinator-receipt.schema.json",
+        replayed["receipts"][0],
+    )
+    store.validate(
+        "core/schemas/controlled-coordinator-receipt.schema.json",
+        replayed["receipts"][1],
+    )
+    store.validate("core/schemas/controlled-coordinator-journal.schema.json", replayed)
+    assert replayed["recoveryEvidence"]["quarantineCommand"] == observation
+    assert replayed["recoveryEvidence"]["recoveryCommand"] == recovery
+    assert replayed["receipts"] == [quarantine_receipt, recovery_receipt]
+
+
+def test_receipt_type_rejects_another_command_type_as_evidence(
+    repository_root, coordinator_factory
+):
+    acquire = normalize_acquire_command(repository_root, coordinator_factory.acquire())
+    transition = normalize_transition_command(
+        repository_root, coordinator_factory.transition()
+    )
+    receipt = {
+        "schemaVersion": "controlled-coordinator-receipt/v1",
+        "receiptId": "coordinator-receipt:" + "e" * 24,
+        "receiptType": "ACQUIRE",
+        "projectExecutionKey": transition["projectExecutionKey"],
+        "previousJournalVersion": 0,
+        "nextJournalVersion": 1,
+        "commandDigest": acquire["commandDigest"],
+        "fencingToken": 1,
+        "previousState": None,
+        "nextState": "ADMITTED",
+        "authoritySnapshotFingerprint": acquire["authoritySnapshotFingerprint"],
+        "journalDigest": "sha256:" + "f" * 64,
+        "recordedAt": acquire["asOf"],
+        "evidence": {"command": transition},
+    }
+
+    with pytest.raises(SchemaValidationError):
+        SchemaStore(repository_root).validate(
+            "core/schemas/controlled-coordinator-receipt.schema.json", receipt
+        )

@@ -1,6 +1,20 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://agent-evolution.local/core/schemas/controlled-coordinator-journal.schema.json",
+  "$defs": {
+    "recoveryEvidence": {
+      "type": "object",
+      "required": ["observedWriteSet", "revokedLeaseIds", "affectedLeaseDecisions", "quarantineCommand", "recoveryCommand"],
+      "properties": {
+        "observedWriteSet": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
+        "revokedLeaseIds": {"type": "array", "items": {"type": "string", "pattern": "^lease:[0-9a-f]{24}$"}, "uniqueItems": true},
+        "affectedLeaseDecisions": {"type": "array", "items": {"$ref": "https://agent-evolution.local/core/schemas/controlled-recovery-command.schema.json#/$defs/affectedLeaseDecision"}, "uniqueItems": true},
+        "quarantineCommand": {"$ref": "https://agent-evolution.local/core/schemas/controlled-write-observation-command.schema.json"},
+        "recoveryCommand": {"anyOf": [{"type": "null"}, {"$ref": "https://agent-evolution.local/core/schemas/controlled-recovery-command.schema.json"}]}
+      },
+      "additionalProperties": false
+    }
+  },
   "type": "object",
   "required": [
     "schemaVersion", "projectExecutionKey", "journalVersion",
@@ -13,6 +27,7 @@
     "journalVersion": {"type": "integer", "minimum": 0},
     "nextFencingToken": {"type": "integer", "minimum": 1},
     "recoveryState": {"enum": ["CLEAR", "PROJECT_WRITESET_RECOVERY", "STATE_RECOVERY_REQUIRED"]},
+    "recoveryEvidence": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/recoveryEvidence"}]},
     "leases": {
       "type": "array",
       "items": {"$ref": "https://agent-evolution.local/core/schemas/controlled-execution-lease.schema.json"}

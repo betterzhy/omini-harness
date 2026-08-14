@@ -5,13 +5,39 @@
     "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._:-]*$"},
     "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
     "gitObject": {"type": "string", "pattern": "^[0-9a-f]{40}([0-9a-f]{24})?$"},
-    "absolutePath": {"type": "string", "pattern": "^/[^\\u0000]*$", "minLength": 2}
+    "absolutePath": {"type": "string", "pattern": "^/[^\\u0000]*$", "minLength": 2},
+    "admissionBinding": {
+      "type": "object",
+      "required": ["projectId", "sliceId", "attemptId", "originalSourceRoot", "laneRoot", "expectedLaneBase"],
+      "properties": {
+        "projectId": {"$ref": "#/$defs/id"},
+        "sliceId": {"$ref": "#/$defs/id"},
+        "attemptId": {"$ref": "#/$defs/id"},
+        "originalSourceRoot": {"$ref": "#/$defs/absolutePath"},
+        "laneRoot": {"$ref": "#/$defs/absolutePath"},
+        "expectedLaneBase": {"$ref": "#/$defs/gitObject"}
+      },
+      "additionalProperties": false
+    },
+    "admissionAuthorityProof": {
+      "type": "object",
+      "required": ["factId", "authorityReference", "authorityDigest", "binding", "proofDigest"],
+      "properties": {
+        "factId": {"type": "string", "pattern": "^controlled_coordination\\.admission\\.[a-z0-9][a-z0-9._:-]*$"},
+        "authorityReference": {"type": "string", "minLength": 1},
+        "authorityDigest": {"$ref": "#/$defs/digest"},
+        "binding": {"$ref": "#/$defs/admissionBinding"},
+        "proofDigest": {"$ref": "#/$defs/digest"}
+      },
+      "additionalProperties": false
+    }
   },
   "type": "object",
   "required": [
     "schemaVersion", "projectId", "batchPlanId", "sliceId", "attemptId",
     "authoritySnapshotFingerprint", "authorizationEnvelopeDigest",
-    "conflictPolicyVersion", "asOf", "executionPlan", "fullFootprint",
+    "conflictPolicyVersion", "asOf", "executionPlan", "sliceDescriptor",
+    "authorizationEnvelope", "authoritySnapshot", "admissionAuthorityProof", "fullFootprint",
     "originalSourceRoot", "laneRoot", "expectedLaneBase", "commandDigest"
   ],
   "properties": {
@@ -25,6 +51,10 @@
     "conflictPolicyVersion": {"const": "controlled-conflict-policy/v1"},
     "asOf": {"type": "string", "minLength": 1},
     "executionPlan": {"$ref": "https://agent-evolution.local/core/schemas/controlled-execution-plan.schema.json"},
+    "sliceDescriptor": {"$ref": "https://agent-evolution.local/core/schemas/controlled-slice-descriptor.schema.json"},
+    "authorizationEnvelope": {"$ref": "https://agent-evolution.local/core/schemas/controlled-authorization-envelope.schema.json"},
+    "authoritySnapshot": {"$ref": "https://agent-evolution.local/core/schemas/authority-snapshot.schema.json"},
+    "admissionAuthorityProof": {"$ref": "#/$defs/admissionAuthorityProof"},
     "fullFootprint": {"$ref": "https://agent-evolution.local/core/schemas/controlled-conflict-report.schema.json#/$defs/footprint"},
     "originalSourceRoot": {"$ref": "#/$defs/absolutePath"},
     "laneRoot": {"$ref": "#/$defs/absolutePath"},

@@ -25,6 +25,39 @@
         "processIds": {"type": "array", "items": {"type": "integer", "minimum": 1}, "uniqueItems": true}
       },
       "additionalProperties": false
+    },
+    "lifecycleAuthorityProof": {
+      "type": "object",
+      "required": ["authorityReference", "authorityDigest", "attemptId", "expectedState", "nextState", "assertedAt", "proofDigest"],
+      "properties": {
+        "authorityReference": {"type": "string", "minLength": 1},
+        "authorityDigest": {"$ref": "#/$defs/digest"},
+        "attemptId": {"$ref": "#/$defs/id"},
+        "expectedState": {"$ref": "#/$defs/state"},
+        "nextState": {"$ref": "#/$defs/state"},
+        "assertedAt": {"type": "string", "minLength": 1},
+        "proofDigest": {"$ref": "#/$defs/digest"}
+      },
+      "additionalProperties": false
+    },
+    "reviewEvidence": {
+      "type": "object",
+      "required": ["candidateIdentity", "reviewerId", "verdict", "findingCounts", "reviewedAt", "reviewBindingDigest", "evidenceDigest"],
+      "properties": {
+        "candidateIdentity": {"$ref": "#/$defs/candidateIdentity"},
+        "reviewerId": {"$ref": "#/$defs/id"},
+        "verdict": {"const": "GO_ZERO_FINDINGS"},
+        "findingCounts": {
+          "type": "object",
+          "required": ["p0", "p1", "p2"],
+          "properties": {"p0": {"const": 0}, "p1": {"const": 0}, "p2": {"const": 0}},
+          "additionalProperties": false
+        },
+        "reviewedAt": {"type": "string", "minLength": 1},
+        "reviewBindingDigest": {"$ref": "#/$defs/digest"},
+        "evidenceDigest": {"$ref": "#/$defs/digest"}
+      },
+      "additionalProperties": false
     }
   },
   "type": "object",
@@ -32,7 +65,7 @@
     "schemaVersion", "projectExecutionKey", "leaseId", "attemptId",
     "fencingToken", "expectedState", "nextState",
     "authoritySnapshotFingerprint", "candidateIdentity",
-    "processQuiescence", "commandDigest"
+    "processQuiescence", "lifecycleAuthorityProof", "reviewEvidence", "commandDigest"
   ],
   "properties": {
     "schemaVersion": {"const": "controlled-coordinator-transition-command/v1"},
@@ -45,6 +78,8 @@
     "authoritySnapshotFingerprint": {"$ref": "#/$defs/digest"},
     "candidateIdentity": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/candidateIdentity"}]},
     "processQuiescence": {"$ref": "#/$defs/processQuiescence"},
+    "lifecycleAuthorityProof": {"$ref": "#/$defs/lifecycleAuthorityProof"},
+    "reviewEvidence": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/reviewEvidence"}]},
     "commandDigest": {"$ref": "#/$defs/digest"}
   },
   "additionalProperties": false

@@ -4,14 +4,56 @@
   "$defs": {
     "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
     "state": {"enum": ["ADMITTED", "ACTIVE", "FIXED_CANDIDATE", "REVIEW_GO", "QUEUED_FOR_INTEGRATION", "INTEGRATING", "CLOSED", "BLOCKED", "NO_GO", "STALE", "CANCELLED"]},
-    "nullableState": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/state"}]}
+    "nullableState": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/state"}]},
+    "leaseIdSet": {"type": "array", "items": {"type": "string", "pattern": "^lease:[0-9a-f]{24}$"}, "uniqueItems": true},
+    "pathSet": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
+    "acquireEvidence": {
+      "type": "object",
+      "required": ["command"],
+      "properties": {
+        "command": {"$ref": "https://agent-evolution.local/core/schemas/controlled-coordinator-acquire-command.schema.json"}
+      },
+      "additionalProperties": false
+    },
+    "transitionEvidence": {
+      "type": "object",
+      "required": ["command"],
+      "properties": {
+        "command": {"$ref": "https://agent-evolution.local/core/schemas/controlled-coordinator-transition-command.schema.json"}
+      },
+      "additionalProperties": false
+    },
+    "quarantineEvidence": {
+      "type": "object",
+      "required": ["command", "observedWriteSet", "revokedLeaseIds", "affectedLeaseDecisions", "recoveryState"],
+      "properties": {
+        "command": {"$ref": "https://agent-evolution.local/core/schemas/controlled-write-observation-command.schema.json"},
+        "observedWriteSet": {"$ref": "#/$defs/pathSet"},
+        "revokedLeaseIds": {"$ref": "#/$defs/leaseIdSet"},
+        "affectedLeaseDecisions": {"type": "array", "items": {"$ref": "https://agent-evolution.local/core/schemas/controlled-recovery-command.schema.json#/$defs/affectedLeaseDecision"}, "uniqueItems": true},
+        "recoveryState": {"const": "PROJECT_WRITESET_RECOVERY"}
+      },
+      "additionalProperties": false
+    },
+    "recoveryEvidence": {
+      "type": "object",
+      "required": ["command", "observedWriteSet", "revokedLeaseIds", "affectedLeaseDecisions", "recoveryState"],
+      "properties": {
+        "command": {"$ref": "https://agent-evolution.local/core/schemas/controlled-recovery-command.schema.json"},
+        "observedWriteSet": {"$ref": "#/$defs/pathSet"},
+        "revokedLeaseIds": {"$ref": "#/$defs/leaseIdSet"},
+        "affectedLeaseDecisions": {"type": "array", "items": {"$ref": "https://agent-evolution.local/core/schemas/controlled-recovery-command.schema.json#/$defs/affectedLeaseDecision"}, "uniqueItems": true},
+        "recoveryState": {"const": "CLEAR"}
+      },
+      "additionalProperties": false
+    }
   },
   "type": "object",
   "required": [
     "schemaVersion", "receiptId", "receiptType", "projectExecutionKey",
     "previousJournalVersion", "nextJournalVersion", "commandDigest",
     "fencingToken", "previousState", "nextState",
-    "authoritySnapshotFingerprint", "journalDigest", "recordedAt"
+    "authoritySnapshotFingerprint", "journalDigest", "recordedAt", "evidence"
   ],
   "properties": {
     "schemaVersion": {"const": "controlled-coordinator-receipt/v1"},
@@ -26,7 +68,14 @@
     "nextState": {"$ref": "#/$defs/nullableState"},
     "authoritySnapshotFingerprint": {"$ref": "#/$defs/digest"},
     "journalDigest": {"$ref": "#/$defs/digest"},
-    "recordedAt": {"type": "string", "minLength": 1}
+    "recordedAt": {"type": "string", "minLength": 1},
+    "evidence": {"oneOf": [{"$ref": "#/$defs/acquireEvidence"}, {"$ref": "#/$defs/transitionEvidence"}, {"$ref": "#/$defs/quarantineEvidence"}, {"$ref": "#/$defs/recoveryEvidence"}]}
   },
-  "additionalProperties": false
+  "additionalProperties": false,
+  "allOf": [
+    {"if": {"properties": {"receiptType": {"const": "ACQUIRE"}}}, "then": {"properties": {"evidence": {"$ref": "#/$defs/acquireEvidence"}}}},
+    {"if": {"properties": {"receiptType": {"const": "TRANSITION"}}}, "then": {"properties": {"evidence": {"$ref": "#/$defs/transitionEvidence"}}}},
+    {"if": {"properties": {"receiptType": {"const": "WRITE_OBSERVATION"}}}, "then": {"properties": {"evidence": {"$ref": "#/$defs/quarantineEvidence"}}}},
+    {"if": {"properties": {"receiptType": {"const": "RECOVERY"}}}, "then": {"properties": {"evidence": {"$ref": "#/$defs/recoveryEvidence"}}}}
+  ]
 }

@@ -8,6 +8,7 @@ import re
 import stat
 import uuid
 from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path, PurePath
 from typing import Any, Iterator
 
@@ -29,6 +30,13 @@ _DIRECTORY_FLAGS = (
 _NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
 _CLOEXEC = getattr(os, "O_CLOEXEC", 0)
 _MAX_STATE_BYTES = 64 * 1024 * 1024
+
+
+@dataclass(frozen=True)
+class _JournalSnapshot:
+    journal: dict[str, Any]
+    canonical_bytes: bytes
+    inode: os.stat_result
 
 
 def _current_uid() -> int:
@@ -137,13 +145,25 @@ def _open_or_create_root(path: Path) -> int:
             except FileNotFoundError:
                 try:
                     os.mkdir(part, 0o700, dir_fd=current)
+                except FileExistsError:
+                    try:
+                        following = os.open(part, _DIRECTORY_FLAGS, dir_fd=current)
+                    except OSError as exc:
+                        raise ControlledCoordinationError(
+                            "UNSAFE_COORDINATOR_ROOT",
+                            f"racing coordinator root component is unsafe: {part}",
+                        ) from exc
+                    _validate_directory(os.fstat(following), uid=_current_uid())
                     os.fsync(current)
-                    following = os.open(part, _DIRECTORY_FLAGS, dir_fd=current)
                 except OSError as exc:
                     raise ControlledCoordinationError(
                         "UNSAFE_COORDINATOR_ROOT",
                         f"cannot safely create coordinator root component {part}",
                     ) from exc
+                else:
+                    os.fsync(current)
+                    following = os.open(part, _DIRECTORY_FLAGS, dir_fd=current)
+                    _validate_directory(os.fstat(following), uid=_current_uid())
             except OSError as exc:
                 raise ControlledCoordinationError(
                     "UNSAFE_COORDINATOR_ROOT",
@@ -170,6 +190,7 @@ class CoordinatorStateStore:
         self._schema_store = SchemaStore(Path(__file__).resolve().parents[2])
         project_name = sha256_bytes(self.project_execution_key.encode("utf-8"))
         self._lock_name = f"{project_name}.lock"
+        self._lock_identity_name = f"{project_name}.lock-identity"
         self._journal_name = f"{project_name}.journal.json"
         self._initialized_name = f"{project_name}.initialized"
 
@@ -314,14 +335,14 @@ class CoordinatorStateStore:
                 "coordinator journal inode changed before atomic replacement",
             )
 
-    def _read_state_bytes(
+    def _read_state_bytes_with_inode(
         self,
         name: str,
         *,
         missing_code: str,
         unsafe_code: str,
         expected_uid: int,
-    ) -> bytes:
+    ) -> tuple[bytes, os.stat_result]:
         try:
             before = self._path_stat(name)
         except FileNotFoundError as exc:
@@ -359,9 +380,25 @@ class CoordinatorStateStore:
                 raise ControlledCoordinationError(
                     "COORDINATOR_STATE_INODE_CHANGED", f"coordinator state inode changed during read: {name}"
                 )
-            return payload
+            return payload, opened
         finally:
             os.close(descriptor)
+
+    def _read_state_bytes(
+        self,
+        name: str,
+        *,
+        missing_code: str,
+        unsafe_code: str,
+        expected_uid: int,
+    ) -> bytes:
+        payload, _ = self._read_state_bytes_with_inode(
+            name,
+            missing_code=missing_code,
+            unsafe_code=unsafe_code,
+            expected_uid=expected_uid,
+        )
+        return payload
 
     def _read_state_json(
         self,
@@ -409,6 +446,86 @@ class CoordinatorStateStore:
             )
         return marker
 
+    def _lock_identity(self, current: os.stat_result) -> dict[str, Any]:
+        return {
+            "schemaVersion": "coordinator-project-lock-identity/v1",
+            "projectExecutionKey": self.project_execution_key,
+            "lockDevice": current.st_dev,
+            "lockInode": current.st_ino,
+        }
+
+    def _read_lock_identity(self) -> dict[str, Any] | None:
+        try:
+            return self._read_state_json(
+                self._lock_identity_name,
+                missing_code="COORDINATOR_LOCK_IDENTITY_MISSING",
+                unsafe_code="COORDINATOR_LOCK_IDENTITY_MISMATCH",
+                expected_uid=_current_uid(),
+            )
+        except ControlledCoordinationError as exc:
+            if exc.code == "COORDINATOR_LOCK_IDENTITY_MISSING":
+                return None
+            if exc.code != "COORDINATOR_LOCK_IDENTITY_MISMATCH":
+                raise ControlledCoordinationError(
+                    "COORDINATOR_LOCK_IDENTITY_MISMATCH",
+                    "project lock identity is invalid",
+                ) from exc
+            raise
+
+    def _bind_or_validate_lock_identity(
+        self,
+        descriptor: int,
+        opened: os.stat_result,
+        observed: dict[str, Any] | None,
+    ) -> None:
+        expected = self._lock_identity(opened)
+        named = self._path_stat(self._lock_name)
+        if not _same_inode(opened, named):
+            raise ControlledCoordinationError(
+                "COORDINATOR_LOCK_IDENTITY_MISMATCH",
+                "project lock path changed before identity binding",
+            )
+        if observed is None:
+            identity_descriptor = -1
+            try:
+                os.fsync(descriptor)
+                os.fsync(self._root_descriptor)
+                identity_descriptor = os.open(
+                    self._lock_identity_name,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL | _NOFOLLOW | _CLOEXEC,
+                    0o600,
+                    dir_fd=self._root_descriptor,
+                )
+                _validate_regular(os.fstat(identity_descriptor), uid=_current_uid())
+                _write_all(identity_descriptor, canonical_json_bytes(expected) + b"\n")
+                os.fsync(identity_descriptor)
+                os.close(identity_descriptor)
+                identity_descriptor = -1
+                os.fsync(self._root_descriptor)
+                observed = expected
+            except FileExistsError:
+                if identity_descriptor >= 0:
+                    os.close(identity_descriptor)
+                observed = self._read_lock_identity()
+            except OSError as exc:
+                if identity_descriptor >= 0:
+                    os.close(identity_descriptor)
+                raise ControlledCoordinationError(
+                    "COORDINATOR_LOCK_IDENTITY_MISMATCH",
+                    "cannot durably bind project lock identity",
+                ) from exc
+        if observed != expected:
+            raise ControlledCoordinationError(
+                "COORDINATOR_LOCK_IDENTITY_MISMATCH",
+                "project lock inode does not match its persistent identity",
+            )
+        named = self._path_stat(self._lock_name)
+        if not _same_inode(opened, named):
+            raise ControlledCoordinationError(
+                "COORDINATOR_LOCK_IDENTITY_MISMATCH",
+                "project lock path changed after identity binding",
+            )
+
     @contextmanager
     def exclusive_project_lock(self) -> Iterator[None]:
         self._verify_root_identity()
@@ -416,7 +533,15 @@ class CoordinatorStateStore:
             raise ControlledCoordinationError(
                 "COORDINATOR_LOCK_BUSY", "project lock is not reentrant"
             )
-        flags = os.O_CREAT | os.O_RDWR | _NOFOLLOW | _CLOEXEC
+        lock_identity = self._read_lock_identity()
+        if self._read_marker() is not None and lock_identity is None:
+            raise ControlledCoordinationError(
+                "COORDINATOR_LOCK_IDENTITY_MISMATCH",
+                "initialized project is missing its persistent lock identity",
+            )
+        flags = os.O_RDWR | _NOFOLLOW | _CLOEXEC
+        if lock_identity is None:
+            flags |= os.O_CREAT
         descriptor = -1
         try:
             descriptor = os.open(
@@ -427,11 +552,7 @@ class CoordinatorStateStore:
             )
             opened = os.fstat(descriptor)
             _validate_regular(opened, uid=_current_uid())
-            named = self._path_stat(self._lock_name)
-            if not _same_inode(opened, named):
-                raise ControlledCoordinationError(
-                    "COORDINATOR_STATE_INODE_CHANGED", "project lock inode changed during open"
-                )
+            self._bind_or_validate_lock_identity(descriptor, opened, lock_identity)
             try:
                 fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError as exc:
@@ -442,6 +563,13 @@ class CoordinatorStateStore:
             if descriptor >= 0:
                 os.close(descriptor)
             raise
+        except FileNotFoundError as exc:
+            if descriptor >= 0:
+                os.close(descriptor)
+            raise ControlledCoordinationError(
+                "COORDINATOR_LOCK_IDENTITY_MISMATCH",
+                "persistently bound project lock is missing",
+            ) from exc
         except OSError as exc:
             if descriptor >= 0:
                 os.close(descriptor)
@@ -452,6 +580,9 @@ class CoordinatorStateStore:
         self._lock_descriptor = descriptor
         try:
             self._verify_root_identity()
+            self._bind_or_validate_lock_identity(
+                descriptor, opened, self._read_lock_identity()
+            )
             yield
             named = self._path_stat(self._lock_name)
             if not _same_inode(opened, named):
@@ -466,11 +597,11 @@ class CoordinatorStateStore:
                     os.close(self._lock_descriptor)
                     self._lock_descriptor = None
 
-    def read_journal(self) -> dict[str, Any] | None:
+    def _read_journal_snapshot(self) -> _JournalSnapshot | None:
         self._verify_root_identity()
         initialized = self._read_marker()
         try:
-            journal = self._read_state_json(
+            raw, inode = self._read_state_bytes_with_inode(
                 self._journal_name,
                 missing_code="COORDINATOR_JOURNAL_ABSENT",
                 unsafe_code="UNSAFE_COORDINATOR_STATE_FILE",
@@ -486,6 +617,12 @@ class CoordinatorStateStore:
                 return None
             raise
         try:
+            journal = _json_object(raw)
+        except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+            raise ControlledCoordinationError(
+                "COORDINATOR_JOURNAL_INVALID", "invalid coordinator journal JSON"
+            ) from exc
+        try:
             self._schema_store.validate(_JOURNAL_SCHEMA, journal)
         except (SchemaValidationError, FileNotFoundError) as exc:
             raise ControlledCoordinationError(
@@ -496,7 +633,20 @@ class CoordinatorStateStore:
                 "COORDINATOR_JOURNAL_IDENTITY_MISMATCH",
                 "journal belongs to a different project execution key",
             )
-        return journal
+        if initialized is None:
+            raise ControlledCoordinationError(
+                "COORDINATOR_STATE_INCONSISTENT",
+                "coordinator journal exists without its initialization marker",
+            )
+        return _JournalSnapshot(
+            journal=journal,
+            canonical_bytes=canonical_json_bytes(journal) + b"\n",
+            inode=inode,
+        )
+
+    def read_journal(self) -> dict[str, Any] | None:
+        snapshot = self._read_journal_snapshot()
+        return None if snapshot is None else snapshot.journal
 
     def _validate_replacement(
         self,
@@ -560,8 +710,30 @@ class CoordinatorStateStore:
                 os.close(descriptor)
             raise ControlledCoordinationError(
                 "COORDINATOR_DURABILITY_UNCERTAIN",
-                "journal committed but initialization marker durability is uncertain",
+                "project initialization marker durability is uncertain",
             ) from exc
+
+    def _verify_cas_snapshot(
+        self, expected: _JournalSnapshot | None
+    ) -> None:
+        observed = self._read_journal_snapshot()
+        if expected is None:
+            if observed is not None:
+                raise ControlledCoordinationError(
+                    "COORDINATOR_STATE_INODE_CHANGED",
+                    "coordinator journal appeared during initial CAS",
+                )
+            return
+        if observed is None or not _same_inode(expected.inode, observed.inode):
+            raise ControlledCoordinationError(
+                "COORDINATOR_STATE_INODE_CHANGED",
+                "coordinator journal inode changed after CAS read",
+            )
+        if observed.canonical_bytes != expected.canonical_bytes:
+            raise ControlledCoordinationError(
+                "COORDINATOR_CAS_SNAPSHOT_CHANGED",
+                "coordinator journal payload changed after CAS read",
+            )
 
     def replace_journal(
         self,
@@ -573,7 +745,8 @@ class CoordinatorStateStore:
             raise ControlledCoordinationError(
                 "COORDINATOR_LOCK_REQUIRED", "journal replacement requires the project lock"
             )
-        current = self.read_journal()
+        current_snapshot = self._read_journal_snapshot()
+        current = None if current_snapshot is None else current_snapshot.journal
         current_version = 0 if current is None else current["journalVersion"]
         if current_version != expected_version:
             raise ControlledCoordinationError(
@@ -589,12 +762,6 @@ class CoordinatorStateStore:
                 "COORDINATOR_RECEIPT_HISTORY_REWRITE",
                 "journal replacement must preserve the complete ordered receipt history",
             )
-        try:
-            journal_inode = self._path_stat(self._journal_name)
-        except FileNotFoundError:
-            journal_inode = None
-        if journal_inode is not None:
-            _validate_regular(journal_inode, uid=_current_uid())
         payload = canonical_json_bytes(candidate) + b"\n"
         temporary = f".{self._journal_name}.tmp-{uuid.uuid4().hex}"
         descriptor = -1
@@ -612,7 +779,10 @@ class CoordinatorStateStore:
             os.close(descriptor)
             descriptor = -1
             self._verify_root_identity()
-            self._assert_journal_inode(journal_inode)
+            self._verify_cas_snapshot(current_snapshot)
+            if current_snapshot is None:
+                self._write_initialized_marker()
+                self._assert_journal_inode(None)
             os.replace(
                 temporary,
                 self._journal_name,
@@ -642,11 +812,13 @@ class CoordinatorStateStore:
                     os.unlink(temporary, dir_fd=self._root_descriptor)
                 except FileNotFoundError:
                     pass
-        self._write_initialized_marker()
-        persisted = self.read_journal()
-        if persisted is None or not persisted["receipts"] or persisted["receipts"][-1] != candidate_receipt:
+        persisted_snapshot = self._read_journal_snapshot()
+        if (
+            persisted_snapshot is None
+            or persisted_snapshot.canonical_bytes != payload
+        ):
             raise ControlledCoordinationError(
-                "COORDINATOR_RECEIPT_MISMATCH",
-                "post-write journal reread did not reproduce the mutation receipt",
+                "COORDINATOR_POST_WRITE_MISMATCH",
+                "post-write journal reread did not reproduce the complete candidate",
             )
-        return persisted
+        return persisted_snapshot.journal

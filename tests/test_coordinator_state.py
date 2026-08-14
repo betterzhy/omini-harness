@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import json
 import os
 import stat
@@ -263,6 +264,178 @@ def test_replace_rejects_receipt_history_rewrite(
 
     assert caught.value.code == "COORDINATOR_RECEIPT_HISTORY_REWRITE"
     assert store.read_journal()["journalVersion"] == 1
+
+
+def test_cas_binds_the_payload_and_inode_from_the_same_opened_snapshot(
+    tmp_path, monkeypatch, coordinator_state_factory
+):
+    from evolution_harness.controlled_coordinator_inputs import ControlledCoordinationError
+    from evolution_harness.hashing import canonical_json_bytes
+
+    root = tmp_path / "state"
+    store = _open_store(root, monkeypatch)
+    _initialize(store, coordinator_state_factory)
+    journal_path = _state_entries(root, ".journal.json")[0]
+    changed, _ = coordinator_state_factory.journal(1)
+    changed["nextFencingToken"] = 999
+    replacement = root / "replacement"
+    replacement.write_bytes(canonical_json_bytes(changed) + b"\n")
+    replacement.chmod(0o600)
+    journal, receipt = coordinator_state_factory.journal(2)
+    validate_replacement = store._validate_replacement
+
+    def swap_after_read(expected_version, candidate, candidate_receipt):
+        validate_replacement(expected_version, candidate, candidate_receipt)
+        os.replace(replacement, journal_path)
+
+    monkeypatch.setattr(store, "_validate_replacement", swap_after_read)
+    with store.exclusive_project_lock():
+        with pytest.raises(ControlledCoordinationError) as caught:
+            store.replace_journal(1, journal, receipt)
+
+    assert caught.value.code == "COORDINATOR_STATE_INODE_CHANGED"
+    assert store.read_journal()["nextFencingToken"] == 999
+
+
+def test_post_write_reread_binds_the_complete_canonical_journal(
+    tmp_path, monkeypatch, coordinator_state_factory
+):
+    from evolution_harness import coordinator_state
+    from evolution_harness.controlled_coordinator_inputs import ControlledCoordinationError
+    from evolution_harness.hashing import canonical_json_bytes
+
+    root = tmp_path / "state"
+    store = _open_store(root, monkeypatch)
+    _initialize(store, coordinator_state_factory)
+    journal, receipt = coordinator_state_factory.journal(2)
+    changed = json.loads(canonical_json_bytes(journal))
+    changed["nextFencingToken"] = 999
+    replacement = root / "replacement"
+    replacement.write_bytes(canonical_json_bytes(changed) + b"\n")
+    replacement.chmod(0o600)
+    real_fsync = coordinator_state.os.fsync
+    swapped = False
+
+    def swap_after_directory_fsync(descriptor):
+        nonlocal swapped
+        result = real_fsync(descriptor)
+        if not swapped and stat.S_ISDIR(os.fstat(descriptor).st_mode):
+            os.replace(replacement, _state_entries(root, ".journal.json")[0])
+            swapped = True
+        return result
+
+    monkeypatch.setattr(coordinator_state.os, "fsync", swap_after_directory_fsync)
+    with store.exclusive_project_lock():
+        with pytest.raises(ControlledCoordinationError) as caught:
+            store.replace_journal(1, journal, receipt)
+
+    assert caught.value.code == "COORDINATOR_POST_WRITE_MISMATCH"
+    assert store.read_journal()["nextFencingToken"] == 999
+
+
+def test_first_publish_failure_leaves_durable_initialized_loss_marker(
+    tmp_path, monkeypatch, coordinator_state_factory
+):
+    from evolution_harness import coordinator_state
+    from evolution_harness.controlled_coordinator_inputs import ControlledCoordinationError
+
+    root = tmp_path / "state"
+    store = _open_store(root, monkeypatch)
+    journal, receipt = coordinator_state_factory.journal(1)
+
+    def fail_publish(*args, **kwargs):
+        raise OSError("injected first journal publish failure")
+
+    monkeypatch.setattr(coordinator_state.os, "replace", fail_publish)
+    with store.exclusive_project_lock():
+        with pytest.raises(ControlledCoordinationError) as write_error:
+            store.replace_journal(0, journal, receipt)
+    assert write_error.value.code == "COORDINATOR_STATE_WRITE_FAILED"
+    assert len(_state_entries(root, ".initialized")) == 1
+    with pytest.raises(ControlledCoordinationError) as loss:
+        store.read_journal()
+    assert loss.value.code == "COORDINATOR_JOURNAL_MISSING"
+
+
+def test_existing_journal_without_initialized_marker_fails_closed(
+    tmp_path, monkeypatch, coordinator_state_factory
+):
+    from evolution_harness.controlled_coordinator_inputs import ControlledCoordinationError
+
+    root = tmp_path / "state"
+    store = _open_store(root, monkeypatch)
+    _initialize(store, coordinator_state_factory)
+    _state_entries(root, ".initialized")[0].unlink()
+
+    with pytest.raises(ControlledCoordinationError) as caught:
+        store.read_journal()
+
+    assert caught.value.code == "COORDINATOR_STATE_INCONSISTENT"
+
+
+def test_recreated_lock_inode_cannot_create_a_second_process_lock_domain(
+    tmp_path, monkeypatch, coordinator_state_factory
+):
+    from evolution_harness.controlled_coordinator_inputs import ControlledCoordinationError
+
+    root = tmp_path / "state"
+    store = _open_store(root, monkeypatch)
+    _initialize(store, coordinator_state_factory)
+    contender = None
+
+    with pytest.raises(ControlledCoordinationError) as owner:
+        with store.exclusive_project_lock():
+            lock_path = _state_entries(root, ".lock")[0]
+            lock_path.unlink()
+            lock_path.touch(mode=0o600)
+            lock_path.chmod(0o600)
+            contender = _subprocess_open_and_lock(root, PROJECT_KEY)
+
+    assert owner.value.code == "COORDINATOR_STATE_INODE_CHANGED"
+    assert contender is not None
+    assert contender.returncode == 23
+    assert contender.stdout.strip() == "COORDINATOR_LOCK_IDENTITY_MISMATCH"
+
+
+def test_initialized_project_cannot_rebind_after_lock_identity_loss(
+    tmp_path, monkeypatch, coordinator_state_factory
+):
+    root = tmp_path / "state"
+    store = _open_store(root, monkeypatch)
+    _initialize(store, coordinator_state_factory)
+    store.close()
+    _state_entries(root, ".lock")[0].unlink()
+    _state_entries(root, ".lock-identity")[0].unlink()
+
+    contender = _subprocess_open_and_lock(root, PROJECT_KEY)
+
+    assert contender.returncode == 23
+    assert contender.stdout.strip() == "COORDINATOR_LOCK_IDENTITY_MISMATCH"
+
+
+def test_root_component_creation_race_reopens_and_validates_the_winner(
+    tmp_path, monkeypatch
+):
+    from evolution_harness import coordinator_state
+
+    root = tmp_path / "state"
+    real_mkdir = coordinator_state.os.mkdir
+    raced = False
+
+    def create_then_report_exists(path, mode=0o777, *, dir_fd=None):
+        nonlocal raced
+        if path == "state" and not raced:
+            raced = True
+            real_mkdir(path, 0o700, dir_fd=dir_fd)
+            raise FileExistsError(errno.EEXIST, "injected mkdir race", path)
+        return real_mkdir(path, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(coordinator_state.os, "mkdir", create_then_report_exists)
+    store = _open_store(root, monkeypatch)
+
+    assert raced is True
+    assert stat.S_IMODE(root.stat().st_mode) == 0o700
+    store.close()
 
 
 @pytest.mark.parametrize("payload", [b"{not-json", b'{"schemaVersion":'])

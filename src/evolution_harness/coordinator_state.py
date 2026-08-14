@@ -140,12 +140,20 @@ def _open_or_create_root(path: Path) -> int:
                 "UNSAFE_COORDINATOR_ROOT", "filesystem root cannot be coordinator state"
             )
         for index, part in enumerate(parts):
+            following = -1
             try:
-                following = os.open(part, _DIRECTORY_FLAGS, dir_fd=current)
-            except FileNotFoundError:
                 try:
-                    os.mkdir(part, 0o700, dir_fd=current)
-                except FileExistsError:
+                    following = os.open(part, _DIRECTORY_FLAGS, dir_fd=current)
+                except FileNotFoundError:
+                    try:
+                        os.mkdir(part, 0o700, dir_fd=current)
+                    except FileExistsError:
+                        pass
+                    except OSError as exc:
+                        raise ControlledCoordinationError(
+                            "UNSAFE_COORDINATOR_ROOT",
+                            f"cannot safely create coordinator root component {part}",
+                        ) from exc
                     try:
                         following = os.open(part, _DIRECTORY_FLAGS, dir_fd=current)
                     except OSError as exc:
@@ -154,25 +162,28 @@ def _open_or_create_root(path: Path) -> int:
                             f"racing coordinator root component is unsafe: {part}",
                         ) from exc
                     _validate_directory(os.fstat(following), uid=_current_uid())
-                    os.fsync(current)
+                    try:
+                        os.fsync(current)
+                    except OSError as exc:
+                        raise ControlledCoordinationError(
+                            "UNSAFE_COORDINATOR_ROOT",
+                            f"cannot durably create coordinator root component {part}",
+                        ) from exc
                 except OSError as exc:
                     raise ControlledCoordinationError(
                         "UNSAFE_COORDINATOR_ROOT",
-                        f"cannot safely create coordinator root component {part}",
+                        f"coordinator root component is unsafe: {part}",
                     ) from exc
-                else:
-                    os.fsync(current)
-                    following = os.open(part, _DIRECTORY_FLAGS, dir_fd=current)
+                if index == len(parts) - 1:
                     _validate_directory(os.fstat(following), uid=_current_uid())
-            except OSError as exc:
-                raise ControlledCoordinationError(
-                    "UNSAFE_COORDINATOR_ROOT",
-                    f"coordinator root component is unsafe: {part}",
-                ) from exc
-            os.close(current)
+            except BaseException:
+                if following >= 0:
+                    os.close(following)
+                raise
+            previous = current
             current = following
-            if index == len(parts) - 1:
-                _validate_directory(os.fstat(current), uid=_current_uid())
+            following = -1
+            os.close(previous)
         return current
     except BaseException:
         os.close(current)
@@ -533,14 +544,15 @@ class CoordinatorStateStore:
             raise ControlledCoordinationError(
                 "COORDINATOR_LOCK_BUSY", "project lock is not reentrant"
             )
-        lock_identity = self._read_lock_identity()
-        if self._read_marker() is not None and lock_identity is None:
+        initialized = self._read_marker()
+        lock_identity = self._read_lock_identity() if initialized is not None else None
+        if initialized is not None and lock_identity is None:
             raise ControlledCoordinationError(
                 "COORDINATOR_LOCK_IDENTITY_MISMATCH",
                 "initialized project is missing its persistent lock identity",
             )
         flags = os.O_RDWR | _NOFOLLOW | _CLOEXEC
-        if lock_identity is None:
+        if initialized is None:
             flags |= os.O_CREAT
         descriptor = -1
         try:
@@ -552,13 +564,21 @@ class CoordinatorStateStore:
             )
             opened = os.fstat(descriptor)
             _validate_regular(opened, uid=_current_uid())
-            self._bind_or_validate_lock_identity(descriptor, opened, lock_identity)
+            named = self._path_stat(self._lock_name)
+            if not _same_inode(opened, named):
+                raise ControlledCoordinationError(
+                    "COORDINATOR_LOCK_IDENTITY_MISMATCH",
+                    "project lock inode changed before flock",
+                )
             try:
                 fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError as exc:
                 raise ControlledCoordinationError(
                     "COORDINATOR_LOCK_BUSY", "another process holds the project coordinator lock"
                 ) from exc
+            if initialized is None:
+                lock_identity = self._read_lock_identity()
+            self._bind_or_validate_lock_identity(descriptor, opened, lock_identity)
         except ControlledCoordinationError:
             if descriptor >= 0:
                 os.close(descriptor)

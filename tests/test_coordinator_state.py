@@ -6,6 +6,7 @@ import os
 import stat
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -413,6 +414,83 @@ def test_initialized_project_cannot_rebind_after_lock_identity_loss(
     assert contender.stdout.strip() == "COORDINATOR_LOCK_IDENTITY_MISMATCH"
 
 
+def test_first_lock_identity_publish_is_hidden_behind_the_common_flock(
+    tmp_path, monkeypatch
+):
+    root = tmp_path / "state"
+    monkeypatch.setenv("AGENT_EVOLUTION_COORDINATOR_ROOT", str(root))
+    ready = tmp_path / "identity-partial.ready"
+    release = tmp_path / "identity-partial.release"
+    repository = Path(__file__).parents[1]
+    script = r'''
+import os
+import sys
+import time
+from pathlib import Path
+from evolution_harness import coordinator_state
+from evolution_harness.controlled_coordinator_inputs import ControlledCoordinationError
+
+store = coordinator_state.CoordinatorStateStore.open({"projectExecutionKey": sys.argv[1]})
+ready = Path(sys.argv[2])
+release = Path(sys.argv[3])
+real_write_all = coordinator_state._write_all
+paused = False
+
+def publish_partial_identity(descriptor, payload):
+    global paused
+    raw = bytes(payload)
+    if not paused and b"coordinator-project-lock-identity/v1" in raw:
+        paused = True
+        split = max(1, len(raw) // 2)
+        os.write(descriptor, raw[:split])
+        ready.touch(mode=0o600)
+        deadline = time.monotonic() + 10
+        while not release.exists():
+            if time.monotonic() >= deadline:
+                raise RuntimeError("timed out waiting to finish lock identity")
+            time.sleep(0.005)
+        real_write_all(descriptor, raw[split:])
+        return
+    real_write_all(descriptor, raw)
+
+coordinator_state._write_all = publish_partial_identity
+try:
+    with store.exclusive_project_lock():
+        print("ACQUIRED", flush=True)
+except ControlledCoordinationError as exc:
+    print(exc.code, flush=True)
+    raise SystemExit(23)
+'''
+    environment = os.environ.copy()
+    environment["AGENT_EVOLUTION_COORDINATOR_ROOT"] = str(root)
+    environment["PYTHONPATH"] = str(repository / "src")
+    writer = subprocess.Popen(
+        [sys.executable, "-c", script, PROJECT_KEY, str(ready), str(release)],
+        env=environment,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    deadline = time.monotonic() + 10
+    while not ready.exists():
+        if writer.poll() is not None:
+            stdout, stderr = writer.communicate()
+            pytest.fail(f"identity writer exited early: {stdout!r} {stderr!r}")
+        if time.monotonic() >= deadline:
+            writer.kill()
+            pytest.fail("identity writer did not expose the partial publish window")
+        time.sleep(0.005)
+
+    contender = _subprocess_open_and_lock(root, PROJECT_KEY)
+    release.touch(mode=0o600)
+    stdout, stderr = writer.communicate(timeout=10)
+
+    assert writer.returncode == 0, stderr
+    assert stdout.strip() == "ACQUIRED"
+    assert contender.returncode == 23
+    assert contender.stdout.strip() == "COORDINATOR_LOCK_BUSY"
+
+
 def test_root_component_creation_race_reopens_and_validates_the_winner(
     tmp_path, monkeypatch
 ):
@@ -436,6 +514,35 @@ def test_root_component_creation_race_reopens_and_validates_the_winner(
     assert raced is True
     assert stat.S_IMODE(root.stat().st_mode) == 0o700
     store.close()
+
+
+def test_rejected_root_race_winners_do_not_leak_directory_descriptors(
+    tmp_path, monkeypatch
+):
+    from evolution_harness import coordinator_state
+    from evolution_harness.controlled_coordinator_inputs import ControlledCoordinationError
+
+    real_mkdir = coordinator_state.os.mkdir
+
+    def create_unsafe_winner(path, mode=0o777, *, dir_fd=None):
+        if str(path).startswith("unsafe-state-"):
+            real_mkdir(path, 0o755, dir_fd=dir_fd)
+            raise FileExistsError(errno.EEXIST, "injected unsafe mkdir race", path)
+        return real_mkdir(path, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(coordinator_state.os, "mkdir", create_unsafe_winner)
+    before = len(os.listdir("/dev/fd"))
+    for index in range(64):
+        monkeypatch.setenv(
+            "AGENT_EVOLUTION_COORDINATOR_ROOT",
+            str(tmp_path / f"unsafe-state-{index}"),
+        )
+        with pytest.raises(ControlledCoordinationError) as caught:
+            coordinator_state.CoordinatorStateStore.open(IDENTITY)
+        assert caught.value.code == "UNSAFE_COORDINATOR_ROOT"
+    after = len(os.listdir("/dev/fd"))
+
+    assert after == before
 
 
 @pytest.mark.parametrize("payload", [b"{not-json", b'{"schemaVersion":'])

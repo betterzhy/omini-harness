@@ -24,6 +24,9 @@ _FAKE_SSHSIG = (
     "U1NIU0lHAAAAAQ==\n"
     "-----END SSH SIGNATURE-----\n"
 )
+_FAKE_RECOVERY_PUBLIC_KEY = (
+    "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIG499f9tuCPdF5QqO6WvLXbLcP/NpaFR3tQg9zo8XtWl\n"
+)
 
 
 def _sha256(value):
@@ -366,6 +369,7 @@ class CoordinatorFactory:
             "recoveryAuthorityId": "recovery-controller",
             "recoveryAuthorityReference": "authority/recovery.yaml",
             "recoveryAuthorityDigest": "sha256:" + "9" * 64,
+            "recoveryAuthorityPublicKey": _FAKE_RECOVERY_PUBLIC_KEY,
             "signatureAlgorithm": "ED25519",
             "signatureFormat": "OPENSSH_SSHSIG_V1",
             "signature": _FAKE_SSHSIG,
@@ -949,6 +953,7 @@ def test_observation_sorts_declared_path_sets_but_preserves_input(
         "recoveryAuthorityId",
         "recoveryAuthorityReference",
         "recoveryAuthorityDigest",
+        "recoveryAuthorityPublicKey",
         "signatureAlgorithm",
         "signatureFormat",
         "signature",
@@ -969,6 +974,9 @@ def test_recovery_digest_binds_every_authority_field(
         "recoveryAuthorityId": "other-controller",
         "recoveryAuthorityReference": "authority/other.yaml",
         "recoveryAuthorityDigest": "sha256:" + "c" * 64,
+        "recoveryAuthorityPublicKey": _FAKE_RECOVERY_PUBLIC_KEY.replace(
+            "IG499", "IH499"
+        ),
         "signatureAlgorithm": "RSA",
         "signatureFormat": "OTHER",
         "signature": _FAKE_SSHSIG + "tampered",

@@ -47,6 +47,19 @@ def _command_digest(command: dict[str, object]) -> dict[str, object]:
     return command
 
 
+def _receipt_id(receipt: dict[str, object]) -> str:
+    return "coordinator-receipt:" + sha256_bytes(
+        canonical_json_bytes(
+            {
+                "projectExecutionKey": receipt["projectExecutionKey"],
+                "journalVersion": receipt["nextJournalVersion"],
+                "commandDigest": receipt["commandDigest"],
+                "fencingToken": receipt["fencingToken"],
+            }
+        )
+    )[:24]
+
+
 def _git(root: Path, *arguments: str) -> str:
     return subprocess.run(
         ["git", "-C", str(root), *arguments],
@@ -138,21 +151,31 @@ def _observation_command(
     observed_paths: list[str],
     *,
     before_digest: str | None = None,
+    ephemeral_paths_removed: list[str] | None = None,
+    process_ids: list[int] | None = None,
     observed_at: str = "2026-08-13T13:00:00Z",
 ) -> dict[str, object]:
+    inventory, _, remaining_ephemeral = guard._complete_persistent_breach_inventory(
+        lease
+    )
+    assert remaining_ephemeral == []
     return _command_digest(
         {
             "schemaVersion": "controlled-write-observation-command/v1",
             "projectExecutionKey": lease["projectExecutionKey"],
             "leaseId": lease["leaseId"],
             "fencingToken": lease["fencingToken"],
-            "beforeInventoryDigest": before_digest or _sha256({"paths": []}),
+            "beforeInventoryDigest": before_digest or _sha256(inventory),
             "observedPaths": sorted(observed_paths),
-            "ephemeralPathsRemoved": [],
+            "ephemeralPathsRemoved": sorted(
+                ephemeral_paths_removed
+                if ephemeral_paths_removed is not None
+                else lease["fullFootprint"]["ephemeralWriteSet"]
+            ),
             "processQuiescence": {
                 "status": "QUIESCENT",
                 "observedAt": observed_at,
-                "processIds": [],
+                "processIds": process_ids or [],
             },
         }
     )
@@ -197,6 +220,9 @@ def _recovery_command(
         "recoveryAuthorityId": "recovery-controller",
         "recoveryAuthorityReference": authority["path"],
         "recoveryAuthorityDigest": "sha256:" + authority["sha256"],
+        "recoveryAuthorityPublicKey": Path(
+            factory.source_root, authority["path"]
+        ).read_text(encoding="ascii"),
         "signatureAlgorithm": "ED25519",
         "signatureFormat": "OPENSSH_SSHSIG_V1",
         "expectedJournalVersion": journal["journalVersion"],
@@ -246,6 +272,55 @@ def _two_disjoint_leases(factory):
         exact_write_set="services/neutral-b",
     )
     return first, second
+
+
+@pytest.mark.parametrize(
+    ("mutation", "code"),
+    [
+        ("empty-breach", "WRITE_OBSERVATION_EMPTY"),
+        ("before-inventory", "OBSERVATION_INVENTORY_MISMATCH"),
+        ("ephemeral-set", "OBSERVATION_EPHEMERAL_SET_MISMATCH"),
+        ("process-ids", "PROCESS_NOT_QUIESCENT"),
+    ],
+)
+def test_new_public_observation_requires_complete_live_evidence(
+    recovery_factory, mutation, code
+):
+    lease = _acquire(recovery_factory)
+    observed_paths: list[str] = []
+    if mutation != "empty-breach":
+        observed_paths = [_untracked_breach(lease)]
+    command = _observation_command(lease, observed_paths)
+    if mutation == "before-inventory":
+        command["beforeInventoryDigest"] = _sha256({"forged": True})
+    elif mutation == "ephemeral-set":
+        command["ephemeralPathsRemoved"] = []
+    elif mutation == "process-ids":
+        command["processQuiescence"]["processIds"] = [4242]
+    _command_digest(command)
+
+    with pytest.raises(ControlledCoordinationError) as caught:
+        observe_lane_writes(
+            recovery_factory.repository_root,
+            recovery_factory.source_root,
+            command,
+        )
+    assert caught.value.code == code
+
+
+def test_observation_exact_replay_precedes_live_empty_revalidation(recovery_factory):
+    lease = _acquire(recovery_factory)
+    breach = _untracked_breach(lease)
+    first, command = _observe(recovery_factory, lease, [breach])
+    Path(lease["laneRoot"], breach).unlink()
+
+    replay = observe_lane_writes(
+        recovery_factory.repository_root,
+        recovery_factory.source_root,
+        command,
+    )
+
+    assert replay == first
 
 
 @pytest.mark.parametrize(
@@ -484,9 +559,8 @@ def test_observation_replay_is_exact_and_widened_breach_unions_paths(
     assert replay == first
     assert _journal(recovery_factory)["journalVersion"] == version
 
-    second_path = _untracked_breach(lease, "second.txt")
     conflicting = _observation_command(
-        lease, [first_path, second_path], before_digest=command["beforeInventoryDigest"]
+        lease, [first_path], observed_at="2026-08-13T13:00:15Z"
     )
     with pytest.raises(ControlledCoordinationError) as conflict:
         observe_lane_writes(
@@ -496,11 +570,11 @@ def test_observation_replay_is_exact_and_widened_breach_unions_paths(
         )
     assert conflict.value.code == "WRITE_OBSERVATION_IDEMPOTENCY_CONFLICT"
 
+    second_path = _untracked_breach(lease, "second.txt")
     widened, _ = _observe(
         recovery_factory,
         lease,
         [first_path, second_path],
-        before_digest=_sha256({"paths": [first_path]}),
         observed_at="2026-08-13T13:00:30Z",
     )
     assert widened["observedWriteSet"] == [first_path, second_path]
@@ -565,8 +639,8 @@ def test_concurrent_breaches_serialize_without_losing_paths_or_tokens(
     first_path = _untracked_breach(first, "first-lane.txt")
     second_path = _untracked_breach(second, "second-lane.txt")
     commands = [
-        _observation_command(first, [first_path], before_digest=_sha256({"lane": 1})),
-        _observation_command(second, [second_path], before_digest=_sha256({"lane": 2})),
+        _observation_command(first, [first_path]),
+        _observation_command(second, [second_path]),
     ]
 
     def run(command):
@@ -775,6 +849,42 @@ def test_recovery_rejects_old_plan_attempt_and_allows_only_fresh_plan(
     assert fresh["fencingToken"] >= _journal(recovery_factory)["nextFencingToken"] - 1
 
 
+@pytest.mark.parametrize("reuse", ["batch", "attempt"])
+def test_recovery_permanently_retires_batch_and_attempt_independently(
+    recovery_factory, reuse
+):
+    retired = _acquire(recovery_factory)
+    breach = _untracked_breach(retired)
+    _observe(recovery_factory, retired, [breach])
+    record_project_recovery(
+        recovery_factory.repository_root,
+        recovery_factory.source_root,
+        _recovery_command(recovery_factory),
+    )
+    if reuse == "batch":
+        command = recovery_factory.acquire(
+            attempt_id="attempt:neutral-b",
+            lane_name="slice-neutral-b",
+        )
+        assert command["batchPlanId"] == retired["batchPlanId"]
+        assert command["attemptId"] != retired["attemptId"]
+    else:
+        command = recovery_factory.acquire(
+            lane_name="slice-neutral-c",
+            as_of="2026-08-13T12:05:00Z",
+        )
+        assert command["batchPlanId"] != retired["batchPlanId"]
+        assert command["attemptId"] == retired["attemptId"]
+
+    with pytest.raises(ControlledCoordinationError) as caught:
+        coordinator.acquire_lane_lease(
+            recovery_factory.repository_root,
+            recovery_factory.source_root,
+            command,
+        )
+    assert caught.value.code == "RECOVERED_PLAN_IDENTITY_REUSED"
+
+
 def test_second_breach_after_fresh_lease_uses_an_independent_recovery_cycle(
     recovery_factory
 ):
@@ -978,6 +1088,49 @@ def test_store_rejects_self_consistent_revoked_lease_omission(recovery_factory):
         omitted["released"] = False
         omitted["recoveryStatus"] = "CLEAR"
         omitted["lastTransitionAt"] = omitted["acquiredAt"]
+
+    _rewrite_journal(mutate)
+    with pytest.raises(ControlledCoordinationError) as caught:
+        _journal(recovery_factory)
+    assert caught.value.code == "COORDINATOR_STATE_CORRUPT"
+
+
+@pytest.mark.parametrize(
+    "mutation", ["authority", "recovery-id", "proof-time", "signature"]
+)
+def test_store_rejects_self_consistent_recovery_sshsig_rewrites(
+    recovery_factory, mutation
+):
+    lease = _acquire(recovery_factory)
+    breach = _untracked_breach(lease)
+    _observe(recovery_factory, lease, [breach])
+    record_project_recovery(
+        recovery_factory.repository_root,
+        recovery_factory.source_root,
+        _recovery_command(recovery_factory),
+    )
+
+    def mutate(journal):
+        receipt = journal["receipts"][-1]
+        command = receipt["evidence"]["command"]
+        if mutation == "authority":
+            command["recoveryAuthorityReference"] = "wrong-recovery-public.pem"
+            command["recoveryAuthorityDigest"] = "sha256:" + "d" * 64
+        elif mutation == "recovery-id":
+            command["recoveryId"] = "recovery:" + "b" * 24
+        elif mutation == "proof-time":
+            for proof in command["processQuiescenceProofs"]:
+                proof["observedAt"] = "2026-08-13T14:00:00Z"
+            receipt["recordedAt"] = "2026-08-13T14:00:00Z"
+            for item in journal["leases"]:
+                if item["leaseId"] in receipt["evidence"]["revokedLeaseIds"]:
+                    item["lastTransitionAt"] = "2026-08-13T14:00:00Z"
+        else:
+            command["signature"] += "tampered"
+        _command_digest(command)
+        receipt["commandDigest"] = command["commandDigest"]
+        receipt["receiptId"] = _receipt_id(receipt)
+        journal["recoveryEvidence"]["recoveryCommand"] = copy.deepcopy(command)
 
     _rewrite_journal(mutate)
     with pytest.raises(ControlledCoordinationError) as caught:

@@ -30,6 +30,7 @@ _DIRECTORY_FLAGS = (
 _NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
 _CLOEXEC = getattr(os, "O_CLOEXEC", 0)
 _MAX_STATE_BYTES = 64 * 1024 * 1024
+_RECOVERY_SIGNATURE_NAMESPACE = "agent-evolution-controlled-recovery-v1"
 _PLANNING_FOOTPRINT_FIELDS = (
     "ownerSet",
     "factFamilySet",
@@ -103,6 +104,79 @@ def _json_object(raw: bytes) -> dict[str, Any]:
 
 def _state_corrupt(message: str) -> None:
     raise ControlledCoordinationError("COORDINATOR_STATE_CORRUPT", message)
+
+
+def _expected_receipt_id(receipt: dict[str, Any]) -> str:
+    payload = {
+        "projectExecutionKey": receipt["projectExecutionKey"],
+        "journalVersion": receipt["nextJournalVersion"],
+        "commandDigest": receipt["commandDigest"],
+        "fencingToken": receipt["fencingToken"],
+    }
+    return "coordinator-receipt:" + sha256_bytes(
+        canonical_json_bytes(payload)
+    )[:24]
+
+
+def _recovery_signature_payload(command: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: copy.deepcopy(value)
+        for key, value in command.items()
+        if key not in {"signature", "commandDigest"}
+    }
+
+
+def _validate_persisted_recovery_authority(
+    command: dict[str, Any],
+    revoked_ids: list[str],
+    acquire_commands: dict[str, dict[str, Any]],
+) -> None:
+    anchors: set[tuple[str, str]] = set()
+    for lease_id in revoked_ids:
+        acquire = acquire_commands.get(lease_id)
+        if acquire is None:
+            _state_corrupt("recovery authority has no immutable Acquire anchor")
+        matches = [
+            authority
+            for authority in acquire["authoritySnapshot"]["authorities"]
+            if authority["id"] == "recovery-controller"
+        ]
+        if len(matches) != 1:
+            _state_corrupt(
+                "Acquire Authority Snapshot has no unique recovery-controller"
+            )
+        anchors.add((matches[0]["path"], "sha256:" + matches[0]["sha256"]))
+    commanded_anchor = (
+        command["recoveryAuthorityReference"],
+        command["recoveryAuthorityDigest"],
+    )
+    if (
+        command["recoveryAuthorityId"] != "recovery-controller"
+        or anchors != {commanded_anchor}
+    ):
+        _state_corrupt("persisted recovery authority diverges from Acquire evidence")
+    try:
+        public_key = command["recoveryAuthorityPublicKey"].encode("ascii")
+    except UnicodeEncodeError:
+        _state_corrupt("persisted recovery public key is not canonical ASCII")
+    if "sha256:" + sha256_bytes(public_key) != command["recoveryAuthorityDigest"]:
+        _state_corrupt("persisted recovery public key does not match its anchor")
+
+    from .controlled_coordinator import _verify_sshsig_signature
+
+    try:
+        _verify_sshsig_signature(
+            public_key,
+            command["signature"],
+            _recovery_signature_payload(command),
+            identity="recovery-controller",
+            namespace=_RECOVERY_SIGNATURE_NAMESPACE,
+            invalid_code="RECOVERY_SIGNATURE_INVALID",
+        )
+    except ControlledCoordinationError as exc:
+        if exc.code == "SSH_KEYGEN_VERIFIER_INVALID":
+            raise
+        _state_corrupt("persisted recovery SSHSIG is not authority-valid")
 
 
 def _acquire_planning_footprints(command: dict[str, Any]) -> list[dict[str, Any]]:
@@ -386,6 +460,9 @@ def _validate_recovery_integrity(
             _state_corrupt(
                 "RECOVERY receipt does not preserve complete recovery evidence"
             )
+        _validate_persisted_recovery_authority(
+            command, revoked_ids, acquire_commands
+        )
         for lease_id in revoked_ids:
             lease = lease_by_id[lease_id]
             proof = proof_by_id[lease_id]
@@ -463,6 +540,11 @@ def _validate_journal_integrity(
             or receipt["nextJournalVersion"] != index
         ):
             _state_corrupt("receipt versions or project identity do not form one chain")
+        if (
+            receipt["receiptType"] == "RECOVERY"
+            and receipt["receiptId"] != _expected_receipt_id(receipt)
+        ):
+            _state_corrupt("receipt identity is not deterministic for its command")
         command = receipt["evidence"]["command"]
         if receipt["commandDigest"] != command["commandDigest"]:
             _state_corrupt("receipt command digest is not associated with its evidence")

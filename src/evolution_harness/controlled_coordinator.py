@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import os
+import re
 import stat
 import subprocess
 import tempfile
@@ -69,6 +70,11 @@ _SSH_KEYGEN_SHA256 = (
 )
 _LIFECYCLE_SIGNATURE_NAMESPACE = "agent-evolution-controlled-lifecycle-v1"
 _REVIEW_SIGNATURE_NAMESPACE = "agent-evolution-controlled-review-v1"
+_SSHSIG_ARMOR = re.compile(
+    rb"\A-----BEGIN SSH SIGNATURE-----\n"
+    rb"(?:[A-Za-z0-9+/]+={0,2}\n)+"
+    rb"-----END SSH SIGNATURE-----\n\Z"
+)
 
 
 def _sha256(value: Any) -> str:
@@ -396,6 +402,27 @@ def _acquire_receipt_for(
     return None
 
 
+def _retired_recovery_identities(
+    journal: dict[str, Any],
+) -> tuple[set[str], set[str]]:
+    lease_by_id = {lease["leaseId"]: lease for lease in journal["leases"]}
+    retired_batches: set[str] = set()
+    retired_attempts: set[str] = set()
+    for receipt in journal["receipts"]:
+        if receipt["receiptType"] != "RECOVERY":
+            continue
+        for lease_id in receipt["evidence"]["revokedLeaseIds"]:
+            lease = lease_by_id.get(lease_id)
+            if lease is None:
+                raise ControlledCoordinationError(
+                    "COORDINATOR_STATE_CORRUPT",
+                    "recovery receipt retires a missing durable lease",
+                )
+            retired_batches.add(lease["batchPlanId"])
+            retired_attempts.add(lease["attemptId"])
+    return retired_batches, retired_attempts
+
+
 def _empty_journal(project_execution_key: str) -> dict[str, Any]:
     return {
         "schemaVersion": "controlled-coordinator-journal/v1",
@@ -603,6 +630,8 @@ def _verify_sshsig_signature(
     canonical_public_key = _openssh_ed25519_public_key(public_key)
     try:
         signature = signature_text.encode("ascii")
+        if _SSHSIG_ARMOR.fullmatch(signature) is None:
+            raise UnicodeError("SSHSIG armor is not canonical")
         with tempfile.TemporaryDirectory(prefix="controlled-sshsig-verify-") as temporary:
             temporary_root = Path(temporary)
             allowed_signers_path = temporary_root / "allowed_signers"
@@ -864,6 +893,15 @@ def acquire_lane_lease(
                 return copy.deepcopy(existing)
 
             normalized = normalize_acquire_command(repository, raw)
+            retired_batches, retired_attempts = _retired_recovery_identities(current)
+            if (
+                normalized["batchPlanId"] in retired_batches
+                or normalized["attemptId"] in retired_attempts
+            ):
+                raise ControlledCoordinationError(
+                    "RECOVERED_PLAN_IDENTITY_REUSED",
+                    "recovery permanently retired this batch or attempt identity",
+                )
             lane_identity = _validate_live_bindings(
                 repository, source, identity, normalized
             )

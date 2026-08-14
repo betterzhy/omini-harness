@@ -20,7 +20,7 @@ from .controlled_coordinator_inputs import (
     normalize_write_observation_command,
 )
 from .coordinator_state import CoordinatorStateStore
-from .hashing import canonical_json_bytes
+from .hashing import canonical_json_bytes, sha256_bytes
 
 
 _RECOVERY_SIGNATURE_NAMESPACE = "agent-evolution-controlled-recovery-v1"
@@ -120,6 +120,22 @@ def _observation_result(receipt: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _exact_observation_replay(
+    journal: dict[str, Any], command: dict[str, Any]
+) -> dict[str, Any] | None:
+    return next(
+        (
+            receipt
+            for receipt in journal["receipts"]
+            if receipt["receiptType"] == "WRITE_OBSERVATION"
+            and receipt["commandDigest"] == command["commandDigest"]
+            and canonical_json_bytes(receipt["evidence"]["command"])
+            == canonical_json_bytes(command)
+        ),
+        None,
+    )
+
+
 def _recovery_signature_payload(command: dict[str, Any]) -> dict[str, Any]:
     return {
         key: copy.deepcopy(value)
@@ -150,17 +166,7 @@ def quarantine_observed_writes_locked(
 ) -> dict[str, Any]:
     """Persist a complete breach while the caller still owns the project lock."""
     current = copy.deepcopy(journal)
-    exact_replay = next(
-        (
-            receipt
-            for receipt in current["receipts"]
-            if receipt["receiptType"] == "WRITE_OBSERVATION"
-            and receipt["commandDigest"] == command["commandDigest"]
-            and canonical_json_bytes(receipt["evidence"]["command"])
-            == canonical_json_bytes(command)
-        ),
-        None,
-    )
+    exact_replay = _exact_observation_replay(current, command)
     if exact_replay is not None:
         return _observation_result(exact_replay)
     conflicting = next(
@@ -322,15 +328,44 @@ def observe_lane_writes(
                 raise ControlledCoordinationError(
                     "STALE_FENCING_TOKEN", "observation fencing token is not current"
                 )
+            exact_replay = _exact_observation_replay(journal, normalized)
+            if exact_replay is not None:
+                return _observation_result(exact_replay)
             from .controlled_write_guard import _complete_persistent_breach_inventory
 
-            _, observed_paths, remaining_ephemeral = (
+            inventory, observed_paths, remaining_ephemeral = (
                 _complete_persistent_breach_inventory(lease)
             )
             if remaining_ephemeral:
                 raise ControlledCoordinationError(
                     "EPHEMERAL_PATH_NOT_REMOVED",
                     "declared ephemeral paths must be absent before quarantine",
+                )
+            if not observed_paths:
+                raise ControlledCoordinationError(
+                    "WRITE_OBSERVATION_EMPTY",
+                    "a new observation requires a nonempty live persistent breach",
+                )
+            inventory_digest = "sha256:" + sha256_bytes(
+                canonical_json_bytes(inventory)
+            )
+            if normalized["beforeInventoryDigest"] != inventory_digest:
+                raise ControlledCoordinationError(
+                    "OBSERVATION_INVENTORY_MISMATCH",
+                    "beforeInventoryDigest does not bind the complete live inventory",
+                )
+            expected_ephemeral = sorted(
+                lease["fullFootprint"]["ephemeralWriteSet"]
+            )
+            if normalized["ephemeralPathsRemoved"] != expected_ephemeral:
+                raise ControlledCoordinationError(
+                    "OBSERVATION_EPHEMERAL_SET_MISMATCH",
+                    "ephemeralPathsRemoved must name every verified absent declared path",
+                )
+            if normalized["processQuiescence"]["processIds"]:
+                raise ControlledCoordinationError(
+                    "PROCESS_NOT_QUIESCENT",
+                    "public observation requires an empty process identity set",
                 )
             if observed_paths != normalized["observedPaths"]:
                 raise ControlledCoordinationError(
@@ -425,8 +460,22 @@ def record_project_recovery(
                     "recovery command is not issued by recovery-controller",
                 )
             public_key = _read_current_authority_bytes(source, authority)
+            try:
+                commanded_public_key = normalized[
+                    "recoveryAuthorityPublicKey"
+                ].encode("ascii")
+            except UnicodeEncodeError as exc:
+                raise ControlledCoordinationError(
+                    "RECOVERY_AUTHORITY_NOT_CURRENT",
+                    "recovery public key is not canonical OpenSSH ASCII",
+                ) from exc
+            if commanded_public_key != public_key:
+                raise ControlledCoordinationError(
+                    "RECOVERY_AUTHORITY_NOT_CURRENT",
+                    "recovery command does not bind the complete current public key",
+                )
             _verify_sshsig_signature(
-                public_key,
+                commanded_public_key,
                 normalized["signature"],
                 _recovery_signature_payload(normalized),
                 identity="recovery-controller",

@@ -988,7 +988,9 @@ def _quarantine_guard_breach(
         "beforeInventoryDigest": "sha256:"
         + hashlib.sha256(canonical_json_bytes(inventory)).hexdigest(),
         "observedPaths": sorted(observed_paths),
-        "ephemeralPathsRemoved": [],
+        "ephemeralPathsRemoved": sorted(
+            lease["fullFootprint"]["ephemeralWriteSet"]
+        ),
         "processQuiescence": {
             "status": "QUIESCENT",
             "observedAt": observed_at,

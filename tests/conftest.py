@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
@@ -142,6 +143,83 @@ class ControlledPlanningFactory:
         return value
 
 
+@dataclass(frozen=True)
+class CoordinatorStateFactory:
+    project_execution_key: str = "project-execution:" + "1" * 64
+
+    def receipt(self, version: int, *, project_execution_key: str | None = None):
+        key = project_execution_key or self.project_execution_key
+        digest = "sha256:" + "3" * 64
+        candidate = {"commit": "4" * 40, "parent": "5" * 40, "tree": "6" * 40}
+        command = {
+            "schemaVersion": "controlled-coordinator-transition-command/v1",
+            "projectExecutionKey": key,
+            "leaseId": "lease:" + "2" * 24,
+            "attemptId": "attempt:neutral-a",
+            "fencingToken": version,
+            "expectedState": "ACTIVE",
+            "nextState": "FIXED_CANDIDATE",
+            "authoritySnapshotFingerprint": digest,
+            "candidateIdentity": candidate,
+            "processQuiescence": {
+                "status": "QUIESCENT",
+                "observedAt": "2026-08-13T12:30:00Z",
+                "processIds": [],
+            },
+            "lifecycleAuthorityProof": {
+                "authorityReference": "authority/lifecycle.yaml",
+                "authorityDigest": "sha256:" + "a" * 64,
+                "attemptId": "attempt:neutral-a",
+                "expectedState": "ACTIVE",
+                "nextState": "FIXED_CANDIDATE",
+                "candidateIdentity": candidate,
+                "reviewBindingDigest": None,
+                "reviewEvidenceDigest": None,
+                "reviewerId": None,
+                "reviewerAuthorityReference": None,
+                "reviewerAuthorityDigest": None,
+                "assertedAt": "2026-08-13T12:29:00Z",
+                "proofDigest": "sha256:" + "b" * 64,
+            },
+            "reviewEvidence": None,
+            "commandDigest": "sha256:" + "c" * 64,
+        }
+        return {
+            "schemaVersion": "controlled-coordinator-receipt/v1",
+            "receiptId": "coordinator-receipt:" + f"{version:024x}",
+            "receiptType": "TRANSITION",
+            "projectExecutionKey": key,
+            "previousJournalVersion": version - 1,
+            "nextJournalVersion": version,
+            "commandDigest": command["commandDigest"],
+            "fencingToken": version,
+            "previousState": "ACTIVE",
+            "nextState": "FIXED_CANDIDATE",
+            "authoritySnapshotFingerprint": digest,
+            "journalDigest": "sha256:" + "d" * 64,
+            "recordedAt": "2026-08-13T12:31:00Z",
+            "evidence": {"command": command},
+        }
+
+    def journal(self, version: int, *, project_execution_key: str | None = None):
+        key = project_execution_key or self.project_execution_key
+        receipt = self.receipt(version, project_execution_key=key)
+        return {
+            "schemaVersion": "controlled-coordinator-journal/v1",
+            "projectExecutionKey": key,
+            "journalVersion": version,
+            "nextFencingToken": version + 1,
+            "recoveryState": "CLEAR",
+            "recoveryEvidence": None,
+            "leases": [],
+            "receipts": [
+                self.receipt(item, project_execution_key=key)
+                for item in range(1, version + 1)
+            ],
+            "integrationTransactions": [],
+        }, receipt
+
+
 @pytest.fixture
 def repository_root():
     return Path(__file__).parents[1]
@@ -150,3 +228,8 @@ def repository_root():
 @pytest.fixture
 def controlled_factory():
     return ControlledPlanningFactory()
+
+
+@pytest.fixture
+def coordinator_state_factory():
+    return CoordinatorStateFactory()

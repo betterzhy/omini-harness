@@ -439,6 +439,127 @@ def test_git_inventory_uses_sealed_environment(guarded_lane, monkeypatch, tmp_pa
     assert caught.value.observedPaths == ["tracked.txt"]
 
 
+def test_git_inventory_does_not_consume_transient_foreign_admin(
+    guarded_lane, monkeypatch, tmp_path
+):
+    foreign = tmp_path / "foreign-inventory"
+    foreign.mkdir()
+    _git(foreign, "init", "-q")
+    _git(foreign, "config", "user.name", "Foreign Inventory")
+    _git(foreign, "config", "user.email", "foreign-inventory@example.test")
+    (foreign / ".gitignore").write_text(
+        ".guard-cache/\nignored-leak/\n", encoding="utf-8"
+    )
+    (foreign / "tracked.txt").write_text("foreign baseline\n", encoding="utf-8")
+    _git(foreign, "add", ".")
+    _git(foreign, "commit", "-qm", "foreign inventory")
+
+    (guarded_lane.root / "tracked.txt").write_text(
+        "foreign baseline\n", encoding="utf-8"
+    )
+    lane_admin = guarded_lane.root / ".git"
+    held_lane_admin = tmp_path / "held-lane-admin"
+    foreign_admin = foreign / ".git"
+    original_run = guard.subprocess.run
+
+    def substitute_admin_only_during_git(*args, **kwargs):
+        argv = args[0] if args else kwargs.get("args")
+        if not argv or argv[0] != "/usr/bin/git":
+            return original_run(*args, **kwargs)
+        lane_admin.rename(held_lane_admin)
+        foreign_admin.rename(lane_admin)
+        try:
+            return original_run(*args, **kwargs)
+        finally:
+            lane_admin.rename(foreign_admin)
+            held_lane_admin.rename(lane_admin)
+
+    monkeypatch.setattr(guard.subprocess, "run", substitute_admin_only_during_git)
+
+    with pytest.raises(ControlledCoordinationError) as caught:
+        guard.run_guarded_command(
+            guarded_lane.lease,
+            guarded_lane.root,
+            ["/usr/bin/true"],
+            cwd=guarded_lane.root,
+            environment=guarded_lane.environment,
+        )
+
+    assert caught.value.code == "WRITESET_BREACH"
+    assert caught.value.observedPaths == ["tracked.txt"]
+
+
+def test_linked_worktree_inventory_fails_before_target_process(
+    tmp_path, monkeypatch, coordinator_state_factory
+):
+    monkeypatch.setenv(
+        "AGENT_EVOLUTION_COORDINATOR_ROOT", str(tmp_path / "linked-state")
+    )
+    source = tmp_path / "linked-guard-source"
+    lane = tmp_path / "linked-guard-lane"
+    source.mkdir()
+    _git(source, "init", "-q")
+    _git(source, "config", "user.name", "Linked Guard")
+    _git(source, "config", "user.email", "linked-guard@example.test")
+    (source / ".gitignore").write_text(".guard-cache/\n", encoding="utf-8")
+    (source / "tracked.txt").write_text("base\n", encoding="utf-8")
+    _git(source, "add", ".")
+    _git(source, "commit", "-qm", "linked guard base")
+    _git(source, "worktree", "add", "-q", str(lane))
+    lease = _persist_active_lease(
+        coordinator_state_factory,
+        lane,
+        source,
+        ["allowed.txt"],
+        [".guard-cache"],
+    )
+    target_started = False
+
+    def unexpected_target(*args, **kwargs):
+        nonlocal target_started
+        target_started = True
+        return subprocess.CompletedProcess(args[0], 0, b"", b"")
+
+    monkeypatch.setattr(guard, "_validate_sandbox_exec", lambda: None)
+    monkeypatch.setattr(guard, "_run_sandboxed", unexpected_target)
+
+    with pytest.raises(ControlledCoordinationError) as caught:
+        guard.run_guarded_command(
+            lease,
+            lane,
+            ["/usr/bin/true"],
+            cwd=lane,
+            environment={"PATH": "/usr/bin:/bin"},
+        )
+
+    assert caught.value.code == "LANE_INVENTORY_UNAVAILABLE"
+    assert target_started is False
+
+
+def test_physical_inventory_reports_new_undeclared_empty_directory(
+    guarded_lane, monkeypatch
+):
+    def create_empty_directory(argv, *, cwd, environment, profile):
+        del environment, profile
+        Path(cwd, "undeclared-empty").mkdir()
+        return subprocess.CompletedProcess(argv, 0, b"", b"")
+
+    monkeypatch.setattr(guard, "_validate_sandbox_exec", lambda: None)
+    monkeypatch.setattr(guard, "_run_sandboxed", create_empty_directory)
+
+    with pytest.raises(ControlledCoordinationError) as caught:
+        guard.run_guarded_command(
+            guarded_lane.lease,
+            guarded_lane.root,
+            ["writer"],
+            cwd=guarded_lane.root,
+            environment={"PATH": "/usr/bin:/bin"},
+        )
+
+    assert caught.value.code == "WRITESET_BREACH"
+    assert caught.value.observedPaths == ["undeclared-empty"]
+
+
 def test_git_inventory_disables_repo_local_executable_extensions(
     guarded_lane, tmp_path
 ):
@@ -496,15 +617,12 @@ def test_git_admin_symlink_is_rejected_no_follow(guarded_lane):
 def test_linked_worktree_uses_sealed_commondir_and_common_object_root(tmp_path):
     source, lane, lane_descriptor, boundary = _linked_git_boundary(tmp_path)
     try:
-        result = guard._run_git(boundary, "rev-parse", "--show-toplevel", "HEAD")
+        head = guard._read_git_head(boundary)
     finally:
         guard._close_git_boundary(boundary)
         os.close(lane_descriptor)
 
-    assert result.stdout.decode("utf-8").splitlines() == [
-        str(lane),
-        _git(source, "rev-parse", "HEAD").stdout.strip(),
-    ]
+    assert head == _git(source, "rev-parse", "HEAD").stdout.strip()
 
 
 @pytest.mark.parametrize(
@@ -531,7 +649,7 @@ def test_linked_worktree_git_boundary_rejects_physical_path_swap(
         selected.symlink_to(moved)
     try:
         with pytest.raises(ControlledCoordinationError) as caught:
-            guard._run_git(boundary, "rev-parse", "HEAD")
+            guard._read_git_head(boundary)
     finally:
         guard._close_git_boundary(boundary)
         os.close(lane_descriptor)
@@ -551,6 +669,7 @@ def test_linked_worktree_git_boundary_rechecks_paths_after_git(
         "common-objects": boundary.common_admin_root / "objects",
     }[target]
     moved = selected.with_name(selected.name + "-moved")
+    head = guard._read_git_head(boundary)
 
     def swap_after_git(*args, **kwargs):
         result = original_run(*args, **kwargs)
@@ -561,7 +680,7 @@ def test_linked_worktree_git_boundary_rechecks_paths_after_git(
     monkeypatch.setattr(guard.subprocess, "run", swap_after_git)
     try:
         with pytest.raises(ControlledCoordinationError) as caught:
-            guard._run_git(boundary, "rev-parse", "HEAD")
+            guard._read_git_object(boundary, head, expected_type="commit")
     finally:
         guard._close_git_boundary(boundary)
         os.close(lane_descriptor)
@@ -610,20 +729,49 @@ def test_git_boundary_rejects_non_system_git_executable(
     assert caught.value.code == "LANE_INVENTORY_UNAVAILABLE"
 
 
-def test_porcelain_rename_and_copy_preserve_both_physical_paths():
-    paths, tracked, untracked, ignored = guard._parse_status(
-        b"R  destination.txt\0source.txt\0C  copy.txt\0original.txt\0"
+@pytest.mark.parametrize(
+    ("operation", "expected"),
+    [
+        ("rename", ["allowed-dir/result.txt", "allowed.txt"]),
+        ("copy", ["allowed-dir/result.txt"]),
+    ],
+)
+def test_physical_inventory_preserves_rename_and_copy_paths(
+    guarded_lane, operation, expected
+):
+    source = guarded_lane.root / "allowed.txt"
+    destination = guarded_lane.root / "allowed-dir" / "result.txt"
+    source.write_text("physical inventory\n", encoding="utf-8")
+    lane_descriptor, observed = guard._open_absolute_directory_no_follow(
+        guarded_lane.root
     )
+    boundary = guard._open_git_boundary(
+        lane_descriptor,
+        guarded_lane.root,
+        guard._physical_identity(observed),
+    )
+    try:
+        before_snapshot = guard._scan_lane_tree(lane_descriptor)
+        before = guard._inventory(
+            lane_descriptor, boundary, physical_snapshot=before_snapshot
+        )
+        if operation == "rename":
+            source.rename(destination)
+        else:
+            destination.write_bytes(source.read_bytes())
+        after_snapshot = guard._scan_lane_tree(lane_descriptor)
+        after = guard._inventory(
+            lane_descriptor, boundary, physical_snapshot=after_snapshot
+        )
+    finally:
+        guard._close_git_boundary(boundary)
+        os.close(lane_descriptor)
 
-    assert paths == [
-        "copy.txt",
-        "destination.txt",
-        "original.txt",
-        "source.txt",
+    assert guard._physical_snapshot_changes(before_snapshot, after_snapshot) == expected
+    assert sorted({*before["paths"], *after["paths"]}) == [
+        "allowed-dir/result.txt",
+        "allowed.txt",
     ]
-    assert tracked == paths
-    assert untracked == []
-    assert ignored == []
 
 
 def test_ignored_lane_exclusive_ephemeral_path_must_be_removed(guarded_lane):

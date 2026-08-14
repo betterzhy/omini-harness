@@ -351,6 +351,239 @@ def _read_small_descriptor(descriptor: int) -> bytes:
     return contents
 
 
+def _read_bounded_regular_file(
+    root_descriptor: int, relative: str, *, maximum: int
+) -> bytes:
+    descriptor = -1
+    try:
+        descriptor = _open_relative_no_follow(
+            root_descriptor, relative, directory=False
+        )
+        before = os.fstat(descriptor)
+        if not stat.S_ISREG(before.st_mode) or before.st_size > maximum:
+            raise OSError("Git control file is not a bounded regular file")
+        chunks: list[bytes] = []
+        remaining = maximum + 1
+        while remaining:
+            chunk = os.read(descriptor, min(65536, remaining))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        contents = b"".join(chunks)
+        after = os.fstat(descriptor)
+        if (
+            _physical_identity(before) != _physical_identity(after)
+            or len(contents) > maximum
+        ):
+            raise OSError("Git control file changed during descriptor read")
+        return contents
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+
+
+def _canonical_git_oid(raw: bytes) -> str | None:
+    try:
+        value = raw.decode("ascii")
+    except UnicodeDecodeError:
+        return None
+    if len(value) not in {40, 64} or any(
+        character not in "0123456789abcdef" for character in value
+    ):
+        return None
+    return value
+
+
+def _canonical_git_ref(raw: bytes) -> str:
+    try:
+        value = raw.decode("utf-8", "strict")
+    except UnicodeDecodeError as exc:
+        raise OSError("Git symbolic ref is not UTF-8") from exc
+    path = PurePosixPath(value)
+    if (
+        not value.startswith("refs/")
+        or len(value) > 1024
+        or path.is_absolute()
+        or path.as_posix() != value
+        or any(part in {"", ".", ".."} for part in path.parts)
+        or any(character in value for character in ("\\", "\x00", "\r", "\n"))
+    ):
+        raise OSError("Git symbolic ref is not canonical")
+    return value
+
+
+def _packed_ref_oid(boundary: _GitBoundary, reference: str) -> str:
+    packed = _read_bounded_regular_file(
+        boundary.common_admin_descriptor,
+        "packed-refs",
+        maximum=16 * 1024 * 1024,
+    )
+    matches: list[str] = []
+    for line in packed.splitlines():
+        if not line or line.startswith((b"#", b"^")):
+            continue
+        fields = line.split(b" ")
+        if len(fields) != 2:
+            raise OSError("Git packed-refs contains a malformed entry")
+        try:
+            packed_reference = fields[1].decode("utf-8", "strict")
+        except UnicodeDecodeError as exc:
+            raise OSError("Git packed ref is not UTF-8") from exc
+        if packed_reference == reference:
+            oid = _canonical_git_oid(fields[0])
+            if oid is None:
+                raise OSError("Git packed ref object identity is malformed")
+            matches.append(oid)
+    if len(matches) != 1:
+        raise OSError("Git packed ref is absent or ambiguous")
+    return matches[0]
+
+
+def _read_git_head(boundary: _GitBoundary) -> str:
+    try:
+        _verify_git_boundary(boundary)
+        contents = _read_bounded_regular_file(
+            boundary.admin_descriptor, "HEAD", maximum=4096
+        )
+        seen: set[str] = set()
+        for _ in range(8):
+            if not contents.endswith(b"\n") or contents.count(b"\n") != 1:
+                raise OSError("Git HEAD/ref is not one canonical line")
+            value = contents[:-1]
+            oid = _canonical_git_oid(value)
+            if oid is not None:
+                _verify_git_boundary(boundary)
+                return oid
+            if not value.startswith(b"ref: "):
+                raise OSError("Git HEAD/ref has no canonical object identity")
+            reference = _canonical_git_ref(value.removeprefix(b"ref: "))
+            if reference in seen:
+                raise OSError("Git symbolic refs contain a cycle")
+            seen.add(reference)
+            contents = b""
+            found_loose_ref = False
+            for root_descriptor in (
+                boundary.admin_descriptor,
+                boundary.common_admin_descriptor,
+            ):
+                try:
+                    contents = _read_bounded_regular_file(
+                        root_descriptor, reference, maximum=4096
+                    )
+                except FileNotFoundError:
+                    continue
+                found_loose_ref = True
+                break
+            if not found_loose_ref:
+                oid = _packed_ref_oid(boundary, reference)
+                _verify_git_boundary(boundary)
+                return oid
+        raise OSError("Git symbolic ref depth exceeds the sealed limit")
+    except (ControlledCoordinationError, OSError, ValueError) as exc:
+        if isinstance(exc, ControlledCoordinationError):
+            raise
+        raise _error(boundary.error_code, boundary.error_message) from exc
+
+
+def _run_git_object_batch(
+    boundary: _GitBoundary, object_id: str, *, check_only: bool
+) -> bytes:
+    environment = dict(_SEALED_GIT_ENVIRONMENT)
+    environment["GIT_OBJECT_DIRECTORY"] = "."
+
+    def enter_held_object_root() -> None:
+        os.fchdir(boundary.objects_descriptor)
+
+    arguments = [
+        _GIT_PATH,
+        *_GIT_DISABLED_EXECUTABLE_EXTENSIONS,
+        f"--git-dir={boundary.admin_root}",
+        "cat-file",
+        "--batch-check" if check_only else "--batch",
+    ]
+    return subprocess.run(
+        arguments,
+        cwd="/",
+        env=environment,
+        input=f"{object_id}\n".encode("ascii"),
+        check=False,
+        capture_output=True,
+        timeout=10,
+        pass_fds=(boundary.objects_descriptor,),
+        preexec_fn=enter_held_object_root,
+    ).stdout
+
+
+def _read_git_object(
+    boundary: _GitBoundary,
+    object_id: str,
+    *,
+    expected_type: str,
+    maximum: int = 64 * 1024 * 1024,
+) -> bytes:
+    try:
+        canonical = _canonical_git_oid(object_id.encode("ascii", "strict"))
+        if canonical != object_id or expected_type not in {"commit", "tree"}:
+            raise OSError("Git object request is not canonical")
+        _verify_git_boundary(boundary)
+        checked = _run_git_object_batch(boundary, object_id, check_only=True)
+        checked_fields = checked.removesuffix(b"\n").split(b" ")
+        if len(checked_fields) != 3:
+            raise OSError("Git object metadata is unavailable")
+        returned_oid = _canonical_git_oid(checked_fields[0])
+        try:
+            returned_type = checked_fields[1].decode("ascii", "strict")
+            size = int(checked_fields[2].decode("ascii", "strict"))
+        except (UnicodeDecodeError, ValueError) as exc:
+            raise OSError("Git object metadata is malformed") from exc
+        if (
+            returned_oid != object_id
+            or returned_type != expected_type
+            or size < 0
+            or size > maximum
+            or checked_fields[2] != str(size).encode("ascii")
+        ):
+            raise OSError("Git object metadata does not match the sealed request")
+
+        output = _run_git_object_batch(boundary, object_id, check_only=False)
+        header, separator, remainder = output.partition(b"\n")
+        fields = header.split(b" ")
+        if not separator or len(fields) != 3:
+            raise OSError("Git object output has no canonical batch header")
+        output_oid = _canonical_git_oid(fields[0])
+        try:
+            output_type = fields[1].decode("ascii", "strict")
+            output_size = int(fields[2].decode("ascii", "strict"))
+        except (UnicodeDecodeError, ValueError) as exc:
+            raise OSError("Git object output header is malformed") from exc
+        if (
+            output_oid != object_id
+            or output_type != expected_type
+            or output_size != size
+            or fields[2] != str(output_size).encode("ascii")
+            or len(remainder) != output_size + 1
+            or not remainder.endswith(b"\n")
+        ):
+            raise OSError("Git object output does not match its metadata")
+        body = remainder[:-1]
+        object_bytes = f"{output_type} {output_size}\0".encode("ascii") + body
+        hasher = hashlib.sha1 if len(object_id) == 40 else hashlib.sha256
+        if hasher(object_bytes).hexdigest() != object_id:
+            raise OSError("Git object output does not reproduce its requested hash")
+        _verify_git_boundary(boundary)
+        return body
+    except (
+        ControlledCoordinationError,
+        OSError,
+        subprocess.SubprocessError,
+        UnicodeEncodeError,
+    ) as exc:
+        if isinstance(exc, ControlledCoordinationError):
+            raise
+        raise _error(boundary.error_code, boundary.error_message) from exc
+
+
 def _verify_no_git_object_alternates(objects_descriptor: int) -> None:
     info_descriptor = -1
     try:
@@ -685,26 +918,68 @@ def _verify_git_boundary(boundary: _GitBoundary) -> None:
 
 
 def _run_git(
-    boundary: _GitBoundary, *args: str, check: bool = True
+    boundary: _GitBoundary, *args: str
 ) -> subprocess.CompletedProcess[bytes]:
+    if args != ("ls-files", "-z", "--stage"):
+        raise _error(
+            "LANE_INVENTORY_UNAVAILABLE",
+            "only descriptor-bound index inventory is available",
+        )
+    if (
+        boundary.dot_git_type != "DIRECTORY"
+        or boundary.commondir_descriptor >= 0
+        or boundary.admin_identity != boundary.common_admin_identity
+    ):
+        raise _error(
+            "LANE_INVENTORY_UNAVAILABLE",
+            "linked-worktree inventory is not descriptor-bound",
+        )
+    index_descriptor = -1
     try:
         _verify_git_boundary(boundary)
+        index_descriptor = os.open(
+            "index", _READ_FLAGS, dir_fd=boundary.admin_descriptor
+        )
+        before = os.fstat(index_descriptor)
+        if not stat.S_ISREG(before.st_mode) or before.st_size > 64 * 1024 * 1024:
+            raise OSError("Git index is not a bounded regular file")
+        environment = dict(_SEALED_GIT_ENVIRONMENT)
+        environment["GIT_INDEX_FILE"] = f"/dev/fd/{index_descriptor}"
+
+        def enter_held_admin_root() -> None:
+            os.fchdir(boundary.admin_descriptor)
+
         completed = subprocess.run(
             [
                 _GIT_PATH,
                 *_GIT_DISABLED_EXECUTABLE_EXTENSIONS,
-                f"--git-dir={boundary.admin_root}",
-                f"--work-tree={boundary.lane_root}",
+                "--git-dir=.",
+                f"--work-tree=/dev/fd/{boundary.lane_descriptor}",
                 *args,
             ],
-            cwd=boundary.lane_root,
-            env=_SEALED_GIT_ENVIRONMENT,
+            cwd="/",
+            env=environment,
             check=False,
             capture_output=True,
             timeout=10,
+            pass_fds=(
+                boundary.admin_descriptor,
+                boundary.lane_descriptor,
+                index_descriptor,
+            ),
+            preexec_fn=enter_held_admin_root,
         )
+        after = os.fstat(index_descriptor)
         _verify_git_boundary(boundary)
-        if check and completed.returncode != 0:
+        if (
+            _physical_identity(before) != _physical_identity(after)
+            or before.st_size != after.st_size
+            or before.st_mtime_ns != after.st_mtime_ns
+            or before.st_ctime_ns != after.st_ctime_ns
+            or len(completed.stdout) > 64 * 1024 * 1024
+        ):
+            raise OSError("Git index changed during descriptor-bound inventory")
+        if completed.returncode != 0:
             raise subprocess.CalledProcessError(
                 completed.returncode,
                 completed.args,
@@ -714,157 +989,502 @@ def _run_git(
         return completed
     except (OSError, subprocess.SubprocessError) as exc:
         raise _error("LANE_INVENTORY_UNAVAILABLE", "Git lane inventory failed") from exc
+    finally:
+        if index_descriptor >= 0:
+            os.close(index_descriptor)
+
+
+def _read_git_index(boundary: _GitBoundary) -> dict[str, tuple[str, str]]:
+    raw = _run_git(boundary, "ls-files", "-z", "--stage").stdout
+    entries: dict[str, tuple[str, str]] = {}
+    fields = raw.split(b"\0")
+    if fields and fields[-1] == b"":
+        fields.pop()
+    for field in fields:
+        metadata, separator, raw_path = field.partition(b"\t")
+        parts = metadata.split(b" ")
+        if not separator or len(parts) != 3 or parts[2] != b"0":
+            raise _error(
+                "LANE_INVENTORY_UNAVAILABLE",
+                "Git index contains an unsupported or unmerged entry",
+            )
+        try:
+            mode = parts[0].decode("ascii", "strict")
+            path = raw_path.decode("utf-8", "strict")
+        except UnicodeDecodeError as exc:
+            raise _error(
+                "LANE_INVENTORY_UNAVAILABLE", "Git index path is not canonical UTF-8"
+            ) from exc
+        object_id = _canonical_git_oid(parts[1])
+        if mode not in {"100644", "100755", "120000"} or object_id is None:
+            raise _error(
+                "LANE_INVENTORY_UNAVAILABLE",
+                "Git index contains an unsupported entry type",
+            )
+        try:
+            canonical = _canonical_relative(path, "Git index path")
+        except ControlledCoordinationError as exc:
+            raise _error(
+                "LANE_INVENTORY_UNAVAILABLE", "Git index path is not canonical"
+            ) from exc
+        if canonical in entries:
+            raise _error(
+                "LANE_INVENTORY_UNAVAILABLE", "Git index path is ambiguous"
+            )
+        entries[canonical] = (mode, object_id)
+    return entries
+
+
+def _commit_tree_identity(commit_body: bytes) -> str:
+    header, separator, _message = commit_body.partition(b"\n\n")
+    if not separator:
+        raise OSError("Git commit has no canonical header terminator")
+    trees = [
+        line.removeprefix(b"tree ")
+        for line in header.splitlines()
+        if line.startswith(b"tree ")
+    ]
+    if len(trees) != 1:
+        raise OSError("Git commit does not contain exactly one tree")
+    tree = _canonical_git_oid(trees[0])
+    if tree is None:
+        raise OSError("Git commit tree identity is malformed")
+    return tree
+
+
+def _read_committed_entries(
+    boundary: _GitBoundary,
+) -> dict[str, tuple[str, str]]:
+    try:
+        head = _read_git_head(boundary)
+        tree = _commit_tree_identity(
+            _read_git_object(boundary, head, expected_type="commit")
+        )
+        entries: dict[str, tuple[str, str]] = {}
+        object_bytes = len(tree) // 2
+        expanded_entries = 0
+
+        def walk_tree(
+            tree_id: str,
+            prefix: PurePosixPath | None,
+            ancestors: frozenset[str],
+            depth: int,
+        ) -> None:
+            nonlocal expanded_entries
+            if depth > 64 or tree_id in ancestors:
+                raise OSError("Git tree nesting is cyclic or too deep")
+            body = _read_git_object(boundary, tree_id, expected_type="tree")
+            offset = 0
+            local_names: set[str] = set()
+            while offset < len(body):
+                space = body.find(b" ", offset)
+                nul = body.find(b"\0", space + 1) if space >= 0 else -1
+                end = nul + 1 + object_bytes
+                if space <= offset or nul <= space + 1 or end > len(body):
+                    raise OSError("Git tree entry is truncated or malformed")
+                try:
+                    mode = body[offset:space].decode("ascii", "strict")
+                    name = body[space + 1 : nul].decode("utf-8", "strict")
+                except UnicodeDecodeError as exc:
+                    raise OSError("Git tree entry is not canonical UTF-8") from exc
+                if (
+                    not name
+                    or name in {".", ".."}
+                    or "/" in name
+                    or name in local_names
+                ):
+                    raise OSError("Git tree entry name is unsafe or ambiguous")
+                local_names.add(name)
+                object_id = body[nul + 1 : end].hex()
+                if _canonical_git_oid(object_id.encode("ascii")) != object_id:
+                    raise OSError("Git tree object identity is malformed")
+                relative_path = (
+                    PurePosixPath(name)
+                    if prefix is None
+                    else prefix / name
+                )
+                relative = relative_path.as_posix()
+                if relative == ".git" or relative.startswith(".git/"):
+                    raise OSError("Git tree contains an administration path")
+                expanded_entries += 1
+                if expanded_entries > 100_000:
+                    raise OSError("Git tree inventory exceeds the sealed limit")
+                if mode == "40000":
+                    walk_tree(
+                        object_id,
+                        relative_path,
+                        ancestors | {tree_id},
+                        depth + 1,
+                    )
+                elif mode in {"100644", "100755", "120000"}:
+                    if relative in entries:
+                        raise OSError("Git committed path is ambiguous")
+                    entries[relative] = (mode, object_id)
+                else:
+                    raise OSError("Git tree contains an unsupported entry type")
+                offset = end
+
+        walk_tree(tree, None, frozenset(), 0)
+        return entries
+    except (ControlledCoordinationError, OSError, ValueError) as exc:
+        if isinstance(exc, ControlledCoordinationError):
+            raise
+        raise _error(boundary.error_code, boundary.error_message) from exc
+
+
+def _literal_ignored_roots(lane_descriptor: int) -> set[str]:
+    try:
+        raw = _read_bounded_regular_file(
+            lane_descriptor, ".gitignore", maximum=1024 * 1024
+        )
+    except FileNotFoundError:
+        return set()
+    try:
+        lines = raw.decode("utf-8", "strict").splitlines()
+    except UnicodeDecodeError:
+        return set()
+    if any(line.startswith("!") for line in lines):
+        return set()
+    roots: set[str] = set()
+    for line in lines:
+        if not line or line.startswith("#") or not line.endswith("/"):
+            continue
+        candidate = line.removeprefix("/").removesuffix("/")
+        if (
+            not candidate
+            or any(character in candidate for character in "*?[\\")
+            or candidate != candidate.strip()
+        ):
+            continue
+        try:
+            roots.add(_canonical_relative(candidate, "literal Git ignore root"))
+        except ControlledCoordinationError:
+            continue
+    return roots
 
 
 def _validate_ephemeral_paths(boundary: _GitBoundary, ephemeral: list[str]) -> None:
+    ignored_roots = _literal_ignored_roots(boundary.lane_descriptor)
+    tracked_paths = set(_read_git_index(boundary)) | set(
+        _read_committed_entries(boundary)
+    )
     for relative in ephemeral:
-        ignored = any(
-            _run_git(
-                boundary, "check-ignore", "-q", "--", candidate, check=False
-            ).returncode
-            == 0
-            for candidate in (relative, f"{relative}/.guard-ignore-probe")
-        )
-        if not ignored:
+        if not any(_path_is_within(relative, root) for root in ignored_roots):
             raise _error(
                 "UNSAFE_EPHEMERAL_WRITESET",
-                f"ephemeral path is not Git-ignored: {relative}",
+                f"ephemeral path lacks a sealed literal ignore rule: {relative}",
             )
-        tracked = _run_git(
-            boundary,
-            "ls-files",
-            "--error-unmatch",
-            "--",
-            relative,
-            check=False,
-        )
-        if tracked.returncode == 0:
+        if any(_path_is_within(path, relative) for path in tracked_paths):
             raise _error(
                 "UNSAFE_EPHEMERAL_WRITESET",
                 f"ephemeral path is already tracked: {relative}",
             )
 
 
-def _parse_status(raw: bytes) -> tuple[list[str], list[str], list[str], list[str]]:
-    fields = raw.split(b"\0")
-    paths: list[str] = []
-    tracked: list[str] = []
-    untracked: list[str] = []
-    ignored: list[str] = []
-    index = 0
-    while index < len(fields) and fields[index]:
-        entry = fields[index]
-        index += 1
-        if len(entry) < 4 or entry[2:3] != b" ":
-            raise _error("LANE_INVENTORY_UNAVAILABLE", "malformed Git status entry")
-        status_code = entry[:2]
-        entry_paths = [os.fsdecode(entry[3:])]
-        if status_code[:1] in {b"R", b"C"} or status_code[1:2] in {b"R", b"C"}:
-            if index >= len(fields) or not fields[index]:
-                raise _error("LANE_INVENTORY_UNAVAILABLE", "malformed Git rename entry")
-            entry_paths.append(os.fsdecode(fields[index]))
-            index += 1
-        normalized_paths = [
-            _canonical_relative(path.rstrip("/"), "Git inventory path")
-            for path in entry_paths
-        ]
-        paths.extend(normalized_paths)
-        if status_code == b"??":
-            untracked.extend(normalized_paths)
-        elif status_code == b"!!":
-            ignored.extend(normalized_paths)
-        else:
-            tracked.extend(normalized_paths)
+def _stable_physical_stat(current: os.stat_result) -> tuple[object, ...]:
     return (
-        sorted(set(paths)),
-        sorted(set(tracked)),
-        sorted(set(untracked)),
-        sorted(set(ignored)),
+        *_physical_identity(current),
+        stat.S_IMODE(current.st_mode),
+        current.st_size,
+        current.st_mtime_ns,
+        current.st_ctime_ns,
     )
+
+
+def _scan_lane_tree(
+    lane_descriptor: int,
+) -> tuple[dict[str, dict[str, object]], set[str]]:
+    nodes: dict[str, dict[str, object]] = {}
+    leaf_paths: set[str] = set()
+    observed_count = 0
+    observed_bytes = 0
+
+    def visit(
+        directory_descriptor: int,
+        prefix: PurePosixPath | None,
+        *,
+        root: bool,
+        depth: int,
+    ) -> int:
+        nonlocal observed_count, observed_bytes
+        if depth > 64:
+            raise OSError("lane inventory nesting exceeds the sealed limit")
+        names = os.listdir(directory_descriptor)
+        visible = 0
+        for name in sorted(names):
+            if root and name == ".git":
+                continue
+            try:
+                canonical_name = os.fsencode(name).decode("utf-8", "strict")
+            except UnicodeDecodeError as exc:
+                raise OSError("lane inventory path is not canonical UTF-8") from exc
+            if canonical_name in {"", ".", ".."} or "/" in canonical_name:
+                raise OSError("lane inventory path component is unsafe")
+            relative_path = (
+                PurePosixPath(canonical_name)
+                if prefix is None
+                else prefix / canonical_name
+            )
+            relative = relative_path.as_posix()
+            _canonical_relative(relative, "lane inventory path")
+            before = os.stat(
+                name, dir_fd=directory_descriptor, follow_symlinks=False
+            )
+            observed_count += 1
+            visible += 1
+            if observed_count > 100_000:
+                raise OSError("lane inventory entry count exceeds the sealed limit")
+
+            if stat.S_ISDIR(before.st_mode):
+                child = os.open(name, _DIRECTORY_FLAGS, dir_fd=directory_descriptor)
+                try:
+                    opened = os.fstat(child)
+                    if _physical_identity(before) != _physical_identity(opened):
+                        raise OSError("lane directory changed while opening")
+                    nodes[relative] = {
+                        "type": "DIRECTORY",
+                        "device": opened.st_dev,
+                        "inode": opened.st_ino,
+                        "sha256": None,
+                        "_mode": None,
+                        "_gitSha1": None,
+                        "_gitSha256": None,
+                        "_physicalMode": stat.S_IMODE(opened.st_mode),
+                    }
+                    child_count = visit(
+                        child, relative_path, root=False, depth=depth + 1
+                    )
+                    after = os.fstat(child)
+                    after_named = os.stat(
+                        name,
+                        dir_fd=directory_descriptor,
+                        follow_symlinks=False,
+                    )
+                    if (
+                        _stable_physical_stat(opened)
+                        != _stable_physical_stat(after)
+                        or _stable_physical_stat(before)
+                        != _stable_physical_stat(after_named)
+                    ):
+                        raise OSError("lane directory changed during inventory")
+                    if child_count == 0:
+                        leaf_paths.add(relative)
+                finally:
+                    os.close(child)
+                continue
+
+            if stat.S_ISREG(before.st_mode):
+                descriptor = os.open(name, _READ_FLAGS, dir_fd=directory_descriptor)
+                try:
+                    opened = os.fstat(descriptor)
+                    if (
+                        _physical_identity(before) != _physical_identity(opened)
+                        or opened.st_size > 256 * 1024 * 1024
+                    ):
+                        raise OSError("lane file is not a bounded stable regular file")
+                    observed_bytes += opened.st_size
+                    if observed_bytes > 1024 * 1024 * 1024:
+                        raise OSError("lane inventory bytes exceed the sealed limit")
+                    plain = hashlib.sha256()
+                    git_sha1 = hashlib.sha1()
+                    git_sha256 = hashlib.sha256()
+                    header = f"blob {opened.st_size}\0".encode("ascii")
+                    git_sha1.update(header)
+                    git_sha256.update(header)
+                    while True:
+                        chunk = os.read(descriptor, 1024 * 1024)
+                        if not chunk:
+                            break
+                        plain.update(chunk)
+                        git_sha1.update(chunk)
+                        git_sha256.update(chunk)
+                    after = os.fstat(descriptor)
+                    after_named = os.stat(
+                        name,
+                        dir_fd=directory_descriptor,
+                        follow_symlinks=False,
+                    )
+                    if (
+                        _stable_physical_stat(opened)
+                        != _stable_physical_stat(after)
+                        or _stable_physical_stat(before)
+                        != _stable_physical_stat(after_named)
+                    ):
+                        raise OSError("lane file changed during inventory")
+                    nodes[relative] = {
+                        "type": "REGULAR",
+                        "device": opened.st_dev,
+                        "inode": opened.st_ino,
+                        "sha256": plain.hexdigest(),
+                        "_mode": (
+                            "100755" if stat.S_IMODE(opened.st_mode) & 0o111 else "100644"
+                        ),
+                        "_gitSha1": git_sha1.hexdigest(),
+                        "_gitSha256": git_sha256.hexdigest(),
+                        "_physicalMode": stat.S_IMODE(opened.st_mode),
+                    }
+                finally:
+                    os.close(descriptor)
+                leaf_paths.add(relative)
+                continue
+
+            if stat.S_ISLNK(before.st_mode):
+                target = os.readlink(
+                    os.fsencode(name), dir_fd=directory_descriptor
+                )
+                if isinstance(target, str):
+                    target = os.fsencode(target)
+                after_named = os.stat(
+                    name, dir_fd=directory_descriptor, follow_symlinks=False
+                )
+                if _stable_physical_stat(before) != _stable_physical_stat(after_named):
+                    raise OSError("lane symlink changed during inventory")
+                header = f"blob {len(target)}\0".encode("ascii")
+                nodes[relative] = {
+                    "type": "SYMLINK",
+                    "device": before.st_dev,
+                    "inode": before.st_ino,
+                    "sha256": None,
+                    "_mode": "120000",
+                    "_gitSha1": hashlib.sha1(header + target).hexdigest(),
+                    "_gitSha256": hashlib.sha256(header + target).hexdigest(),
+                    "_physicalMode": stat.S_IMODE(before.st_mode),
+                }
+                leaf_paths.add(relative)
+                continue
+
+            after_named = os.stat(
+                name, dir_fd=directory_descriptor, follow_symlinks=False
+            )
+            if _stable_physical_stat(before) != _stable_physical_stat(after_named):
+                raise OSError("lane special path changed during inventory")
+            nodes[relative] = {
+                "type": "OTHER",
+                "device": before.st_dev,
+                "inode": before.st_ino,
+                "sha256": None,
+                "_mode": None,
+                "_gitSha1": None,
+                "_gitSha256": None,
+                "_physicalMode": stat.S_IMODE(before.st_mode),
+            }
+            leaf_paths.add(relative)
+        return visible
+
+    root_descriptor = os.dup(lane_descriptor)
+    try:
+        visit(root_descriptor, None, root=True, depth=0)
+    finally:
+        os.close(root_descriptor)
+    return nodes, leaf_paths
+
+
+def _node_matches_git_entry(
+    node: dict[str, object] | None, expected: tuple[str, str]
+) -> bool:
+    if node is None:
+        return False
+    mode, object_id = expected
+    digest_key = "_gitSha1" if len(object_id) == 40 else "_gitSha256"
+    return node.get("_mode") == mode and node.get(digest_key) == object_id
 
 
 def _inventory(
-    lane_descriptor: int, git_boundary: _GitBoundary
+    lane_descriptor: int,
+    git_boundary: _GitBoundary,
+    physical_snapshot: tuple[dict[str, dict[str, object]], set[str]] | None = None,
 ) -> dict[str, object]:
-    status_result = _run_git(
-        git_boundary,
-        "status",
-        "--porcelain=v1",
-        "-z",
-        "--untracked-files=all",
-        "--ignored=matching",
-        "--ignore-submodules=none",
+    _verify_git_boundary(git_boundary)
+    committed = _read_committed_entries(git_boundary)
+    indexed = _read_git_index(git_boundary)
+    nodes, physical_leaves = (
+        _scan_lane_tree(lane_descriptor)
+        if physical_snapshot is None
+        else physical_snapshot
     )
-    paths, tracked, untracked, ignored = _parse_status(status_result.stdout)
+    _verify_git_boundary(git_boundary)
+
+    tracked = {
+        path
+        for path, expected in committed.items()
+        if not _node_matches_git_entry(nodes.get(path), expected)
+    }
+    tracked.update(
+        path
+        for path in set(committed) | set(indexed)
+        if committed.get(path) != indexed.get(path)
+    )
+    untracked = {
+        path
+        for path in physical_leaves
+        if path not in committed and path not in tracked
+        and nodes[path]["type"] != "DIRECTORY"
+    }
+    ignored_roots = _literal_ignored_roots(lane_descriptor)
+    ignored: set[str] = set()
+    for path in list(untracked):
+        matches = [
+            root for root in ignored_roots if _path_is_within(path, root)
+        ]
+        if not matches:
+            continue
+        ignored.add(min(matches, key=lambda item: len(PurePosixPath(item).parts)))
+        untracked.remove(path)
+    ignored.update(
+        root
+        for root in ignored_roots
+        if root in nodes
+        and nodes[root]["type"] == "DIRECTORY"
+        and not any(_path_is_within(path, root) for path in committed)
+    )
+
+    paths = sorted(tracked | untracked | ignored)
     entries: list[dict[str, object]] = []
     symlinks: list[str] = []
     for relative in paths:
-        current = os.dup(lane_descriptor)
-        identity: dict[str, object]
-        try:
-            parts = PurePosixPath(relative).parts
-            for index, part in enumerate(parts):
-                final = index == len(parts) - 1
-                flags = _READ_FLAGS if final else _DIRECTORY_FLAGS
-                try:
-                    following = os.open(part, flags, dir_fd=current)
-                except FileNotFoundError:
-                    identity = {
-                        "type": "ABSENT",
-                        "device": None,
-                        "inode": None,
-                        "sha256": None,
-                    }
-                    break
-                except OSError:
-                    observed = os.stat(part, dir_fd=current, follow_symlinks=False)
-                    if stat.S_ISLNK(observed.st_mode):
-                        symlink_path = PurePosixPath(*parts[: index + 1]).as_posix()
-                        symlinks.append(symlink_path)
-                        identity = {
-                            "type": "SYMLINK",
-                            "device": observed.st_dev,
-                            "inode": observed.st_ino,
-                            "sha256": None,
-                        }
-                        break
-                    raise
-                os.close(current)
-                current = following
-                if final:
-                    observed = os.fstat(current)
-                    digest = None
-                    if stat.S_ISREG(observed.st_mode):
-                        hasher = hashlib.sha256()
-                        while True:
-                            chunk = os.read(current, 1024 * 1024)
-                            if not chunk:
-                                break
-                            hasher.update(chunk)
-                        digest = hasher.hexdigest()
-                    identity = {
-                        "type": (
-                            "DIRECTORY"
-                            if stat.S_ISDIR(observed.st_mode)
-                            else "REGULAR"
-                            if stat.S_ISREG(observed.st_mode)
-                            else "OTHER"
-                        ),
-                        "device": observed.st_dev,
-                        "inode": observed.st_ino,
-                        "sha256": digest,
-                    }
-        finally:
-            os.close(current)
+        node = nodes.get(relative)
+        if node is None:
+            identity = {
+                "type": "ABSENT",
+                "device": None,
+                "inode": None,
+                "sha256": None,
+            }
+        else:
+            identity = {
+                key: node[key]
+                for key in ("type", "device", "inode", "sha256")
+            }
+            if identity["type"] == "SYMLINK":
+                symlinks.append(relative)
         entries.append({"path": relative, **identity})
     return {
         "paths": paths,
-        "trackedPaths": tracked,
-        "untrackedPaths": untracked,
-        "ignoredPaths": ignored,
+        "trackedPaths": sorted(tracked),
+        "untrackedPaths": sorted(untracked),
+        "ignoredPaths": sorted(ignored),
         "symlinkPaths": sorted(set(symlinks)),
         "entries": entries,
     }
+
+
+def _physical_snapshot_changes(
+    before: tuple[dict[str, dict[str, object]], set[str]],
+    after: tuple[dict[str, dict[str, object]], set[str]],
+) -> list[str]:
+    before_nodes, before_leaves = before
+    after_nodes, after_leaves = after
+    stable_directories = {
+        path
+        for path in set(before_nodes) & set(after_nodes)
+        if before_nodes[path]["type"] == "DIRECTORY"
+        and after_nodes[path]["type"] == "DIRECTORY"
+    }
+    return sorted(
+        path
+        for path in before_leaves | after_leaves | stable_directories
+        if before_nodes.get(path) != after_nodes.get(path)
+    )
 
 
 def _persistent_breaches(paths: list[str], exact: list[str], ephemeral: list[str]) -> list[str]:
@@ -1290,7 +1910,12 @@ def run_guarded_command(
                 targets, exact, ephemeral = _validate_declared_sets(
                     lane_descriptor, requested_lane, git_boundary, durable
                 )
-                before = _inventory(lane_descriptor, git_boundary)
+                before_snapshot = _scan_lane_tree(lane_descriptor)
+                before = _inventory(
+                    lane_descriptor,
+                    git_boundary,
+                    physical_snapshot=before_snapshot,
+                )
                 before_breaches = _persistent_breaches(
                     before["paths"], exact, ephemeral
                 )
@@ -1317,9 +1942,33 @@ def run_guarded_command(
                     environment=copy.deepcopy(environment),
                     profile=_sandbox_profile(targets),
                 )
-                after = _inventory(lane_descriptor, git_boundary)
+                after_snapshot = _scan_lane_tree(lane_descriptor)
+                after = _inventory(
+                    lane_descriptor,
+                    git_boundary,
+                    physical_snapshot=after_snapshot,
+                )
                 _revalidate_targets(lane_descriptor, targets)
-                after_breaches = _persistent_breaches(after["paths"], exact, ephemeral)
+                physical_changes = _physical_snapshot_changes(
+                    before_snapshot, after_snapshot
+                )
+                inventory_coverage = [*before["paths"], *after["paths"]]
+                uncovered_physical_changes = [
+                    path
+                    for path in physical_changes
+                    if not any(
+                        _path_is_within(path, inventory_path)
+                        for inventory_path in inventory_coverage
+                    )
+                ]
+                after_breaches = sorted(
+                    {
+                        *_persistent_breaches(after["paths"], exact, ephemeral),
+                        *_persistent_breaches(
+                            uncovered_physical_changes, exact, ephemeral
+                        ),
+                    }
+                )
                 if after_breaches:
                     removed_ephemeral, _remaining_ephemeral = (
                         _declared_ephemeral_presence(lane_descriptor, ephemeral)
@@ -1362,10 +2011,23 @@ def run_guarded_command(
                 before_entries = {
                     item["path"]: item for item in before["entries"]
                 }
-                observed_paths = sorted(
+                inventory_observed = {
                     item["path"]
                     for item in after["entries"]
                     if before_entries.get(item["path"]) != item
+                }
+                observed_paths = sorted(
+                    {
+                        *inventory_observed,
+                        *(
+                            path
+                            for path in physical_changes
+                            if not any(
+                                _path_is_within(path, inventory_path)
+                                for inventory_path in inventory_observed
+                            )
+                        ),
+                    }
                 )
                 return GuardedCommandResult(
                     result.args,

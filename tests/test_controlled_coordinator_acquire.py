@@ -1245,17 +1245,17 @@ def test_registered_source_git_admin_symlink_is_rejected_no_follow(
     assert caught.value.code == "SOURCE_HEAD_UNAVAILABLE"
 
 
-def test_registered_source_path_swap_during_git_read_fails_closed(
+def test_registered_source_path_swap_during_descriptor_read_fails_closed(
     acquisition_factory, monkeypatch
 ):
     source = acquisition_factory.source_root
     moved = source.with_name(source.name + "-moved")
-    original_run = controlled_write_guard.subprocess.run
+    original_read = controlled_write_guard._read_bounded_regular_file
     swapped = False
 
-    def swap_after_git(*args, **kwargs):
+    def swap_after_descriptor_read(*args, **kwargs):
         nonlocal swapped
-        result = original_run(*args, **kwargs)
+        result = original_read(*args, **kwargs)
         if not swapped:
             source.rename(moved)
             source.mkdir()
@@ -1263,13 +1263,65 @@ def test_registered_source_path_swap_during_git_read_fails_closed(
         return result
 
     monkeypatch.setattr(
-        controlled_write_guard.subprocess, "run", swap_after_git
+        controlled_write_guard,
+        "_read_bounded_regular_file",
+        swap_after_descriptor_read,
     )
 
     with pytest.raises(ControlledCoordinationError) as caught:
         controlled_coordinator._git_identity(source)
 
     assert caught.value.code == "SOURCE_HEAD_UNAVAILABLE"
+
+
+def test_linked_source_head_does_not_consume_swapped_admin_path(
+    tmp_path, monkeypatch
+):
+    source = tmp_path / "source"
+    linked_source = tmp_path / "linked-source"
+    foreign = tmp_path / "foreign"
+    source.mkdir()
+    foreign.mkdir()
+    for repository, payload in ((source, "source\n"), (foreign, "foreign\n")):
+        _git(repository, "init", "-q")
+        _git(repository, "config", "user.name", "Git Boundary Test")
+        _git(repository, "config", "user.email", "git-boundary@example.test")
+        (repository / "tracked.txt").write_text(payload, encoding="utf-8")
+        _git(repository, "add", "tracked.txt")
+        _git(repository, "commit", "-qm", payload.strip())
+    _git(source, "worktree", "add", "-q", str(linked_source))
+    source_head = _git(linked_source, "rev-parse", "HEAD")
+    linked_ref = _git(linked_source, "symbolic-ref", "HEAD")
+    _git(source, "pack-refs", "--all")
+    assert not (source / ".git" / linked_ref).exists()
+    foreign_head = _git(foreign, "rev-parse", "HEAD")
+    assert source_head != foreign_head
+
+    dot_git = (linked_source / ".git").read_text(encoding="utf-8")
+    admin_root = Path(dot_git.removeprefix("gitdir: ").removesuffix("\n"))
+    held_admin = admin_root.with_name(admin_root.name + "-held")
+    foreign_admin = foreign / ".git"
+    original_run = controlled_write_guard.subprocess.run
+
+    def swap_admin_only_while_git_reads(*args, **kwargs):
+        admin_root.rename(held_admin)
+        foreign_admin.rename(admin_root)
+        try:
+            return original_run(*args, **kwargs)
+        finally:
+            admin_root.rename(foreign_admin)
+            held_admin.rename(admin_root)
+
+    monkeypatch.setattr(
+        controlled_write_guard.subprocess,
+        "run",
+        swap_admin_only_while_git_reads,
+    )
+
+    assert controlled_coordinator._git_identity(linked_source) == (
+        linked_source,
+        source_head,
+    )
 
 
 @pytest.mark.parametrize("mutation", ["changed", "missing", "symlink"])

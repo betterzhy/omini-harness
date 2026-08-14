@@ -27,7 +27,8 @@ from .coordinator_state import CoordinatorStateStore
 from .controlled_write_guard import (
     _close_git_boundary,
     _open_git_boundary,
-    _run_git,
+    _read_git_head,
+    _read_git_object,
 )
 from .hashing import canonical_json_bytes, sha256_bytes
 from .registration import ProjectRegistrationError, load_project_registration
@@ -238,10 +239,8 @@ def _git_identity(source_root: Path) -> tuple[Path, str]:
             error_code="SOURCE_HEAD_UNAVAILABLE",
             error_message="registered source Git identity is not physically sealed",
         )
-        top_level = Path(
-            _git_output_line(_run_git(boundary, "rev-parse", "--show-toplevel"))
-        )
-        head = _git_output_line(_run_git(boundary, "rev-parse", "HEAD"))
+        top_level = source_root
+        head = _read_git_head(boundary)
     except (ControlledCoordinationError, OSError, ValueError) as exc:
         if isinstance(exc, ControlledCoordinationError) and exc.code == "SOURCE_HEAD_UNAVAILABLE":
             raise
@@ -253,21 +252,6 @@ def _git_identity(source_root: Path) -> tuple[Path, str]:
         if source_descriptor >= 0:
             os.close(source_descriptor)
     return top_level, head
-
-
-def _git_output_line(
-    completed: subprocess.CompletedProcess[bytes], *, allow_empty: bool = False
-) -> str:
-    try:
-        value = completed.stdout.decode("utf-8", "strict")
-    except UnicodeDecodeError as exc:
-        raise ValueError("Git evidence is not UTF-8") from exc
-    if not value.endswith("\n") or value.count("\n") != 1 or "\x00" in value:
-        raise ValueError("Git evidence is not exactly one canonical line")
-    value = value[:-1]
-    if not allow_empty and not value:
-        raise ValueError("Git evidence line is empty")
-    return value
 
 
 _DIRECTORY_FLAGS = (
@@ -1100,31 +1084,29 @@ def _validate_live_lane_candidate(
             error_code="LANE_CANDIDATE_INVALID",
             error_message="candidate-bound lane Git identity is not physically sealed",
         )
-        top_level = _git_output_line(
-            _run_git(boundary, "rev-parse", "--show-toplevel")
+        top_level = str(lane_root)
+        live_head = _read_git_head(boundary)
+        commit = candidate["commit"]
+        commit_body = _read_git_object(
+            boundary, commit, expected_type="commit"
         )
-        live_head = _git_output_line(_run_git(boundary, "rev-parse", "HEAD"))
-        commit = _git_output_line(
-            _run_git(
-                boundary,
-                "rev-parse",
-                "--verify",
-                f"{candidate['commit']}^{{commit}}",
-            )
-        )
-        parents = _git_output_line(
-            _run_git(
-                boundary,
-                "show",
-                "-s",
-                "--format=%P",
-                candidate["commit"],
-            ),
-            allow_empty=True,
-        ).split()
-        tree = _git_output_line(
-            _run_git(boundary, "rev-parse", f"{candidate['commit']}^{{tree}}")
-        )
+        header, separator, _message = commit_body.partition(b"\n\n")
+        if not separator:
+            raise ValueError("candidate commit has no canonical header terminator")
+        tree_values: list[str] = []
+        parents: list[str] = []
+        for line in header.splitlines():
+            if line.startswith(b"tree "):
+                tree_values.append(
+                    line.removeprefix(b"tree ").decode("ascii", "strict")
+                )
+            elif line.startswith(b"parent "):
+                parents.append(line.removeprefix(b"parent ").decode("ascii", "strict"))
+        if len(tree_values) != 1 or len(parents) != 1:
+            raise ValueError("candidate commit must have exactly one tree and parent")
+        tree = tree_values[0]
+        _read_git_object(boundary, parents[0], expected_type="commit")
+        _read_git_object(boundary, tree, expected_type="tree")
     except (ControlledCoordinationError, OSError, ValueError) as exc:
         if isinstance(exc, ControlledCoordinationError) and exc.code in {
             "LANE_CANDIDATE_INVALID",

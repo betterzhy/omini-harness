@@ -1098,6 +1098,137 @@ def test_fixed_candidate_requires_exact_live_git_identity(lifecycle_factory, fie
     assert rejected.value.code == "LANE_CANDIDATE_INVALID"
 
 
+def test_fixed_candidate_does_not_consume_transient_foreign_git_admin(
+    lifecycle_factory, tmp_path, monkeypatch
+):
+    lease = _advance(lifecycle_factory, _acquire(lifecycle_factory), "ACTIVE")
+    command = _transition_command(lifecycle_factory, lease, "FIXED_CANDIDATE")
+    lane = Path(lease["laneRoot"])
+    lane_admin = lane / ".git"
+    held_lane_admin = tmp_path / "held-lane-candidate-admin"
+
+    foreign = tmp_path / "foreign-candidate"
+    foreign.mkdir()
+    subprocess.run(["/usr/bin/git", "-C", str(foreign), "init", "-q"], check=True)
+    subprocess.run(
+        ["/usr/bin/git", "-C", str(foreign), "config", "user.name", "Foreign"],
+        check=True,
+    )
+    subprocess.run(
+        [
+            "/usr/bin/git",
+            "-C",
+            str(foreign),
+            "config",
+            "user.email",
+            "foreign@example.test",
+        ],
+        check=True,
+    )
+    for name, contents in (("base.txt", "base\n"), ("foreign.txt", "foreign\n")):
+        (foreign / name).write_text(contents, encoding="utf-8")
+        subprocess.run(
+            ["/usr/bin/git", "-C", str(foreign), "add", name], check=True
+        )
+        subprocess.run(
+            ["/usr/bin/git", "-C", str(foreign), "commit", "-qm", name],
+            check=True,
+        )
+    foreign_candidate = {
+        field: subprocess.run(
+            ["/usr/bin/git", "-C", str(foreign), "rev-parse", expression],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        for field, expression in (
+            ("commit", "HEAD"),
+            ("parent", "HEAD^"),
+            ("tree", "HEAD^{tree}"),
+        )
+    }
+    assert foreign_candidate != command["candidateIdentity"]
+    command["candidateIdentity"] = foreign_candidate
+    _rebind_transition(lifecycle_factory, command)
+
+    foreign_admin = foreign / ".git"
+    original_run = write_guard.subprocess.run
+
+    def substitute_admin_only_during_git(*args, **kwargs):
+        argv = args[0] if args else kwargs.get("args")
+        if not argv or argv[0] != "/usr/bin/git":
+            return original_run(*args, **kwargs)
+        lane_admin.rename(held_lane_admin)
+        foreign_admin.rename(lane_admin)
+        try:
+            return original_run(*args, **kwargs)
+        finally:
+            lane_admin.rename(foreign_admin)
+            held_lane_admin.rename(lane_admin)
+
+    monkeypatch.setattr(write_guard.subprocess, "run", substitute_admin_only_during_git)
+
+    with pytest.raises(ControlledCoordinationError) as rejected:
+        _transition(lifecycle_factory, command)
+
+    assert rejected.value.code == "LANE_CANDIDATE_INVALID"
+
+
+def test_fixed_candidate_reads_held_objects_during_transient_path_substitution(
+    lifecycle_factory, tmp_path, monkeypatch
+):
+    lease = _advance(lifecycle_factory, _acquire(lifecycle_factory), "ACTIVE")
+    command = _transition_command(lifecycle_factory, lease, "FIXED_CANDIDATE")
+    lane = Path(lease["laneRoot"])
+    lane_objects = lane / ".git" / "objects"
+    held_lane_objects = lane / ".git" / "objects-held"
+
+    foreign = tmp_path / "foreign-object-view"
+    foreign.mkdir()
+    subprocess.run(["/usr/bin/git", "-C", str(foreign), "init", "-q"], check=True)
+    foreign_objects = foreign / ".git" / "objects"
+    original_run = write_guard.subprocess.run
+
+    def substitute_objects_only_during_git(*args, **kwargs):
+        argv = args[0] if args else kwargs.get("args")
+        if not argv or argv[0] != "/usr/bin/git":
+            return original_run(*args, **kwargs)
+        lane_objects.rename(held_lane_objects)
+        foreign_objects.rename(lane_objects)
+        try:
+            return original_run(*args, **kwargs)
+        finally:
+            lane_objects.rename(foreign_objects)
+            held_lane_objects.rename(lane_objects)
+
+    monkeypatch.setattr(
+        write_guard.subprocess, "run", substitute_objects_only_during_git
+    )
+
+    fixed = _transition(lifecycle_factory, command)
+
+    assert fixed["candidateIdentity"] == command["candidateIdentity"]
+
+
+def test_fixed_candidate_reads_packed_objects_from_held_object_root(
+    lifecycle_factory,
+):
+    lease = _advance(lifecycle_factory, _acquire(lifecycle_factory), "ACTIVE")
+    command = _transition_command(lifecycle_factory, lease, "FIXED_CANDIDATE")
+    lane = Path(lease["laneRoot"])
+    commit = command["candidateIdentity"]["commit"]
+    loose_commit = lane / ".git" / "objects" / commit[:2] / commit[2:]
+    assert loose_commit.is_file()
+    subprocess.run(
+        ["/usr/bin/git", "-C", str(lane), "gc", "--prune=now", "-q"], check=True
+    )
+    assert not loose_commit.exists()
+
+    fixed = _transition(lifecycle_factory, command)
+
+    assert fixed["candidateIdentity"] == command["candidateIdentity"]
+
+
 def test_fixed_candidate_ignores_git_replace_object_view(lifecycle_factory):
     lease = _advance(lifecycle_factory, _acquire(lifecycle_factory), "ACTIVE")
     command = _transition_command(lifecycle_factory, lease, "FIXED_CANDIDATE")

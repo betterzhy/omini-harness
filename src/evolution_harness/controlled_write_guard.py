@@ -1,14 +1,10 @@
 from __future__ import annotations
 
 import copy
-import ctypes
 import hashlib
 import os
-import signal
 import stat
 import subprocess
-import threading
-import time
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -29,6 +25,17 @@ _DIRECTORY_FLAGS = (
     | getattr(os, "O_CLOEXEC", 0)
 )
 _READ_FLAGS = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+_SEALED_GIT_ENVIRONMENT = {
+    "GIT_CONFIG_GLOBAL": "/dev/null",
+    "GIT_CONFIG_NOSYSTEM": "1",
+    "GIT_OPTIONAL_LOCKS": "0",
+    "GIT_TERMINAL_PROMPT": "0",
+    "HOME": "/var/empty",
+    "LANG": "C",
+    "LC_ALL": "C",
+    "PATH": "/usr/bin:/bin",
+    "XDG_CONFIG_HOME": "/var/empty",
+}
 
 
 class GuardedCommandResult(subprocess.CompletedProcess[bytes]):
@@ -57,6 +64,13 @@ class GuardedCommandResult(subprocess.CompletedProcess[bytes]):
 
 
 @dataclass
+class _AnchoredComponent:
+    relative: str
+    descriptor: int
+    identity: tuple[int, int, int]
+
+
+@dataclass
 class _AnchoredTarget:
     relative: str
     absolute: Path
@@ -64,6 +78,21 @@ class _AnchoredTarget:
     identity: tuple[int, int, int] | None
     target_type: str
     is_ephemeral: bool
+    ancestors: list[_AnchoredComponent]
+
+
+@dataclass
+class _GitBoundary:
+    lane_root: Path
+    lane_descriptor: int
+    lane_identity: tuple[int, int, int]
+    dot_git_descriptor: int
+    dot_git_identity: tuple[int, int, int]
+    dot_git_type: str
+    dot_git_contents: bytes | None
+    admin_root: Path
+    admin_descriptor: int
+    admin_identity: tuple[int, int, int]
 
 
 def _error(
@@ -128,6 +157,13 @@ def _open_target_no_follow(
     parts = PurePosixPath(relative).parts
     current = os.dup(lane_descriptor)
     final_descriptor: int | None = None
+    ancestors = [
+        _AnchoredComponent(
+            relative="",
+            descriptor=os.dup(current),
+            identity=_physical_identity(os.fstat(current)),
+        )
+    ]
     try:
         for index, part in enumerate(parts):
             final = index == len(parts) - 1
@@ -147,6 +183,7 @@ def _open_target_no_follow(
                     identity=None,
                     target_type="MISSING",
                     is_ephemeral=is_ephemeral,
+                    ancestors=ancestors,
                 )
             except OSError as exc:
                 raise _error(
@@ -176,10 +213,25 @@ def _open_target_no_follow(
                     identity=_physical_identity(observed),
                     target_type=target_type,
                     is_ephemeral=is_ephemeral,
+                    ancestors=ancestors,
                 )
+            component_relative = PurePosixPath(*parts[: index + 1]).as_posix()
+            ancestors.append(
+                _AnchoredComponent(
+                    relative=component_relative,
+                    descriptor=os.dup(following),
+                    identity=_physical_identity(os.fstat(following)),
+                )
+            )
             os.close(current)
             current = following
         raise AssertionError("empty write target")
+    except BaseException:
+        if final_descriptor is not None:
+            os.close(final_descriptor)
+        for component in ancestors:
+            os.close(component.descriptor)
+        raise
     finally:
         os.close(current)
 
@@ -189,6 +241,9 @@ def _close_targets(targets: list[_AnchoredTarget]) -> None:
         if target.descriptor is not None:
             os.close(target.descriptor)
             target.descriptor = None
+        for component in target.ancestors:
+            os.close(component.descriptor)
+        target.ancestors = []
 
 
 def _path_is_within(path: str, root: str) -> bool:
@@ -198,6 +253,7 @@ def _path_is_within(path: str, root: str) -> bool:
 def _validate_declared_sets(
     lane_descriptor: int,
     lane_root: Path,
+    git_boundary: _GitBoundary,
     durable_lease: dict[str, Any],
 ) -> tuple[list[_AnchoredTarget], list[str], list[str]]:
     footprint = durable_lease.get("fullFootprint")
@@ -248,31 +304,198 @@ def _validate_declared_sets(
                         )
                     identities[target.identity] = relative
                 targets.append(target)
-        _validate_ephemeral_paths(lane_root, ephemeral)
+        _validate_ephemeral_paths(git_boundary, ephemeral)
         return targets, exact, ephemeral
     except BaseException:
         _close_targets(targets)
         raise
 
 
-def _run_git(lane_root: Path, *args: str) -> subprocess.CompletedProcess[bytes]:
+def _read_small_descriptor(descriptor: int) -> bytes:
+    os.lseek(descriptor, 0, os.SEEK_SET)
+    contents = os.read(descriptor, 4097)
+    os.lseek(descriptor, 0, os.SEEK_SET)
+    if len(contents) > 4096:
+        raise OSError("Git administration link is too large")
+    return contents
+
+
+def _open_git_boundary(
+    lane_descriptor: int, lane_root: Path, lane_identity: tuple[int, int, int]
+) -> _GitBoundary:
+    dot_git_descriptor = -1
+    admin_descriptor = -1
     try:
-        return subprocess.run(
-            [_GIT_PATH, "-C", str(lane_root), *args],
-            check=True,
+        named = os.stat(".git", dir_fd=lane_descriptor, follow_symlinks=False)
+        if stat.S_ISLNK(named.st_mode):
+            raise OSError("Git administration path is a symlink")
+        if stat.S_ISDIR(named.st_mode):
+            dot_git_type = "DIRECTORY"
+            dot_git_descriptor = os.open(".git", _DIRECTORY_FLAGS, dir_fd=lane_descriptor)
+            dot_git_contents = None
+            admin_root = lane_root / ".git"
+            admin_descriptor = os.dup(dot_git_descriptor)
+        elif stat.S_ISREG(named.st_mode):
+            dot_git_type = "REGULAR"
+            dot_git_descriptor = os.open(".git", _READ_FLAGS, dir_fd=lane_descriptor)
+            dot_git_contents = _read_small_descriptor(dot_git_descriptor)
+            try:
+                link = dot_git_contents.decode("utf-8", "strict")
+            except UnicodeDecodeError as exc:
+                raise OSError("Git administration link is not UTF-8") from exc
+            if not link.endswith("\n") or link.count("\n") != 1 or not link.startswith(
+                "gitdir: "
+            ):
+                raise OSError("Git administration link is malformed")
+            admin_root = _canonical_absolute(
+                Path(link.removeprefix("gitdir: ").removesuffix("\n")),
+                "Git administration root",
+            )
+            admin_descriptor, _ = _open_absolute_directory_no_follow(admin_root)
+        else:
+            raise OSError("Git administration path has an unsafe type")
+
+        opened_dot_git = os.fstat(dot_git_descriptor)
+        opened_admin = os.fstat(admin_descriptor)
+        if _physical_identity(named) != _physical_identity(opened_dot_git):
+            raise OSError("Git administration path changed while opening")
+        return _GitBoundary(
+            lane_root=lane_root,
+            lane_descriptor=lane_descriptor,
+            lane_identity=lane_identity,
+            dot_git_descriptor=dot_git_descriptor,
+            dot_git_identity=_physical_identity(opened_dot_git),
+            dot_git_type=dot_git_type,
+            dot_git_contents=dot_git_contents,
+            admin_root=admin_root,
+            admin_descriptor=admin_descriptor,
+            admin_identity=_physical_identity(opened_admin),
+        )
+    except (ControlledCoordinationError, OSError, ValueError) as exc:
+        if admin_descriptor >= 0:
+            os.close(admin_descriptor)
+        if dot_git_descriptor >= 0:
+            os.close(dot_git_descriptor)
+        if isinstance(exc, ControlledCoordinationError):
+            raise _error(
+                "LANE_INVENTORY_UNAVAILABLE",
+                "Git administration path is not physically anchored",
+            ) from exc
+        raise _error(
+            "LANE_INVENTORY_UNAVAILABLE",
+            "Git administration path is not physically anchored",
+        ) from exc
+
+
+def _close_git_boundary(boundary: _GitBoundary | None) -> None:
+    if boundary is None:
+        return
+    if boundary.admin_descriptor >= 0:
+        os.close(boundary.admin_descriptor)
+        boundary.admin_descriptor = -1
+    if boundary.dot_git_descriptor >= 0:
+        os.close(boundary.dot_git_descriptor)
+        boundary.dot_git_descriptor = -1
+
+
+def _verify_git_boundary(boundary: _GitBoundary) -> None:
+    named_lane_descriptor = -1
+    named_dot_git_descriptor = -1
+    named_admin_descriptor = -1
+    try:
+        if _physical_identity(os.fstat(boundary.lane_descriptor)) != boundary.lane_identity:
+            raise OSError("held lane identity changed")
+        named_lane_descriptor, named_lane = _open_absolute_directory_no_follow(
+            boundary.lane_root
+        )
+        if _physical_identity(named_lane) != boundary.lane_identity:
+            raise OSError("named lane identity changed")
+
+        named_dot_git = os.stat(
+            ".git", dir_fd=boundary.lane_descriptor, follow_symlinks=False
+        )
+        if stat.S_ISLNK(named_dot_git.st_mode):
+            raise OSError("Git administration path became a symlink")
+        dot_git_flags = (
+            _DIRECTORY_FLAGS if boundary.dot_git_type == "DIRECTORY" else _READ_FLAGS
+        )
+        named_dot_git_descriptor = os.open(
+            ".git", dot_git_flags, dir_fd=boundary.lane_descriptor
+        )
+        if (
+            _physical_identity(os.fstat(boundary.dot_git_descriptor))
+            != boundary.dot_git_identity
+            or _physical_identity(named_dot_git) != boundary.dot_git_identity
+            or _physical_identity(os.fstat(named_dot_git_descriptor))
+            != boundary.dot_git_identity
+        ):
+            raise OSError("Git administration link identity changed")
+        if (
+            boundary.dot_git_contents is not None
+            and _read_small_descriptor(boundary.dot_git_descriptor)
+            != boundary.dot_git_contents
+        ):
+            raise OSError("Git administration link contents changed")
+
+        named_admin_descriptor, named_admin = _open_absolute_directory_no_follow(
+            boundary.admin_root
+        )
+        if (
+            _physical_identity(os.fstat(boundary.admin_descriptor))
+            != boundary.admin_identity
+            or _physical_identity(named_admin) != boundary.admin_identity
+        ):
+            raise OSError("Git administration root identity changed")
+    except OSError as exc:
+        raise _error(
+            "LANE_INVENTORY_UNAVAILABLE",
+            "Git worktree or administration identity changed",
+        ) from exc
+    finally:
+        for descriptor in (
+            named_admin_descriptor,
+            named_dot_git_descriptor,
+            named_lane_descriptor,
+        ):
+            if descriptor >= 0:
+                os.close(descriptor)
+
+
+def _run_git(
+    boundary: _GitBoundary, *args: str, check: bool = True
+) -> subprocess.CompletedProcess[bytes]:
+    try:
+        _verify_git_boundary(boundary)
+        completed = subprocess.run(
+            [
+                _GIT_PATH,
+                f"--git-dir={boundary.admin_root}",
+                f"--work-tree={boundary.lane_root}",
+                *args,
+            ],
+            cwd=boundary.lane_root,
+            env=_SEALED_GIT_ENVIRONMENT,
+            check=False,
             capture_output=True,
         )
+        _verify_git_boundary(boundary)
+        if check and completed.returncode != 0:
+            raise subprocess.CalledProcessError(
+                completed.returncode,
+                completed.args,
+                output=completed.stdout,
+                stderr=completed.stderr,
+            )
+        return completed
     except (OSError, subprocess.CalledProcessError) as exc:
         raise _error("LANE_INVENTORY_UNAVAILABLE", "Git lane inventory failed") from exc
 
 
-def _validate_ephemeral_paths(lane_root: Path, ephemeral: list[str]) -> None:
+def _validate_ephemeral_paths(boundary: _GitBoundary, ephemeral: list[str]) -> None:
     for relative in ephemeral:
         ignored = any(
-            subprocess.run(
-                [_GIT_PATH, "-C", str(lane_root), "check-ignore", "-q", "--", candidate],
-                check=False,
-                capture_output=True,
+            _run_git(
+                boundary, "check-ignore", "-q", "--", candidate, check=False
             ).returncode
             == 0
             for candidate in (relative, f"{relative}/.guard-ignore-probe")
@@ -282,10 +505,13 @@ def _validate_ephemeral_paths(lane_root: Path, ephemeral: list[str]) -> None:
                 "UNSAFE_EPHEMERAL_WRITESET",
                 f"ephemeral path is not Git-ignored: {relative}",
             )
-        tracked = subprocess.run(
-            [_GIT_PATH, "-C", str(lane_root), "ls-files", "--error-unmatch", "--", relative],
+        tracked = _run_git(
+            boundary,
+            "ls-files",
+            "--error-unmatch",
+            "--",
+            relative,
             check=False,
-            capture_output=True,
         )
         if tracked.returncode == 0:
             raise _error(
@@ -294,11 +520,12 @@ def _validate_ephemeral_paths(lane_root: Path, ephemeral: list[str]) -> None:
             )
 
 
-def _parse_status(raw: bytes) -> tuple[list[str], list[str], list[str]]:
+def _parse_status(raw: bytes) -> tuple[list[str], list[str], list[str], list[str]]:
     fields = raw.split(b"\0")
     paths: list[str] = []
     tracked: list[str] = []
     untracked: list[str] = []
+    ignored: list[str] = []
     index = 0
     while index < len(fields) and fields[index]:
         entry = fields[index]
@@ -306,31 +533,44 @@ def _parse_status(raw: bytes) -> tuple[list[str], list[str], list[str]]:
         if len(entry) < 4 or entry[2:3] != b" ":
             raise _error("LANE_INVENTORY_UNAVAILABLE", "malformed Git status entry")
         status_code = entry[:2]
-        path = os.fsdecode(entry[3:])
+        entry_paths = [os.fsdecode(entry[3:])]
         if status_code[:1] in {b"R", b"C"} or status_code[1:2] in {b"R", b"C"}:
             if index >= len(fields) or not fields[index]:
                 raise _error("LANE_INVENTORY_UNAVAILABLE", "malformed Git rename entry")
-            path = os.fsdecode(fields[index])
+            entry_paths.append(os.fsdecode(fields[index]))
             index += 1
-        normalized = _canonical_relative(path, "Git inventory path")
-        paths.append(normalized)
+        normalized_paths = [
+            _canonical_relative(path.rstrip("/"), "Git inventory path")
+            for path in entry_paths
+        ]
+        paths.extend(normalized_paths)
         if status_code == b"??":
-            untracked.append(normalized)
+            untracked.extend(normalized_paths)
+        elif status_code == b"!!":
+            ignored.extend(normalized_paths)
         else:
-            tracked.append(normalized)
-    return sorted(set(paths)), sorted(set(tracked)), sorted(set(untracked))
+            tracked.extend(normalized_paths)
+    return (
+        sorted(set(paths)),
+        sorted(set(tracked)),
+        sorted(set(untracked)),
+        sorted(set(ignored)),
+    )
 
 
-def _inventory(lane_descriptor: int, lane_root: Path) -> dict[str, object]:
+def _inventory(
+    lane_descriptor: int, git_boundary: _GitBoundary
+) -> dict[str, object]:
     status_result = _run_git(
-        lane_root,
+        git_boundary,
         "status",
         "--porcelain=v1",
         "-z",
         "--untracked-files=all",
+        "--ignored=matching",
         "--ignore-submodules=none",
     )
-    paths, tracked, untracked = _parse_status(status_result.stdout)
+    paths, tracked, untracked, ignored = _parse_status(status_result.stdout)
     entries: list[dict[str, object]] = []
     symlinks: list[str] = []
     for relative in paths:
@@ -396,6 +636,7 @@ def _inventory(lane_descriptor: int, lane_root: Path) -> dict[str, object]:
         "paths": paths,
         "trackedPaths": tracked,
         "untrackedPaths": untracked,
+        "ignoredPaths": ignored,
         "symlinkPaths": sorted(set(symlinks)),
         "entries": entries,
     }
@@ -412,22 +653,111 @@ def _persistent_breaches(paths: list[str], exact: list[str], ephemeral: list[str
     return sorted(breaches)
 
 
-def _revalidate_targets(targets: list[_AnchoredTarget]) -> None:
+def _path_exists_no_follow(lane_descriptor: int, relative: str) -> bool:
+    current = os.dup(lane_descriptor)
+    try:
+        parts = PurePosixPath(relative).parts
+        for index, part in enumerate(parts):
+            final = index == len(parts) - 1
+            try:
+                if final:
+                    os.stat(part, dir_fd=current, follow_symlinks=False)
+                    return True
+                following = os.open(part, _DIRECTORY_FLAGS, dir_fd=current)
+            except FileNotFoundError:
+                return False
+            except OSError:
+                return True
+            os.close(current)
+            current = following
+        return False
+    finally:
+        os.close(current)
+
+
+def _open_relative_no_follow(
+    lane_descriptor: int, relative: str, *, directory: bool
+) -> int:
+    if not relative:
+        return os.dup(lane_descriptor)
+    current = os.dup(lane_descriptor)
+    try:
+        parts = PurePosixPath(relative).parts
+        for index, part in enumerate(parts):
+            final = index == len(parts) - 1
+            flags = _DIRECTORY_FLAGS if not final or directory else _READ_FLAGS
+            following = os.open(part, flags, dir_fd=current)
+            os.close(current)
+            current = following
+        result = current
+        current = -1
+        return result
+    finally:
+        if current >= 0:
+            os.close(current)
+
+
+def _revalidate_targets(
+    lane_descriptor: int, targets: list[_AnchoredTarget]
+) -> None:
     for target in targets:
-        if target.identity is None:
-            continue
+        for component in target.ancestors:
+            named_descriptor = -1
+            try:
+                named_descriptor = _open_relative_no_follow(
+                    lane_descriptor, component.relative, directory=True
+                )
+                if (
+                    _physical_identity(os.fstat(component.descriptor))
+                    != component.identity
+                    or _physical_identity(os.fstat(named_descriptor))
+                    != component.identity
+                ):
+                    raise OSError("ancestor identity changed")
+            except OSError as exc:
+                raise _error(
+                    "WRITE_TARGET_IDENTITY_CHANGED",
+                    f"anchored write target ancestor changed: {target.relative}",
+                ) from exc
+            finally:
+                if named_descriptor >= 0:
+                    os.close(named_descriptor)
+
+        named_descriptor = -1
         try:
-            named = os.stat(target.absolute, follow_symlinks=False)
+            if target.identity is None:
+                try:
+                    named_descriptor = _open_relative_no_follow(
+                        lane_descriptor, target.relative, directory=False
+                    )
+                except FileNotFoundError:
+                    continue
+                observed = os.fstat(named_descriptor)
+                if not stat.S_ISREG(observed.st_mode) and not stat.S_ISDIR(
+                    observed.st_mode
+                ):
+                    raise OSError("created target has an unsafe type")
+                continue
+
+            named_descriptor = _open_relative_no_follow(
+                lane_descriptor,
+                target.relative,
+                directory=target.target_type == "DIRECTORY",
+            )
+            if (
+                target.descriptor is None
+                or _physical_identity(os.fstat(target.descriptor)) != target.identity
+                or _physical_identity(os.fstat(named_descriptor)) != target.identity
+            ):
+                raise OSError("target identity changed")
         except OSError as exc:
             raise _error(
                 "WRITE_TARGET_IDENTITY_CHANGED",
-                f"anchored write target disappeared: {target.relative}",
-            ) from exc
-        if stat.S_ISLNK(named.st_mode) or _physical_identity(named) != target.identity:
-            raise _error(
-                "WRITE_TARGET_IDENTITY_CHANGED",
                 f"anchored write target changed during execution: {target.relative}",
-            )
+            ) from exc
+        finally:
+            if named_descriptor >= 0:
+                os.close(named_descriptor)
 
 
 def _sandbox_literal(value: str) -> str:
@@ -448,7 +778,8 @@ def _sandbox_profile(targets: list[_AnchoredTarget]) -> str:
             "(version 1)",
             "(deny default)",
             "(allow file-read*)",
-            "(allow process*)",
+            "(allow process-exec*)",
+            "(deny process-fork)",
             "(allow sysctl-read)",
             "(allow mach-lookup)",
             "(allow file-write* " + " ".join(write_rules) + ")",
@@ -488,79 +819,6 @@ def _validate_sandbox_exec() -> None:
             os.close(descriptor)
 
 
-def _load_child_pid_function():
-    try:
-        library = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
-        function = library.proc_listchildpids
-        function.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_int]
-        function.restype = ctypes.c_int
-        return function
-    except (AttributeError, OSError) as exc:
-        raise _error(
-            "PROCESS_SANDBOX_UNAVAILABLE",
-            "the host cannot enumerate the complete sandbox process tree",
-        ) from exc
-
-
-class _DescendantTracker:
-    def __init__(self, root_pid: int, function):
-        self._function = function
-        self._root_pid = root_pid
-        self._known = {root_pid}
-        self._stop = threading.Event()
-        self._thread = threading.Thread(target=self._track, daemon=True)
-
-    def _children(self, pid: int) -> list[int]:
-        values = (ctypes.c_int * 4096)()
-        count = self._function(pid, ctypes.byref(values), ctypes.sizeof(values))
-        if count < 0:
-            return []
-        return [values[index] for index in range(min(count, len(values))) if values[index] > 0]
-
-    def _track(self) -> None:
-        while not self._stop.is_set():
-            for pid in tuple(self._known):
-                self._known.update(self._children(pid))
-            self._stop.wait(0.001)
-
-    def start(self) -> None:
-        self._thread.start()
-
-    def stop_and_reap(self) -> None:
-        for _ in range(10):
-            for pid in tuple(self._known):
-                self._known.update(self._children(pid))
-            time.sleep(0.001)
-        self._stop.set()
-        self._thread.join(timeout=1)
-        descendants = sorted(self._known - {self._root_pid})
-        for pid in descendants:
-            try:
-                os.kill(pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-            except PermissionError as exc:
-                raise _error(
-                    "PROCESS_SANDBOX_UNAVAILABLE",
-                    "a sandbox descendant could not be terminated",
-                ) from exc
-        deadline = time.monotonic() + 5
-        remaining = set(descendants)
-        while remaining and time.monotonic() < deadline:
-            for pid in tuple(remaining):
-                try:
-                    os.kill(pid, 0)
-                except ProcessLookupError:
-                    remaining.remove(pid)
-            if remaining:
-                time.sleep(0.01)
-        if remaining:
-            raise _error(
-                "PROCESS_SANDBOX_UNAVAILABLE",
-                "the complete sandbox process tree did not become quiescent",
-            )
-
-
 def _run_sandboxed(
     argv: list[str],
     *,
@@ -569,27 +827,22 @@ def _run_sandboxed(
     profile: str,
 ) -> subprocess.CompletedProcess[bytes]:
     command = [_SANDBOX_EXEC_PATH, "-p", profile, *argv]
-    child_pid_function = _load_child_pid_function()
     try:
-        process = subprocess.Popen(
+        completed = subprocess.run(
             command,
             cwd=cwd,
             env=environment,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            start_new_session=True,
+            check=False,
         )
     except OSError as exc:
         raise _error(
             "PROCESS_SANDBOX_UNAVAILABLE", "sandboxed command could not start"
         ) from exc
-    tracker = _DescendantTracker(process.pid, child_pid_function)
-    tracker.start()
-    try:
-        stdout, stderr = process.communicate()
-    finally:
-        tracker.stop_and_reap()
-    return subprocess.CompletedProcess(argv, process.returncode, stdout, stderr)
+    return subprocess.CompletedProcess(
+        argv, completed.returncode, completed.stdout, completed.stderr
+    )
 
 
 def _current_durable_lease(
@@ -671,6 +924,7 @@ def run_guarded_command(
                 raise _error("STALE_LEASE_BINDING", "lane root is not lease-owned")
             lane_descriptor = -1
             targets: list[_AnchoredTarget] = []
+            git_boundary: _GitBoundary | None = None
             try:
                 lane_descriptor, opened = _open_absolute_directory_no_follow(requested_lane)
                 expected = durable.get("lanePhysicalIdentity")
@@ -689,10 +943,13 @@ def run_guarded_command(
                     )
                 cwd_descriptor, _ = _open_absolute_directory_no_follow(requested_cwd)
                 os.close(cwd_descriptor)
-                targets, exact, ephemeral = _validate_declared_sets(
-                    lane_descriptor, requested_lane, durable
+                git_boundary = _open_git_boundary(
+                    lane_descriptor, requested_lane, _physical_identity(opened)
                 )
-                before = _inventory(lane_descriptor, requested_lane)
+                targets, exact, ephemeral = _validate_declared_sets(
+                    lane_descriptor, requested_lane, git_boundary, durable
+                )
+                before = _inventory(lane_descriptor, git_boundary)
                 before_breaches = _persistent_breaches(
                     before["paths"], exact, ephemeral
                 )
@@ -708,8 +965,8 @@ def run_guarded_command(
                     environment=copy.deepcopy(environment),
                     profile=_sandbox_profile(targets),
                 )
-                after = _inventory(lane_descriptor, requested_lane)
-                _revalidate_targets(targets)
+                after = _inventory(lane_descriptor, git_boundary)
+                _revalidate_targets(lane_descriptor, targets)
                 after_breaches = _persistent_breaches(after["paths"], exact, ephemeral)
                 if after_breaches:
                     raise _error(
@@ -718,9 +975,20 @@ def run_guarded_command(
                         observed_paths=after_breaches,
                     )
                 remaining_ephemeral = sorted(
-                    path
-                    for path in after["paths"]
-                    if any(_path_is_within(path, item) for item in ephemeral)
+                    {
+                        *(
+                            path
+                            for path in after["paths"]
+                            if any(
+                                _path_is_within(path, item) for item in ephemeral
+                            )
+                        ),
+                        *(
+                            item
+                            for item in ephemeral
+                            if _path_exists_no_follow(lane_descriptor, item)
+                        ),
+                    }
                 )
                 if remaining_ephemeral:
                     raise _error(
@@ -752,5 +1020,6 @@ def run_guarded_command(
                 ) from exc
             finally:
                 _close_targets(targets)
+                _close_git_boundary(git_boundary)
                 if lane_descriptor >= 0:
                     os.close(lane_descriptor)

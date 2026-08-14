@@ -24,6 +24,9 @@ def main(argv: list[str]) -> int:
         target.unlink()
         target.parent.rmdir()
         return 0
+    if operation == "mkdir":
+        Path(argv[2]).mkdir(parents=True, exist_ok=True)
+        return 0
     if operation == "symlink-write":
         link = Path(argv[2])
         link.symlink_to(Path(argv[3]), target_is_directory=True)

@@ -131,7 +131,9 @@ def guarded_lane(tmp_path, monkeypatch, coordinator_state_factory):
     _git(lane, "init", "-q")
     _git(lane, "config", "user.name", "Guard Test")
     _git(lane, "config", "user.email", "guard@example.test")
-    (lane / ".gitignore").write_text(".guard-cache/\n", encoding="utf-8")
+    (lane / ".gitignore").write_text(
+        ".guard-cache/\nignored-leak/\n", encoding="utf-8"
+    )
     (lane / "tracked.txt").write_text("base\n", encoding="utf-8")
     (lane / "allowed-dir").mkdir()
     (lane / "swappable").mkdir()
@@ -260,6 +262,47 @@ def test_preflight_to_exec_path_swap_is_detected(guarded_lane):
     assert not (guarded_lane.external_root / "escaped.txt").exists()
 
 
+def test_missing_leaf_stays_bound_to_every_existing_ancestor(
+    guarded_lane, monkeypatch, coordinator_state_factory, tmp_path
+):
+    monkeypatch.setenv(
+        "AGENT_EVOLUTION_COORDINATOR_ROOT", str(tmp_path / "ancestor-state")
+    )
+    lease = _persist_active_lease(
+        coordinator_state_factory,
+        guarded_lane.root,
+        guarded_lane.source_root,
+        ["allowed-dir/nested.txt"],
+        [".guard-cache"],
+    )
+    changed = replace(guarded_lane, lease=lease)
+    ready = changed.root / ".guard-cache" / "ready"
+    target = changed.root / "allowed-dir" / "nested.txt"
+    original = changed.root / "allowed-dir-original"
+
+    def swap_anchored_parent():
+        deadline = time.monotonic() + 5
+        while not ready.exists() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        (changed.root / "allowed-dir").rename(original)
+        (changed.root / "allowed-dir").mkdir()
+
+    attacker = threading.Thread(target=swap_anchored_parent)
+    attacker.start()
+    try:
+        with pytest.raises(ControlledCoordinationError) as caught:
+            changed.run("signal-write", str(target), str(ready), "0.30")
+    finally:
+        attacker.join(timeout=5)
+        target.unlink(missing_ok=True)
+        if (changed.root / "allowed-dir").is_dir():
+            (changed.root / "allowed-dir").rmdir()
+        if original.is_dir():
+            original.rename(changed.root / "allowed-dir")
+
+    assert caught.value.code == "WRITE_TARGET_IDENTITY_CHANGED"
+
+
 def test_child_created_symlink_cannot_escape(guarded_lane):
     link = guarded_lane.root / "allowed-dir" / "child-link"
 
@@ -271,17 +314,16 @@ def test_child_created_symlink_cannot_escape(guarded_lane):
     assert not (guarded_lane.external_root / "escaped.txt").exists()
 
 
-def test_detached_child_is_contained_and_reaped_before_return(guarded_lane):
+def test_fork_setsid_and_detached_child_are_denied_by_kernel(guarded_lane):
     target = guarded_lane.external_root / "escaped.txt"
 
     result = guarded_lane.run(
         "delayed-detached-write", str(target), "0.20"
     )
-    child_pid = int(result.stdout.decode("ascii").strip())
 
-    assert result.returncode == 0
-    with pytest.raises(ProcessLookupError):
-        os.kill(child_pid, 0)
+    assert result.returncode != 0
+    assert result.stdout == b""
+    assert b"PermissionError" in result.stderr
     assert not target.exists()
 
 
@@ -322,21 +364,13 @@ def test_unavailable_or_replaced_absolute_sandbox_fails_closed(
     assert not (guarded_lane.root / "allowed.txt").exists()
 
 
-def test_unavailable_process_tree_tracking_fails_before_process(
-    guarded_lane, monkeypatch
-):
-    def unavailable():
-        raise ControlledCoordinationError(
-            "PROCESS_SANDBOX_UNAVAILABLE", "process tree tracking unavailable"
-        )
+def test_process_fork_denial_does_not_block_direct_exec(guarded_lane):
+    target = guarded_lane.root / "allowed.txt"
 
-    monkeypatch.setattr(guard, "_load_child_pid_function", unavailable, raising=False)
+    result = guarded_lane.run("write", str(target))
 
-    with pytest.raises(ControlledCoordinationError) as caught:
-        guarded_lane.run("write", str(guarded_lane.root / "allowed.txt"))
-
-    assert caught.value.code == "PROCESS_SANDBOX_UNAVAILABLE"
-    assert not (guarded_lane.root / "allowed.txt").exists()
+    assert result.returncode == 0
+    assert target.read_text(encoding="utf-8") == "guarded write\n"
 
 
 @pytest.mark.parametrize("tracked", [True, False])
@@ -359,6 +393,69 @@ def test_before_inventory_rejects_tracked_and_untracked_breach(
     assert caught.value.observedPaths == [target.name]
 
 
+def test_git_inventory_uses_sealed_environment(guarded_lane, monkeypatch, tmp_path):
+    fake = tmp_path / "fake-git-worktree"
+    fake.mkdir()
+    _git(fake, "init", "-q")
+    _git(fake, "config", "user.name", "Fake Git")
+    _git(fake, "config", "user.email", "fake@example.test")
+    (fake / ".gitignore").write_text(".guard-cache/\n", encoding="utf-8")
+    _git(fake, "add", ".")
+    _git(fake, "commit", "-qm", "fake base")
+    monkeypatch.setenv("GIT_DIR", str(fake / ".git"))
+    monkeypatch.setenv("GIT_WORK_TREE", str(fake))
+    (guarded_lane.root / "tracked.txt").write_text("breach\n", encoding="utf-8")
+
+    with pytest.raises(ControlledCoordinationError) as caught:
+        guard.run_guarded_command(
+            guarded_lane.lease,
+            guarded_lane.root,
+            ["/usr/bin/true"],
+            cwd=guarded_lane.root,
+            environment=guarded_lane.environment,
+        )
+
+    assert caught.value.code == "WRITESET_BREACH"
+    assert caught.value.observedPaths == ["tracked.txt"]
+
+
+def test_git_admin_symlink_is_rejected_no_follow(guarded_lane):
+    git_admin = guarded_lane.root / ".git"
+    moved_admin = guarded_lane.root / ".git-real"
+    git_admin.rename(moved_admin)
+    git_admin.symlink_to(moved_admin, target_is_directory=True)
+    try:
+        with pytest.raises(ControlledCoordinationError) as caught:
+            guard.run_guarded_command(
+                guarded_lane.lease,
+                guarded_lane.root,
+                ["/usr/bin/true"],
+                cwd=guarded_lane.root,
+                environment=guarded_lane.environment,
+            )
+    finally:
+        git_admin.unlink(missing_ok=True)
+        moved_admin.rename(git_admin)
+
+    assert caught.value.code == "LANE_INVENTORY_UNAVAILABLE"
+
+
+def test_porcelain_rename_and_copy_preserve_both_physical_paths():
+    paths, tracked, untracked, ignored = guard._parse_status(
+        b"R  destination.txt\0source.txt\0C  copy.txt\0original.txt\0"
+    )
+
+    assert paths == [
+        "copy.txt",
+        "destination.txt",
+        "original.txt",
+        "source.txt",
+    ]
+    assert tracked == paths
+    assert untracked == []
+    assert ignored == []
+
+
 def test_ignored_lane_exclusive_ephemeral_path_must_be_removed(guarded_lane):
     target = guarded_lane.root / ".guard-cache" / "temporary.txt"
 
@@ -367,6 +464,41 @@ def test_ignored_lane_exclusive_ephemeral_path_must_be_removed(guarded_lane):
     assert result.returncode == 0
     assert result.ephemeralPathsRemoved is True
     assert not (guarded_lane.root / ".guard-cache").exists()
+
+
+def test_undeclared_ignored_path_is_a_persistent_breach(guarded_lane):
+    target = guarded_lane.root / "ignored-leak" / "persistent.txt"
+    target.parent.mkdir()
+    target.write_text("ignored breach\n", encoding="utf-8")
+
+    with pytest.raises(ControlledCoordinationError) as caught:
+        guard.run_guarded_command(
+            guarded_lane.lease,
+            guarded_lane.root,
+            ["/usr/bin/true"],
+            cwd=guarded_lane.root,
+            environment=guarded_lane.environment,
+        )
+
+    assert caught.value.code == "WRITESET_BREACH"
+    assert caught.value.observedPaths == ["ignored-leak"]
+
+
+def test_empty_ephemeral_root_left_by_child_is_not_reported_removed(guarded_lane):
+    target = guarded_lane.root / ".guard-cache"
+    left_behind = False
+
+    try:
+        with pytest.raises(ControlledCoordinationError) as caught:
+            guarded_lane.run("mkdir", str(target))
+    finally:
+        left_behind = target.is_dir()
+        if target.is_dir():
+            target.rmdir()
+
+    assert caught.value.code == "EPHEMERAL_PATH_NOT_REMOVED"
+    assert caught.value.observedPaths == [".guard-cache"]
+    assert left_behind is True
 
 
 def test_nonignored_ephemeral_path_is_rejected_before_process(

@@ -28,13 +28,19 @@
     },
     "lifecycleAuthorityProof": {
       "type": "object",
-      "required": ["authorityReference", "authorityDigest", "attemptId", "expectedState", "nextState", "assertedAt", "proofDigest"],
+      "required": ["authorityReference", "authorityDigest", "attemptId", "expectedState", "nextState", "candidateIdentity", "reviewBindingDigest", "reviewEvidenceDigest", "reviewerId", "reviewerAuthorityReference", "reviewerAuthorityDigest", "assertedAt", "proofDigest"],
       "properties": {
         "authorityReference": {"type": "string", "minLength": 1},
         "authorityDigest": {"$ref": "#/$defs/digest"},
         "attemptId": {"$ref": "#/$defs/id"},
         "expectedState": {"$ref": "#/$defs/state"},
         "nextState": {"$ref": "#/$defs/state"},
+        "candidateIdentity": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/candidateIdentity"}]},
+        "reviewBindingDigest": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/digest"}]},
+        "reviewEvidenceDigest": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/digest"}]},
+        "reviewerId": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/id"}]},
+        "reviewerAuthorityReference": {"anyOf": [{"type": "null"}, {"type": "string", "minLength": 1}]},
+        "reviewerAuthorityDigest": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/digest"}]},
         "assertedAt": {"type": "string", "minLength": 1},
         "proofDigest": {"$ref": "#/$defs/digest"}
       },
@@ -42,10 +48,12 @@
     },
     "reviewEvidence": {
       "type": "object",
-      "required": ["candidateIdentity", "reviewerId", "verdict", "findingCounts", "reviewedAt", "reviewBindingDigest", "evidenceDigest"],
+      "required": ["candidateIdentity", "reviewerId", "reviewerAuthorityReference", "reviewerAuthorityDigest", "verdict", "findingCounts", "reviewedAt", "reviewBindingDigest", "evidenceDigest"],
       "properties": {
         "candidateIdentity": {"$ref": "#/$defs/candidateIdentity"},
         "reviewerId": {"$ref": "#/$defs/id"},
+        "reviewerAuthorityReference": {"type": "string", "minLength": 1},
+        "reviewerAuthorityDigest": {"$ref": "#/$defs/digest"},
         "verdict": {"const": "GO_ZERO_FINDINGS"},
         "findingCounts": {
           "type": "object",

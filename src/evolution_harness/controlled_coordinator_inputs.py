@@ -8,6 +8,7 @@ from typing import Any
 from .controlled_inputs import (
     ControlledPlanningError,
     normalize_authorization_envelope,
+    normalize_planning_request,
     normalize_slice_descriptor,
     parse_rfc3339,
 )
@@ -184,6 +185,9 @@ def _normalize_acquire_evidence(
     repository_root: Path, command: dict[str, Any]
 ) -> None:
     try:
+        command["planningRequest"] = normalize_planning_request(
+            repository_root, command["planningRequest"]
+        )
         command["sliceDescriptor"] = normalize_slice_descriptor(
             repository_root, command["sliceDescriptor"]
         )
@@ -193,6 +197,31 @@ def _normalize_acquire_evidence(
     except (ControlledPlanningError, SchemaValidationError) as exc:
         code = getattr(exc, "code", "COORDINATOR_COMMAND_INVALID")
         raise ControlledCoordinationError(code, str(exc)) from exc
+
+    request = command["planningRequest"]
+    for authority in request["authoritySnapshot"]["authorities"]:
+        authority["path"] = _canonical_relative_path(
+            authority["path"], "planningRequest.authoritySnapshot.authorities.path"
+        )
+    for fact_id, fact in request["authoritySnapshot"]["facts"].items():
+        fact["sourcePath"] = _canonical_relative_path(
+            fact["sourcePath"],
+            f"planningRequest.authoritySnapshot.facts.{fact_id}.sourcePath",
+        )
+    request_authority_ids = [
+        item["id"] for item in request["authoritySnapshot"]["authorities"]
+    ]
+    request_authority_paths = [
+        item["path"] for item in request["authoritySnapshot"]["authorities"]
+    ]
+    if (
+        len(request_authority_ids) != len(set(request_authority_ids))
+        or len(request_authority_paths) != len(set(request_authority_paths))
+    ):
+        raise ControlledCoordinationError(
+            "AUTHORITY_RECORD_DUPLICATE",
+            "planning request authority records must have unique IDs and paths",
+        )
 
     proof = command["admissionAuthorityProof"]
     proof["authorityReference"] = _canonical_relative_path(
@@ -206,6 +235,25 @@ def _normalize_acquire_evidence(
     binding["laneRoot"] = _canonical_absolute_path(
         binding["laneRoot"], "admissionAuthorityProof.binding.laneRoot"
     )
+
+
+def _validate_planning_request_binding(command: dict[str, Any]) -> None:
+    request = command["planningRequest"]
+    request_descriptors = {item["sliceId"]: item for item in request["slices"]}
+    if (
+        request["projectId"] != command["projectId"]
+        or request["batchBaseCommit"] != command["expectedLaneBase"]
+        or request["authoritySnapshot"] != command["authoritySnapshot"]
+        or request["authorizationEnvelope"] != command["authorizationEnvelope"]
+        or request["conflictPolicyVersion"] != command["conflictPolicyVersion"]
+        or request["asOf"] != command["asOf"]
+        or request_descriptors.get(command["sliceId"])
+        != command["sliceDescriptor"]
+    ):
+        raise ControlledCoordinationError(
+            "ADMISSION_AUTHORITY_BINDING_MISMATCH",
+            "planning request does not bind the acquire evidence",
+        )
 
 
 def _validate_admission_authority(command: dict[str, Any]) -> None:
@@ -354,7 +402,7 @@ def _validate_admission_authority(command: dict[str, Any]) -> None:
         )
 
 
-def _validate_plan_binding(command: dict[str, Any]) -> None:
+def _validate_plan_binding(repository_root: Path, command: dict[str, Any]) -> None:
     plan = command["executionPlan"]
     expected_plan_id = _stable_id(
         "batch-plan", {key: value for key, value in plan.items() if key != "batchPlanId"}
@@ -382,6 +430,39 @@ def _validate_plan_binding(command: dict[str, Any]) -> None:
         raise ControlledCoordinationError(
             "EXECUTION_PLAN_BINDING_MISMATCH",
             "expectedLaneBase does not match execution plan batch base",
+        )
+
+    action_class = command["sliceDescriptor"]["authorizationClass"]
+    if action_class in _PROTECTED_ACTION_CLASSES:
+        raise ControlledCoordinationError(
+            "PROTECTED_ACTION_DENIED",
+            f"protected action cannot be acquired: {action_class}",
+        )
+
+    try:
+        from .controlled_planner import build_provisional_execution_plan
+
+        rebuilt_bundle = build_provisional_execution_plan(
+            repository_root, command["planningRequest"]
+        )
+    except (ControlledPlanningError, SchemaValidationError) as exc:
+        code = getattr(exc, "code", "COORDINATOR_COMMAND_INVALID")
+        raise ControlledCoordinationError(code, str(exc)) from exc
+    rebuilt_plan = rebuilt_bundle["executionPlan"]
+    if canonical_json_bytes(rebuilt_plan) != canonical_json_bytes(plan):
+        statuses = (
+            rebuilt_plan["rejected"]
+            + rebuilt_plan["blocked"]
+            + rebuilt_plan["queued"]
+        )
+        target = next(
+            (item for item in statuses if item["sliceId"] == command["sliceId"]),
+            None,
+        )
+        reasons = target["reasons"] if target is not None else ["PLAN_DRIFT"]
+        raise ControlledCoordinationError(
+            "EXECUTION_PLAN_BINDING_MISMATCH",
+            "execution plan differs from Phase 1A replay: " + ",".join(reasons),
         )
 
     admissions = [
@@ -421,10 +502,6 @@ def _validate_plan_binding(command: dict[str, Any]) -> None:
             "descriptor or envelope does not match proposed admission",
         )
     action_class = descriptor["authorizationClass"]
-    if action_class in _PROTECTED_ACTION_CLASSES:
-        raise ControlledCoordinationError(
-            "PROTECTED_ACTION_DENIED", f"protected action cannot be acquired: {action_class}"
-        )
     if (
         action_class not in envelope["permittedActionClasses"]
         or action_class in envelope["deniedActions"]
@@ -485,8 +562,9 @@ def normalize_acquire_command(
     _verify_command_digest(normalized)
     _validate_timestamp(normalized["asOf"])
     _validate_timestamp(normalized["executionPlan"]["asOf"])
+    _validate_planning_request_binding(normalized)
     _validate_admission_authority(normalized)
-    _validate_plan_binding(normalized)
+    _validate_plan_binding(repository_root, normalized)
     return normalized
 
 
@@ -501,6 +579,11 @@ def _validate_lifecycle_authority(command: dict[str, Any]) -> None:
     proof["authorityReference"] = _canonical_relative_path(
         proof["authorityReference"], "lifecycleAuthorityProof.authorityReference"
     )
+    if proof["reviewerAuthorityReference"] is not None:
+        proof["reviewerAuthorityReference"] = _canonical_relative_path(
+            proof["reviewerAuthorityReference"],
+            "lifecycleAuthorityProof.reviewerAuthorityReference",
+        )
     _validate_timestamp(proof["assertedAt"])
     expected_digest = _sha256(
         {key: value for key, value in proof.items() if key != "proofDigest"}
@@ -511,7 +594,7 @@ def _validate_lifecycle_authority(command: dict[str, Any]) -> None:
         command["attemptId"],
         command["expectedState"],
         command["nextState"],
-    ):
+    ) or proof["candidateIdentity"] != command["candidateIdentity"]:
         raise ControlledCoordinationError(
             "LIFECYCLE_AUTHORITY_BINDING_MISMATCH",
             "lifecycle authority proof does not bind the transition",
@@ -520,8 +603,18 @@ def _validate_lifecycle_authority(command: dict[str, Any]) -> None:
 
 def _validate_review_evidence(command: dict[str, Any]) -> None:
     evidence = command["reviewEvidence"]
+    proof = command["lifecycleAuthorityProof"]
     if command["nextState"] != "REVIEW_GO":
-        if evidence is not None:
+        if evidence is not None or any(
+            proof[field] is not None
+            for field in (
+                "reviewBindingDigest",
+                "reviewEvidenceDigest",
+                "reviewerId",
+                "reviewerAuthorityReference",
+                "reviewerAuthorityDigest",
+            )
+        ):
             raise ControlledCoordinationError(
                 "REVIEW_EVIDENCE_UNEXPECTED",
                 "review evidence is accepted only for REVIEW_GO",
@@ -532,12 +625,19 @@ def _validate_review_evidence(command: dict[str, Any]) -> None:
             "REVIEW_EVIDENCE_REQUIRED",
             "REVIEW_GO requires candidate-bound zero-finding review evidence",
         )
+    evidence["reviewerAuthorityReference"] = _canonical_relative_path(
+        evidence["reviewerAuthorityReference"],
+        "reviewEvidence.reviewerAuthorityReference",
+    )
     _validate_timestamp(evidence["reviewedAt"])
     expected_binding_digest = _sha256(
         {
             "candidateIdentity": command["candidateIdentity"],
             "authoritySnapshotFingerprint": command["authoritySnapshotFingerprint"],
             "attemptId": command["attemptId"],
+            "reviewerId": evidence["reviewerId"],
+            "reviewerAuthorityReference": evidence["reviewerAuthorityReference"],
+            "reviewerAuthorityDigest": evidence["reviewerAuthorityDigest"],
         }
     )
     expected_evidence_digest = _sha256(
@@ -547,6 +647,12 @@ def _validate_review_evidence(command: dict[str, Any]) -> None:
         evidence["candidateIdentity"] != command["candidateIdentity"]
         or evidence["reviewBindingDigest"] != expected_binding_digest
         or evidence["evidenceDigest"] != expected_evidence_digest
+        or proof["reviewBindingDigest"] != evidence["reviewBindingDigest"]
+        or proof["reviewEvidenceDigest"] != evidence["evidenceDigest"]
+        or proof["reviewerId"] != evidence["reviewerId"]
+        or proof["reviewerAuthorityReference"]
+        != evidence["reviewerAuthorityReference"]
+        or proof["reviewerAuthorityDigest"] != evidence["reviewerAuthorityDigest"]
     ):
         raise ControlledCoordinationError(
             "REVIEW_EVIDENCE_BINDING_MISMATCH",

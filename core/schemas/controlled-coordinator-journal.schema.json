@@ -18,7 +18,7 @@
   "type": "object",
   "required": [
     "schemaVersion", "projectExecutionKey", "journalVersion",
-    "nextFencingToken", "recoveryState", "leases", "receipts",
+    "nextFencingToken", "recoveryState", "recoveryEvidence", "leases", "receipts",
     "integrationTransactions"
   ],
   "properties": {
@@ -38,5 +38,22 @@
     },
     "integrationTransactions": {"type": "array", "maxItems": 0}
   },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "recoveryState": {
+            "enum": ["PROJECT_WRITESET_RECOVERY", "STATE_RECOVERY_REQUIRED"]
+          }
+        },
+        "required": ["recoveryState"]
+      },
+      "then": {
+        "properties": {
+          "recoveryEvidence": {"$ref": "#/$defs/recoveryEvidence"}
+        }
+      }
+    }
+  ],
   "additionalProperties": false
 }

@@ -36,7 +36,7 @@
   "required": [
     "schemaVersion", "projectId", "batchPlanId", "sliceId", "attemptId",
     "authoritySnapshotFingerprint", "authorizationEnvelopeDigest",
-    "conflictPolicyVersion", "asOf", "executionPlan", "sliceDescriptor",
+    "conflictPolicyVersion", "asOf", "planningRequest", "executionPlan", "sliceDescriptor",
     "authorizationEnvelope", "authoritySnapshot", "admissionAuthorityProof", "fullFootprint",
     "originalSourceRoot", "laneRoot", "expectedLaneBase", "commandDigest"
   ],
@@ -50,6 +50,7 @@
     "authorizationEnvelopeDigest": {"$ref": "#/$defs/digest"},
     "conflictPolicyVersion": {"const": "controlled-conflict-policy/v1"},
     "asOf": {"type": "string", "minLength": 1},
+    "planningRequest": {"$ref": "https://agent-evolution.local/core/schemas/controlled-planning-request.schema.json"},
     "executionPlan": {"$ref": "https://agent-evolution.local/core/schemas/controlled-execution-plan.schema.json"},
     "sliceDescriptor": {"$ref": "https://agent-evolution.local/core/schemas/controlled-slice-descriptor.schema.json"},
     "authorizationEnvelope": {"$ref": "https://agent-evolution.local/core/schemas/controlled-authorization-envelope.schema.json"},

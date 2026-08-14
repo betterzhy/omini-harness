@@ -62,6 +62,75 @@ def _refresh_footprint_id(command):
     )
 
 
+def _refresh_acquire_snapshot_and_plan(command):
+    snapshot = command["authoritySnapshot"]
+    snapshot["sourceRevision"]["authoritySetDigest"] = _sha256(
+        snapshot["authorities"]
+    )
+    snapshot["snapshotFingerprint"] = _sha256(
+        {
+            key: value
+            for key, value in snapshot.items()
+            if key != "snapshotFingerprint"
+        }
+    )
+    command["authoritySnapshotFingerprint"] = snapshot["snapshotFingerprint"]
+    command["executionPlan"]["authoritySnapshotFingerprint"] = snapshot[
+        "snapshotFingerprint"
+    ]
+    _refresh_batch_plan_id(command["executionPlan"])
+    command["batchPlanId"] = command["executionPlan"]["batchPlanId"]
+
+
+def _forge_acquire_descriptor(command, **changes):
+    descriptor = command["sliceDescriptor"]
+    descriptor.update(changes)
+    descriptor["descriptorDigest"] = descriptor_digest(descriptor)
+    command["fullFootprint"] = {
+        **command["fullFootprint"],
+        **{
+            field: copy.deepcopy(descriptor[field])
+            for field in (
+                "ownerSet",
+                "factFamilySet",
+                "publicContractSet",
+                "producerConsumerSet",
+                "bindingSet",
+                "exactWriteSet",
+                "ephemeralWriteSet",
+                "sharedArtifactSet",
+                "dependencySet",
+                "migrationResourceSet",
+                "authorityReferences",
+            )
+        },
+    }
+    _refresh_footprint_id(command)
+    admission = command["executionPlan"]["proposedAdmissions"][0]
+    admission["descriptorDigest"] = descriptor["descriptorDigest"]
+    admission["exactWriteSetDigest"] = _sha256(sorted(descriptor["exactWriteSet"]))
+    descriptor_fact = command["authoritySnapshot"]["facts"][
+        "controlled_planning.slice_descriptor_digests"
+    ]
+    descriptor_fact["rawValue"] = canonical_json_bytes(
+        [descriptor["descriptorDigest"]]
+    ).decode("utf-8")
+    descriptor_fact["normalizedValue"] = descriptor_fact["rawValue"]
+    if "planningRequest" in command:
+        command["planningRequest"]["slices"] = [copy.deepcopy(descriptor)]
+        command["planningRequest"]["dependencyGraphDigest"] = command[
+            "executionPlan"
+        ]["dependencyGraphDigest"]
+        command["planningRequest"]["authoritySnapshot"] = copy.deepcopy(
+            command["authoritySnapshot"]
+        )
+    _refresh_acquire_snapshot_and_plan(command)
+    if "planningRequest" in command:
+        command["planningRequest"]["authoritySnapshot"] = copy.deepcopy(
+            command["authoritySnapshot"]
+        )
+
+
 @dataclass
 class CoordinatorFactory:
     repository_root: object
@@ -148,6 +217,7 @@ class CoordinatorFactory:
             ],
             "conflictPolicyVersion": plan["conflictPolicyVersion"],
             "asOf": plan["asOf"],
+            "planningRequest": request,
             "executionPlan": plan,
             "sliceDescriptor": descriptor,
             "authorizationEnvelope": envelope,
@@ -183,12 +253,57 @@ class CoordinatorFactory:
             },
         }
         value.update(copy.deepcopy(changes))
+        if "reviewEvidence" not in value:
+            value["reviewEvidence"] = None
+            if value["nextState"] == "REVIEW_GO":
+                review = {
+                    "candidateIdentity": copy.deepcopy(value["candidateIdentity"]),
+                    "reviewerId": "reviewer:neutral",
+                    "reviewerAuthorityReference": "authority/reviewers/neutral.yaml",
+                    "reviewerAuthorityDigest": "sha256:" + "b" * 64,
+                    "verdict": "GO_ZERO_FINDINGS",
+                    "findingCounts": {"p0": 0, "p1": 0, "p2": 0},
+                    "reviewedAt": "2026-08-13T12:29:30Z",
+                }
+                review["reviewBindingDigest"] = _sha256(
+                    {
+                        "candidateIdentity": value["candidateIdentity"],
+                        "authoritySnapshotFingerprint": value[
+                            "authoritySnapshotFingerprint"
+                        ],
+                        "attemptId": value["attemptId"],
+                        "reviewerId": review["reviewerId"],
+                        "reviewerAuthorityReference": review[
+                            "reviewerAuthorityReference"
+                        ],
+                        "reviewerAuthorityDigest": review[
+                            "reviewerAuthorityDigest"
+                        ],
+                    }
+                )
+                review["evidenceDigest"] = _sha256(review)
+                value["reviewEvidence"] = review
+        review = value["reviewEvidence"]
         authority_proof = value.get("lifecycleAuthorityProof") or {
             "authorityReference": "authority/lifecycle.yaml",
             "authorityDigest": "sha256:" + "a" * 64,
             "attemptId": value["attemptId"],
             "expectedState": value["expectedState"],
             "nextState": value["nextState"],
+            "candidateIdentity": copy.deepcopy(value["candidateIdentity"]),
+            "reviewBindingDigest": (
+                review["reviewBindingDigest"] if review is not None else None
+            ),
+            "reviewEvidenceDigest": (
+                review["evidenceDigest"] if review is not None else None
+            ),
+            "reviewerId": review["reviewerId"] if review is not None else None,
+            "reviewerAuthorityReference": (
+                review["reviewerAuthorityReference"] if review is not None else None
+            ),
+            "reviewerAuthorityDigest": (
+                review["reviewerAuthorityDigest"] if review is not None else None
+            ),
             "assertedAt": "2026-08-13T12:29:00Z",
         }
         authority_proof["proofDigest"] = _sha256(
@@ -199,27 +314,6 @@ class CoordinatorFactory:
             }
         )
         value["lifecycleAuthorityProof"] = authority_proof
-        if "reviewEvidence" not in value:
-            value["reviewEvidence"] = None
-            if value["nextState"] == "REVIEW_GO":
-                review = {
-                    "candidateIdentity": copy.deepcopy(value["candidateIdentity"]),
-                    "reviewerId": "reviewer:neutral",
-                    "verdict": "GO_ZERO_FINDINGS",
-                    "findingCounts": {"p0": 0, "p1": 0, "p2": 0},
-                    "reviewedAt": "2026-08-13T12:29:30Z",
-                    "reviewBindingDigest": _sha256(
-                        {
-                            "candidateIdentity": value["candidateIdentity"],
-                            "authoritySnapshotFingerprint": value[
-                                "authoritySnapshotFingerprint"
-                            ],
-                            "attemptId": value["attemptId"],
-                        }
-                    ),
-                }
-                review["evidenceDigest"] = _sha256(review)
-                value["reviewEvidence"] = review
         return _with_command_digest(value)
 
     def observation(self, **changes):
@@ -313,6 +407,10 @@ def _mutate_acquire(command, field):
         "authorizationEnvelopeDigest": "sha256:" + "b" * 64,
         "conflictPolicyVersion": "controlled-conflict-policy/v2",
         "asOf": "2026-08-13T12:00:01Z",
+        "planningRequest": {
+            **command["planningRequest"],
+            "asOf": "2026-08-13T12:00:01Z",
+        },
         "executionPlan": {**command["executionPlan"], "asOf": "2026-08-13T12:00:01Z"},
         "sliceDescriptor": changed_descriptor,
         "authorizationEnvelope": changed_envelope,
@@ -337,6 +435,7 @@ def _mutate_acquire(command, field):
         "authorizationEnvelopeDigest",
         "conflictPolicyVersion",
         "asOf",
+        "planningRequest",
         "executionPlan",
         "sliceDescriptor",
         "authorizationEnvelope",
@@ -526,7 +625,7 @@ def test_acquire_rejects_dirty_authority_snapshot_even_when_rehashed(
     with pytest.raises(ControlledCoordinationError) as caught:
         normalize_acquire_command(repository_root, command)
 
-    assert caught.value.code == "ADMISSION_AUTHORITY_BINDING_MISMATCH"
+    assert caught.value.code == "AUTHORITY_SOURCE_NOT_CLEAN_GIT"
 
 
 def test_acquire_rejects_protected_descriptor_forged_into_proposed_admissions(
@@ -554,6 +653,76 @@ def test_acquire_rejects_protected_descriptor_forged_into_proposed_admissions(
         normalize_acquire_command(repository_root, command)
 
     assert caught.value.code == "PROTECTED_ACTION_DENIED"
+
+
+@pytest.mark.parametrize(
+    ("descriptor_changes", "planner_reason"),
+    [
+        ({"state": "PROPOSED"}, "SLICE_NOT_READY"),
+        ({"exactWriteSet": ["outside/source"]}, "WRITESET_OUTSIDE_PREFIX"),
+        ({"portfolioId": "portfolio:forged"}, "PORTFOLIO_NOT_PERMITTED"),
+        ({"deliveryTrackId": "track:forged"}, "DELIVERY_TRACK_NOT_PERMITTED"),
+        ({"sliceClass": "class:forged"}, "SLICE_CLASS_NOT_PERMITTED"),
+    ],
+)
+def test_acquire_replays_phase1a_authorization_instead_of_trusting_forged_plan(
+    repository_root,
+    coordinator_factory,
+    descriptor_changes,
+    planner_reason,
+):
+    command = coordinator_factory.acquire()
+    _forge_acquire_descriptor(command, **descriptor_changes)
+    command = _with_command_digest(command)
+
+    with pytest.raises(ControlledCoordinationError) as caught:
+        normalize_acquire_command(repository_root, command)
+
+    assert caught.value.code == "EXECUTION_PLAN_BINDING_MISMATCH"
+    assert planner_reason in str(caught.value)
+
+
+def test_acquire_replays_phase1a_envelope_expiry(repository_root, coordinator_factory):
+    command = coordinator_factory.acquire()
+    expired_as_of = "2026-08-14T00:00:00Z"
+    command["asOf"] = expired_as_of
+    command["planningRequest"]["asOf"] = expired_as_of
+    command["executionPlan"]["asOf"] = expired_as_of
+    _refresh_batch_plan_id(command["executionPlan"])
+    command["batchPlanId"] = command["executionPlan"]["batchPlanId"]
+    command = _with_command_digest(command)
+
+    with pytest.raises(ControlledCoordinationError) as caught:
+        normalize_acquire_command(repository_root, command)
+
+    assert caught.value.code == "EXECUTION_PLAN_BINDING_MISMATCH"
+    assert "ENVELOPE_EXPIRED" in str(caught.value)
+
+
+@pytest.mark.parametrize("authority_mutation", ["path_alias", "duplicate_id"])
+def test_acquire_rejects_self_consistent_noncanonical_authority_records(
+    repository_root, coordinator_factory, authority_mutation
+):
+    command = coordinator_factory.acquire()
+    snapshot = command["authoritySnapshot"]
+    if authority_mutation == "path_alias":
+        snapshot["authorities"][1]["path"] = "authority//slice-neutral-a.yaml"
+    else:
+        snapshot["authorities"][1]["id"] = snapshot["authorities"][0]["id"]
+    if "planningRequest" in command:
+        command["planningRequest"]["authoritySnapshot"] = copy.deepcopy(snapshot)
+    _refresh_acquire_snapshot_and_plan(command)
+    if "planningRequest" in command:
+        command["planningRequest"]["authoritySnapshot"] = copy.deepcopy(snapshot)
+    command = _with_command_digest(command)
+
+    with pytest.raises(ControlledCoordinationError) as caught:
+        normalize_acquire_command(repository_root, command)
+
+    assert caught.value.code in {
+        "AUTHORITY_RECORD_DUPLICATE",
+        "UNSAFE_COORDINATOR_PATH",
+    }
 
 
 @pytest.mark.parametrize(
@@ -1018,6 +1187,41 @@ def test_review_go_rejects_review_evidence_for_another_candidate(
     assert caught.value.code == "REVIEW_EVIDENCE_BINDING_MISMATCH"
 
 
+def test_review_go_rejects_coordinated_candidate_and_reviewer_replacement(
+    repository_root, coordinator_factory
+):
+    command = coordinator_factory.transition(
+        expectedState="FIXED_CANDIDATE", nextState="REVIEW_GO"
+    )
+    forged_candidate = {
+        "commit": "d" * 40,
+        "parent": "e" * 40,
+        "tree": "f" * 40,
+    }
+    command["candidateIdentity"] = forged_candidate
+    evidence = command["reviewEvidence"]
+    evidence["candidateIdentity"] = copy.deepcopy(forged_candidate)
+    evidence["reviewerId"] = "reviewer:forged"
+    evidence["reviewBindingDigest"] = _sha256(
+        {
+            "candidateIdentity": forged_candidate,
+            "authoritySnapshotFingerprint": command[
+                "authoritySnapshotFingerprint"
+            ],
+            "attemptId": command["attemptId"],
+        }
+    )
+    evidence["evidenceDigest"] = _sha256(
+        {key: value for key, value in evidence.items() if key != "evidenceDigest"}
+    )
+    command = _with_command_digest(command)
+
+    with pytest.raises(ControlledCoordinationError) as caught:
+        normalize_transition_command(repository_root, command)
+
+    assert caught.value.code == "LIFECYCLE_AUTHORITY_BINDING_MISMATCH"
+
+
 def test_review_go_rejects_nonzero_finding_counts(
     repository_root, coordinator_factory
 ):
@@ -1091,6 +1295,7 @@ def test_lease_journal_and_receipt_schemas_are_closed(
         "journalVersion": 1,
         "nextFencingToken": 2,
         "recoveryState": "CLEAR",
+        "recoveryEvidence": None,
         "leases": [lease],
         "receipts": [receipt],
         "integrationTransactions": [],
@@ -1108,6 +1313,48 @@ def test_lease_journal_and_receipt_schemas_are_closed(
         unknown = {**value, "surprise": True}
         with pytest.raises(SchemaValidationError):
             store.validate(schema_path, unknown)
+
+
+def test_journal_requires_explicit_nullable_recovery_evidence(repository_root):
+    journal = {
+        "schemaVersion": "controlled-coordinator-journal/v1",
+        "projectExecutionKey": "project-execution:" + "1" * 64,
+        "journalVersion": 0,
+        "nextFencingToken": 1,
+        "recoveryState": "CLEAR",
+        "leases": [],
+        "receipts": [],
+        "integrationTransactions": [],
+    }
+
+    with pytest.raises(SchemaValidationError):
+        SchemaStore(repository_root).validate(
+            "core/schemas/controlled-coordinator-journal.schema.json", journal
+        )
+
+
+@pytest.mark.parametrize(
+    "recovery_state", ["PROJECT_WRITESET_RECOVERY", "STATE_RECOVERY_REQUIRED"]
+)
+def test_pending_recovery_states_require_complete_nonnull_evidence(
+    repository_root, recovery_state
+):
+    journal = {
+        "schemaVersion": "controlled-coordinator-journal/v1",
+        "projectExecutionKey": "project-execution:" + "1" * 64,
+        "journalVersion": 2,
+        "nextFencingToken": 3,
+        "recoveryState": recovery_state,
+        "recoveryEvidence": None,
+        "leases": [],
+        "receipts": [],
+        "integrationTransactions": [],
+    }
+
+    with pytest.raises(SchemaValidationError):
+        SchemaStore(repository_root).validate(
+            "core/schemas/controlled-coordinator-journal.schema.json", journal
+        )
 
 
 def test_journal_round_trips_full_quarantine_and_recovery_evidence(

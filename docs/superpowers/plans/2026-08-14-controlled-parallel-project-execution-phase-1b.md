@@ -96,13 +96,16 @@ def run_guarded_command(
 Acquire command:
   schemaVersion, projectId, batchPlanId, sliceId, attemptId,
   authoritySnapshotFingerprint, authorizationEnvelopeDigest,
-  conflictPolicyVersion, asOf, executionPlan, fullFootprint,
+  conflictPolicyVersion, asOf, planningRequest, executionPlan,
+  sliceDescriptor, authorizationEnvelope, authoritySnapshot,
+  admissionAuthorityProof, fullFootprint,
   originalSourceRoot, laneRoot, expectedLaneBase, commandDigest
 
 Transition command:
   schemaVersion, projectExecutionKey, leaseId, attemptId, fencingToken,
   expectedState, nextState, authoritySnapshotFingerprint,
-  candidateIdentity, processQuiescence, commandDigest
+  candidateIdentity, processQuiescence, lifecycleAuthorityProof,
+  reviewEvidence, commandDigest
 
 Write observation command:
   schemaVersion, projectExecutionKey, leaseId, fencingToken,
@@ -118,6 +121,8 @@ Recovery command:
 
 All schemas use Draft 2020-12, `additionalProperties: false`, explicit enums, canonical set normalization, and SHA-256 command digests that cover every field except the digest itself.
 
+Authority/WriteSet migration (2026-08-14): the locked Acquire identity now carries the complete Phase 1A `planningRequest` plus its normalized descriptor, envelope, snapshot, admission proof, and full conflict footprint. Validation replays Phase 1A canonical input checks and rebuilding of the target admission instead of trusting a caller-rehashed plan. The locked Transition lifecycle proof carries Candidate/Parent/Tree and, for `REVIEW_GO`, the review binding digest, full evidence digest, reviewer identity, and reviewer authority reference/digest; the review evidence carries the same reviewer authority binding. These are schema and command-identity evidence migrations only. Live authority-file lookup, lease CAS/fencing, process quiescence enforcement, protected execution, and recovery execution remain owned by their later Phase 1B tasks.
+
 ### Journal invariants
 
 ```text
@@ -126,12 +131,14 @@ projectExecutionKey = immutable
 journalVersion = monotonically increasing integer
 nextFencingToken = monotonically increasing integer
 recoveryState = CLEAR | PROJECT_WRITESET_RECOVERY | STATE_RECOVERY_REQUIRED
+recoveryEvidence = explicit null for no recorded recovery, or complete immutable evidence
 leases = append-only identities with immutable acquisition binding
 receipts = append-only ordered mutation receipts
 integrationTransactions = [] in Phase 1B
 ```
 
 Every lease stores the complete normalized conflict footprint, not only its digest. Candidate identity is either `null` or exactly `{commit, parent, tree}`. A transition receipt stores the previous and next journal versions, command digest, fencing token, state transition, authority bindings, and journal digest.
+`recoveryEvidence` is always present. Both pending recovery states require non-null complete evidence; `CLEAR` permits `null` before any recovery and retains non-null immutable evidence after an authorized recovery closes.
 
 ---
 

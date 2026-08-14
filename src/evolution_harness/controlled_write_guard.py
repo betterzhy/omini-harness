@@ -5,12 +5,14 @@ import hashlib
 import os
 import stat
 import subprocess
+from datetime import datetime, timezone
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
 
 from .controlled_coordinator_inputs import ControlledCoordinationError
 from .coordinator_state import CoordinatorStateStore
+from .hashing import canonical_json_bytes
 
 
 _SANDBOX_EXEC_PATH = "/usr/bin/sandbox-exec"
@@ -669,6 +671,75 @@ def _persistent_breaches(paths: list[str], exact: list[str], ephemeral: list[str
     return sorted(breaches)
 
 
+def _complete_persistent_breach_inventory(
+    lease: dict[str, Any],
+) -> tuple[dict[str, object], list[str], list[str]]:
+    """Return the complete current lane inventory without trusting caller paths."""
+    requested_lane = _canonical_absolute(Path(lease["laneRoot"]), "lane root")
+    lane_descriptor = -1
+    git_boundary: _GitBoundary | None = None
+    try:
+        lane_descriptor, opened = _open_absolute_directory_no_follow(requested_lane)
+        expected = lease.get("lanePhysicalIdentity")
+        if not isinstance(expected, dict) or (
+            opened.st_dev,
+            opened.st_ino,
+            "DIRECTORY",
+        ) != (
+            expected.get("device"),
+            expected.get("inode"),
+            expected.get("type"),
+        ):
+            raise _error(
+                "LANE_ROOT_IDENTITY_CHANGED",
+                "observed lane physical identity changed",
+            )
+        git_boundary = _open_git_boundary(
+            lane_descriptor, requested_lane, _physical_identity(opened)
+        )
+        footprint = lease.get("fullFootprint")
+        if not isinstance(footprint, dict):
+            raise _error("STALE_LEASE_BINDING", "lease footprint is unavailable")
+        exact = sorted(
+            _canonical_relative(item, "exactWriteSet")
+            for item in footprint.get("exactWriteSet", [])
+        )
+        ephemeral = sorted(
+            _canonical_relative(item, "ephemeralWriteSet")
+            for item in footprint.get("ephemeralWriteSet", [])
+        )
+        if len(exact) != len(set(exact)) or len(ephemeral) != len(set(ephemeral)):
+            raise _error("STALE_LEASE_BINDING", "lease WriteSets are not canonical")
+        inventory = _inventory(lane_descriptor, git_boundary)
+        remaining_ephemeral = sorted(
+            {
+                *(
+                    path
+                    for path in inventory["paths"]
+                    if any(_path_is_within(path, item) for item in ephemeral)
+                ),
+                *(
+                    item
+                    for item in ephemeral
+                    if _path_exists_no_follow(lane_descriptor, item)
+                ),
+            }
+        )
+        return (
+            inventory,
+            _persistent_breaches(inventory["paths"], exact, ephemeral),
+            remaining_ephemeral,
+        )
+    except OSError as exc:
+        raise _error(
+            "UNSAFE_WRITE_TARGET", "observed lane could not be opened no-follow"
+        ) from exc
+    finally:
+        _close_git_boundary(git_boundary)
+        if lane_descriptor >= 0:
+            os.close(lane_descriptor)
+
+
 def _path_exists_no_follow(lane_descriptor: int, relative: str) -> bool:
     current = os.dup(lane_descriptor)
     try:
@@ -896,6 +967,41 @@ def _current_durable_lease(
     return copy.deepcopy(durable)
 
 
+def _quarantine_guard_breach(
+    store: CoordinatorStateStore,
+    journal: dict[str, Any],
+    lease: dict[str, Any],
+    inventory: dict[str, object],
+    observed_paths: list[str],
+) -> None:
+    from .controlled_coordinator_inputs import normalize_write_observation_command
+    from .controlled_recovery import quarantine_observed_writes_locked
+
+    observed_at = datetime.now(timezone.utc).isoformat(timespec="seconds").replace(
+        "+00:00", "Z"
+    )
+    command: dict[str, Any] = {
+        "schemaVersion": "controlled-write-observation-command/v1",
+        "projectExecutionKey": lease["projectExecutionKey"],
+        "leaseId": lease["leaseId"],
+        "fencingToken": lease["fencingToken"],
+        "beforeInventoryDigest": "sha256:"
+        + hashlib.sha256(canonical_json_bytes(inventory)).hexdigest(),
+        "observedPaths": sorted(observed_paths),
+        "ephemeralPathsRemoved": [],
+        "processQuiescence": {
+            "status": "QUIESCENT",
+            "observedAt": observed_at,
+            "processIds": [],
+        },
+    }
+    command["commandDigest"] = "sha256:" + hashlib.sha256(
+        canonical_json_bytes(command)
+    ).hexdigest()
+    normalized = normalize_write_observation_command(Path(__file__).parents[2], command)
+    quarantine_observed_writes_locked(store, journal, normalized, observed_paths)
+
+
 def run_guarded_command(
     lease: dict[str, object],
     lane_root: Path,
@@ -935,7 +1041,9 @@ def run_guarded_command(
     identity = {"projectExecutionKey": lease.get("projectExecutionKey")}
     with CoordinatorStateStore.open(identity) as store:
         with store.exclusive_project_lock():
-            durable = _current_durable_lease(store.read_journal(), lease)
+            journal = store.read_journal()
+            durable = _current_durable_lease(journal, lease)
+            assert journal is not None
             if durable["laneRoot"] != str(requested_lane):
                 raise _error("STALE_LEASE_BINDING", "lane root is not lease-owned")
             lane_descriptor = -1
@@ -970,6 +1078,9 @@ def run_guarded_command(
                     before["paths"], exact, ephemeral
                 )
                 if before_breaches:
+                    _quarantine_guard_breach(
+                        store, journal, durable, before, before_breaches
+                    )
                     raise _error(
                         "WRITESET_BREACH",
                         "lane already contains persistent paths outside exactWriteSet",
@@ -985,6 +1096,9 @@ def run_guarded_command(
                 _revalidate_targets(lane_descriptor, targets)
                 after_breaches = _persistent_breaches(after["paths"], exact, ephemeral)
                 if after_breaches:
+                    _quarantine_guard_breach(
+                        store, journal, durable, before, after_breaches
+                    )
                     raise _error(
                         "WRITESET_BREACH",
                         "guarded command produced persistent paths outside exactWriteSet",

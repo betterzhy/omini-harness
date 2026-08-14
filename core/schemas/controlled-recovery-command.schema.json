@@ -28,7 +28,8 @@
   "type": "object",
   "required": [
     "schemaVersion", "projectExecutionKey", "recoveryId",
-    "recoveryAuthorityReference", "recoveryAuthorityDigest",
+    "recoveryAuthorityId", "recoveryAuthorityReference", "recoveryAuthorityDigest",
+    "signatureAlgorithm", "signatureFormat", "signature",
     "expectedJournalVersion", "processQuiescenceProofs", "observedWriteSet",
     "affectedLeaseDecisions", "replacementPlanRequired", "commandDigest"
   ],
@@ -36,8 +37,12 @@
     "schemaVersion": {"const": "controlled-recovery-command/v1"},
     "projectExecutionKey": {"type": "string", "pattern": "^project-execution:[0-9a-f]{64}$"},
     "recoveryId": {"type": "string", "pattern": "^recovery:[0-9a-f]{24}$"},
+    "recoveryAuthorityId": {"const": "recovery-controller"},
     "recoveryAuthorityReference": {"type": "string", "minLength": 1},
     "recoveryAuthorityDigest": {"$ref": "#/$defs/digest"},
+    "signatureAlgorithm": {"const": "ED25519"},
+    "signatureFormat": {"const": "OPENSSH_SSHSIG_V1"},
+    "signature": {"type": "string", "minLength": 1},
     "expectedJournalVersion": {"type": "integer", "minimum": 0},
     "processQuiescenceProofs": {"type": "array", "items": {"$ref": "#/$defs/quiescenceProof"}, "uniqueItems": true},
     "observedWriteSet": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},

@@ -363,8 +363,12 @@ class CoordinatorFactory:
             "schemaVersion": "controlled-recovery-command/v1",
             "projectExecutionKey": "project-execution:" + "1" * 64,
             "recoveryId": "recovery:" + "8" * 24,
+            "recoveryAuthorityId": "recovery-controller",
             "recoveryAuthorityReference": "authority/recovery.yaml",
             "recoveryAuthorityDigest": "sha256:" + "9" * 64,
+            "signatureAlgorithm": "ED25519",
+            "signatureFormat": "OPENSSH_SSHSIG_V1",
+            "signature": _FAKE_SSHSIG,
             "expectedJournalVersion": 11,
             "processQuiescenceProofs": [
                 {
@@ -942,8 +946,12 @@ def test_observation_sorts_declared_path_sets_but_preserves_input(
     [
         "projectExecutionKey",
         "recoveryId",
+        "recoveryAuthorityId",
         "recoveryAuthorityReference",
         "recoveryAuthorityDigest",
+        "signatureAlgorithm",
+        "signatureFormat",
+        "signature",
         "expectedJournalVersion",
         "processQuiescenceProofs",
         "observedWriteSet",
@@ -958,8 +966,12 @@ def test_recovery_digest_binds_every_authority_field(
     mutations = {
         "projectExecutionKey": "project-execution:" + "a" * 64,
         "recoveryId": "recovery:" + "b" * 24,
+        "recoveryAuthorityId": "other-controller",
         "recoveryAuthorityReference": "authority/other.yaml",
         "recoveryAuthorityDigest": "sha256:" + "c" * 64,
+        "signatureAlgorithm": "RSA",
+        "signatureFormat": "OTHER",
+        "signature": _FAKE_SSHSIG + "tampered",
         "expectedJournalVersion": 12,
         "processQuiescenceProofs": [
             {
@@ -983,7 +995,13 @@ def test_recovery_digest_binds_every_authority_field(
 
     expected = (
         "COORDINATOR_COMMAND_INVALID"
-        if field == "replacementPlanRequired"
+        if field
+        in {
+            "recoveryAuthorityId",
+            "signatureAlgorithm",
+            "signatureFormat",
+            "replacementPlanRequired",
+        }
         else "COMMAND_DIGEST_MISMATCH"
     )
     assert caught.value.code == expected

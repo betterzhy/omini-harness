@@ -127,6 +127,285 @@ def _acquire_planning_footprints(command: dict[str, Any]) -> list[dict[str, Any]
     return sorted(footprints, key=lambda item: item["sliceId"])
 
 
+def _path_is_within(path: str, root: str) -> bool:
+    return path == root or path.startswith(root + "/")
+
+
+def _paths_overlap(left: str, right: str) -> bool:
+    return _path_is_within(left, right) or _path_is_within(right, left)
+
+
+def _expected_recovery_decisions(
+    leases: list[dict[str, Any]],
+    acquire_commands: dict[str, dict[str, Any]],
+    revoked_ids: list[str],
+    observed_write_set: list[str],
+) -> list[dict[str, str]]:
+    decisions = []
+    lease_by_id = {lease["leaseId"]: lease for lease in leases}
+    for lease_id in revoked_ids:
+        lease = lease_by_id.get(lease_id)
+        command = acquire_commands.get(lease_id)
+        if lease is None or command is None:
+            _state_corrupt("recovery evidence names a lease without Acquire evidence")
+        authority_paths = sorted(
+            {
+                *command["sliceDescriptor"]["authorityReferences"],
+                *(
+                    authority["path"]
+                    for authority in command["authoritySnapshot"]["authorities"]
+                ),
+            }
+        )
+        footprint_paths = [
+            *lease["fullFootprint"]["exactWriteSet"],
+            *lease["fullFootprint"]["ephemeralWriteSet"],
+        ]
+        authority_affected = any(
+            _paths_overlap(observed, authority)
+            for observed in observed_write_set
+            for authority in authority_paths
+        )
+        writeset_overlap = any(
+            _paths_overlap(observed, declared)
+            for observed in observed_write_set
+            for declared in footprint_paths
+        )
+        if authority_affected:
+            decision, reason = "STALE", "AUTHORITY_AFFECTED"
+        elif writeset_overlap:
+            decision, reason = "STALE", "WRITESET_OVERLAP"
+        else:
+            decision, reason = "CANCELLED", "PROJECT_RECOVERY"
+        decisions.append(
+            {"leaseId": lease_id, "decision": decision, "reason": reason}
+        )
+    return sorted(decisions, key=lambda item: item["leaseId"])
+
+
+def _validate_recovery_integrity(
+    journal: dict[str, Any],
+    acquire_commands: dict[str, dict[str, Any]],
+    observation_receipts: list[dict[str, Any]],
+    recovery_receipts: list[dict[str, Any]],
+) -> None:
+    evidence = journal["recoveryEvidence"]
+    mutation_receipts = [
+        receipt
+        for receipt in journal["receipts"]
+        if receipt["receiptType"] in {"WRITE_OBSERVATION", "RECOVERY"}
+    ]
+    if len(mutation_receipts) != len(observation_receipts) + len(recovery_receipts):
+        _state_corrupt("recovery receipt indexes do not cover the mutation chain")
+
+    lease_by_id = {lease["leaseId"]: lease for lease in journal["leases"]}
+    historical_leases: dict[str, dict[str, Any]] = {}
+    recovery_pending = False
+    pending_revoked_ids: list[str] = []
+    for receipt in journal["receipts"]:
+        receipt_type = receipt["receiptType"]
+        command = receipt["evidence"]["command"]
+        if receipt_type == "ACQUIRE":
+            if recovery_pending:
+                _state_corrupt(
+                    "coordinator mutation occurred while recovery was pending"
+                )
+            matches = [
+                lease
+                for lease in journal["leases"]
+                if (
+                    lease["batchPlanId"],
+                    lease["sliceId"],
+                    lease["attemptId"],
+                )
+                == (
+                    command["batchPlanId"],
+                    command["sliceId"],
+                    command["attemptId"],
+                )
+            ]
+            if len(matches) != 1:
+                _state_corrupt("Acquire receipt has no unique historical lease")
+            historical_leases[matches[0]["leaseId"]] = {
+                "state": "ADMITTED",
+                "released": False,
+            }
+        elif receipt_type == "TRANSITION":
+            if recovery_pending:
+                _state_corrupt(
+                    "coordinator mutation occurred while recovery was pending"
+                )
+            historical = historical_leases.get(command["leaseId"])
+            if historical is None:
+                _state_corrupt("transition has no historical acquired lease")
+            historical["state"] = command["nextState"]
+            historical["released"] = command["nextState"] == "CLOSED"
+        elif receipt_type == "WRITE_OBSERVATION":
+            recoverable_ids = sorted(
+                lease_id
+                for lease_id, historical in historical_leases.items()
+                if not historical["released"] and historical["state"] != "CLOSED"
+            )
+            if receipt["evidence"]["revokedLeaseIds"] != recoverable_ids:
+                _state_corrupt(
+                    "WRITE_OBSERVATION omits a historical recoverable lease"
+                )
+            recovery_pending = True
+            pending_revoked_ids = recoverable_ids
+        elif receipt_type == "RECOVERY":
+            if not recovery_pending:
+                _state_corrupt("RECOVERY receipt has no pending observation cycle")
+            decisions = {
+                item["leaseId"]: item
+                for item in receipt["evidence"]["affectedLeaseDecisions"]
+            }
+            if set(decisions) != set(pending_revoked_ids):
+                _state_corrupt("RECOVERY omits one pending revoked lease")
+            for lease_id in pending_revoked_ids:
+                historical_leases[lease_id]["state"] = decisions[lease_id][
+                    "decision"
+                ]
+                historical_leases[lease_id]["released"] = True
+            recovery_pending = False
+            pending_revoked_ids = []
+
+    cycles: list[tuple[list[dict[str, Any]], dict[str, Any] | None]] = []
+    pending_observations: list[dict[str, Any]] = []
+    for receipt in mutation_receipts:
+        if receipt["receiptType"] == "WRITE_OBSERVATION":
+            pending_observations.append(receipt)
+            continue
+        if not pending_observations:
+            _state_corrupt("RECOVERY receipt has no preceding WRITE_OBSERVATION")
+        cycles.append((pending_observations, receipt))
+        pending_observations = []
+    if pending_observations:
+        cycles.append((pending_observations, None))
+
+    if not cycles:
+        if evidence is not None or journal["recoveryState"] != "CLEAR":
+            _state_corrupt("recovery evidence requires a WRITE_OBSERVATION receipt")
+        return
+    if evidence is None:
+        _state_corrupt("recovery receipts require complete journal evidence")
+
+    latest_cycle_evidence: dict[str, Any] | None = None
+    for cycle_index, (observations, recovery) in enumerate(cycles):
+        latest_observation = observations[-1]["evidence"]
+        revoked_ids = latest_observation["revokedLeaseIds"]
+        revoked_set = set(revoked_ids)
+        if not revoked_ids or revoked_ids != sorted(revoked_set):
+            _state_corrupt("recovery revoked lease identities must be a canonical set")
+        if revoked_set - set(lease_by_id):
+            _state_corrupt("recovery evidence names a missing durable lease")
+
+        cumulative_paths: list[str] = []
+        expected_decisions: list[dict[str, str]] = []
+        for receipt in observations:
+            command = receipt["evidence"]["command"]
+            observed_lease = lease_by_id.get(command["leaseId"])
+            if (
+                observed_lease is None
+                or command["leaseId"] not in revoked_set
+                or command["fencingToken"] != receipt["fencingToken"]
+                or command["fencingToken"] != observed_lease["fencingToken"]
+                or receipt["authoritySnapshotFingerprint"]
+                != observed_lease["authoritySnapshotFingerprint"]
+                or receipt["recordedAt"]
+                != command["processQuiescence"]["observedAt"]
+                or receipt["previousState"] != receipt["nextState"]
+            ):
+                _state_corrupt("WRITE_OBSERVATION is not bound to one revoked lease")
+            if command["observedPaths"] != sorted(set(command["observedPaths"])):
+                _state_corrupt("WRITE_OBSERVATION paths are not canonical")
+            cumulative_paths = sorted({*cumulative_paths, *command["observedPaths"]})
+            expected_decisions = _expected_recovery_decisions(
+                journal["leases"], acquire_commands, revoked_ids, cumulative_paths
+            )
+            receipt_evidence = receipt["evidence"]
+            if (
+                receipt_evidence["observedWriteSet"] != cumulative_paths
+                or receipt_evidence["revokedLeaseIds"] != revoked_ids
+                or receipt_evidence["affectedLeaseDecisions"] != expected_decisions
+                or receipt_evidence["recoveryState"]
+                != "PROJECT_WRITESET_RECOVERY"
+            ):
+                _state_corrupt("WRITE_OBSERVATION does not preserve its recovery cycle")
+
+        latest_cycle_evidence = {
+            "observedWriteSet": cumulative_paths,
+            "revokedLeaseIds": revoked_ids,
+            "affectedLeaseDecisions": expected_decisions,
+            "quarantineCommand": latest_observation["command"],
+            "recoveryCommand": None,
+        }
+        is_latest = cycle_index == len(cycles) - 1
+        if recovery is None:
+            if not is_latest or journal["recoveryState"] != "PROJECT_WRITESET_RECOVERY":
+                _state_corrupt("only the latest recovery cycle may remain pending")
+            if any(
+                lease_by_id[lease_id]["released"]
+                or lease_by_id[lease_id]["recoveryStatus"]
+                != "PROJECT_WRITESET_RECOVERY"
+                for lease_id in revoked_ids
+            ):
+                _state_corrupt(
+                    "pending recovery leases must remain retained and quarantined"
+                )
+            continue
+
+        command = recovery["evidence"]["command"]
+        proofs = command["processQuiescenceProofs"]
+        proof_by_id = {proof["leaseId"]: proof for proof in proofs}
+        decisions = {item["leaseId"]: item for item in expected_decisions}
+        bound_snapshot_fingerprints = {
+            lease_by_id[lease_id]["authoritySnapshotFingerprint"]
+            for lease_id in revoked_ids
+        }
+        if (
+            len(proof_by_id) != len(proofs)
+            or command["expectedJournalVersion"]
+            != recovery["previousJournalVersion"]
+            or command["observedWriteSet"] != cumulative_paths
+            or command["affectedLeaseDecisions"] != expected_decisions
+            or set(proof_by_id) != revoked_set
+            or recovery["fencingToken"]
+            != max(proof["fencingToken"] for proof in proofs)
+            or bound_snapshot_fingerprints
+            != {recovery["authoritySnapshotFingerprint"]}
+            or recovery["recordedAt"]
+            != max(proof["observedAt"] for proof in proofs)
+            or recovery["previousState"] is not None
+            or recovery["nextState"] is not None
+            or recovery["evidence"]["observedWriteSet"] != cumulative_paths
+            or recovery["evidence"]["revokedLeaseIds"] != revoked_ids
+            or recovery["evidence"]["affectedLeaseDecisions"]
+            != expected_decisions
+            or recovery["evidence"]["recoveryState"] != "CLEAR"
+        ):
+            _state_corrupt(
+                "RECOVERY receipt does not preserve complete recovery evidence"
+            )
+        for lease_id in revoked_ids:
+            lease = lease_by_id[lease_id]
+            proof = proof_by_id[lease_id]
+            if (
+                proof["fencingToken"] != lease["fencingToken"]
+                or lease["state"] != decisions[lease_id]["decision"]
+                or lease["released"] is not True
+                or lease["recoveryStatus"] != "CLEAR"
+            ):
+                _state_corrupt(
+                    "released lease does not preserve its recovery decision"
+                )
+        latest_cycle_evidence["recoveryCommand"] = command
+        if is_latest and journal["recoveryState"] != "CLEAR":
+            _state_corrupt("completed WriteSet recovery must leave state CLEAR")
+
+    if evidence != latest_cycle_evidence:
+        _state_corrupt("journal recovery evidence diverges from the latest cycle")
+
+
 def _validate_journal_integrity(
     journal: dict[str, Any], *, persisted: bool = False
 ) -> None:
@@ -174,6 +453,9 @@ def _validate_journal_integrity(
     if journal["journalVersion"] != len(receipts):
         _state_corrupt("journal version does not match the complete receipt chain")
     acquire_receipt_counts = {lease["leaseId"]: 0 for lease in leases}
+    acquire_commands: dict[str, dict[str, Any]] = {}
+    observation_receipts: list[dict[str, Any]] = []
+    recovery_receipts: list[dict[str, Any]] = []
     for index, receipt in enumerate(receipts, start=1):
         if (
             receipt["projectExecutionKey"] != journal["projectExecutionKey"]
@@ -184,6 +466,17 @@ def _validate_journal_integrity(
         command = receipt["evidence"]["command"]
         if receipt["commandDigest"] != command["commandDigest"]:
             _state_corrupt("receipt command digest is not associated with its evidence")
+        expected_command_digest = "sha256:" + sha256_bytes(
+            canonical_json_bytes(
+                {
+                    key: value
+                    for key, value in command.items()
+                    if key != "commandDigest"
+                }
+            )
+        )
+        if command["commandDigest"] != expected_command_digest:
+            _state_corrupt("receipt command evidence digest is not canonical")
         if receipt["receiptType"] == "ACQUIRE":
             associated = [
                 lease
@@ -218,6 +511,7 @@ def _validate_journal_integrity(
         if receipt["receiptType"] == "ACQUIRE":
             lease = associated[0]
             acquire_receipt_counts[lease["leaseId"]] += 1
+            acquire_commands[lease["leaseId"]] = command
             expected_lease_bindings = {
                 "batchPlanId": command["batchPlanId"],
                 "sliceId": command["sliceId"],
@@ -250,9 +544,17 @@ def _validate_journal_integrity(
             != command["authoritySnapshotFingerprint"]
         ):
             _state_corrupt("transition receipt does not preserve its command binding")
+        elif receipt["receiptType"] == "WRITE_OBSERVATION":
+            observation_receipts.append(receipt)
+        elif receipt["receiptType"] == "RECOVERY":
+            recovery_receipts.append(receipt)
 
     if any(count != 1 for count in acquire_receipt_counts.values()):
         _state_corrupt("every persisted lease must have exactly one ACQUIRE receipt")
+
+    _validate_recovery_integrity(
+        journal, acquire_commands, observation_receipts, recovery_receipts
+    )
 
     tokens = [lease["fencingToken"] for lease in leases]
     if len(tokens) != len(set(tokens)):

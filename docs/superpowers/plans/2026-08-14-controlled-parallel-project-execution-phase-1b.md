@@ -113,10 +113,11 @@ Write observation command:
   processQuiescence, commandDigest
 
 Recovery command:
-  schemaVersion, projectExecutionKey, recoveryId, recoveryAuthorityReference,
-  recoveryAuthorityDigest, expectedJournalVersion, processQuiescenceProofs,
-  observedWriteSet, affectedLeaseDecisions, replacementPlanRequired,
-  commandDigest
+  schemaVersion, projectExecutionKey, recoveryId, recoveryAuthorityId,
+  recoveryAuthorityReference, recoveryAuthorityDigest,
+  signatureAlgorithm, signatureFormat, signature,
+  expectedJournalVersion, processQuiescenceProofs, observedWriteSet,
+  affectedLeaseDecisions, replacementPlanRequired, commandDigest
 ```
 
 All schemas use Draft 2020-12, `additionalProperties: false`, explicit enums, canonical set normalization, and SHA-256 command digests that cover every field except the digest itself.
@@ -139,6 +140,10 @@ git add -- src/evolution_harness/controlled_coordinator.py \
   docs/superpowers/plans/2026-08-14-controlled-parallel-project-execution-phase-1b.md
 git commit -m "fix: pin lifecycle sshsig verifier"
 ```
+
+Task 6 Authority + WriteSet migration (fixed base/parent `7e8623b3d3f35514d633a21dd3f3db504da9e32c`): recovery clears a project-wide safety stop, releases retained capacity, and makes old plan/batch/attempt identities permanently ineligible, so caller-provided digests, decision arrays, status text, and quiescence text are evidence only and never authorization. The exact authorized twelve-path WriteSet is `src/evolution_harness/controlled_recovery.py`, `tests/test_controlled_recovery.py`, `src/evolution_harness/controlled_coordinator.py`, `src/evolution_harness/controlled_write_guard.py`, `src/evolution_harness/coordinator_state.py`, `tests/test_coordinator_state.py`, `core/schemas/controlled-recovery-command.schema.json`, `src/evolution_harness/controlled_coordinator_inputs.py`, `tests/test_controlled_coordinator_inputs.py`, `integrations/neutral-shadow/authority-map.yaml`, `examples/external-project-source/recovery-authority-public.pem`, and this formal plan. The distinct current project authority is exactly `recovery-controller`, backed by one canonical OpenSSH Ed25519 public key and no repository private key. The signed canonical JSON payload covers every semantic recovery field except `signature` and `commandDigest`; `commandDigest` then covers the complete signed command except itself. Verification reuses the Task 4 pinned absolute `/usr/bin/ssh-keygen` boundary with SSHSIG identity `recovery-controller` and namespace `agent-evolution-controlled-recovery-v1`; PATH, caller environment, caller digest, or a stale Authority Snapshot cannot select or replace trust.
+
+Task 6 quarantine and recovery migration: Task 5 invokes one internal locked quarantine primitive while still holding the same project lock used for fencing validation, target anchoring, foreground execution, and complete before/after inventory. No breach may cross an unlock-to-observe admission window. The public observation API independently rebuilds and exact-matches the current complete physical breach set; caller `observedPaths`, inventory digest, ephemeral-removal flag, or quiescence text cannot replace that live evidence. First or widened breach unions the complete observed WriteSet, advances the revocation fencing floor for every nonterminal or retained lease without rewriting historical tokens, records immutable all-project decisions and one WRITE_OBSERVATION receipt, and blocks admission, transition, guard, and later integration preparation. Recovery executes under the same project lock only after every guarded command has returned, exact-matches journal version, pending WriteSet, complete revoked lease proof/decision sets, live lane physical identities and fencing proofs, rebuilds current Authority, verifies the recovery SSHSIG, durably appends the RECOVERY receipt, releases affected leases, and clears recovery in one CAS write. Every WRITE_OBSERVATION and RECOVERY receipt remains part of the store's ordered integrity chain; orphan, duplicate, deleted, reordered, or self-consistently rewritten evidence and token rollback fail closed.
 
 Coordinator-projection migration (2026-08-14): `ACTIVE_LEASE_CONFLICT` is a locked closed-enum projection reason and `PROJECT_CAPACITY_LIMIT` remains the distinct project-wide capacity reason. The optional planner input is a closed `controlled-coordinator-snapshot/v1` object that binds project, project execution key, base provisional plan, journal version/digest/recovery state, envelope, conflict policy, source base, and the complete journal. When absent, the returned bundle and provisional execution-plan bytes are unchanged. When present, `bundle.executionPlan` is still that original provisional plan and the read-only result is added separately as `bundle.coordinatorProjection` with schema `controlled-coordinator-projection/v1`. A projection is not an Acquire `executionPlan`, never mutates coordinator state, and never removes `requiresCoordinatorRecheck=true`.
 
@@ -482,10 +487,18 @@ git commit -m "feat: guard controlled lane write sets"
 - Create: `tests/test_controlled_recovery.py`
 - Modify: `src/evolution_harness/controlled_coordinator.py`
 - Modify: `src/evolution_harness/controlled_write_guard.py`
+- Modify: `src/evolution_harness/coordinator_state.py`
+- Modify: `tests/test_coordinator_state.py`
+- Modify: `core/schemas/controlled-recovery-command.schema.json`
+- Modify: `src/evolution_harness/controlled_coordinator_inputs.py`
+- Modify: `tests/test_controlled_coordinator_inputs.py`
+- Modify: `integrations/neutral-shadow/authority-map.yaml`
+- Create: `examples/external-project-source/recovery-authority-public.pem`
+- Modify: `docs/superpowers/plans/2026-08-14-controlled-parallel-project-execution-phase-1b.md`
 
 **Interfaces:**
 
-- Consumes: observed persistent paths, all nonterminal full footprints, process-quiescence proofs, current recovery authority, and a recovery command.
+- Consumes: live descriptor-anchored complete persistent inventories, all nonterminal and retained lease footprints, current recovery-controller Authority plus SSHSIG evidence, project-lock-established quiescence, and a recovery command.
 - Produces: project-wide quarantine receipts, `observedWriteSet`, affected-lane decisions, and fresh-plan-only recovery closure.
 
 - [ ] **Step 1: Add RED quarantine/recovery tests**
@@ -511,11 +524,11 @@ Expected: FAIL because quarantine/recovery is missing.
 
 - [ ] **Step 3: Implement atomic project-wide quarantine**
 
-On any breach, reacquire the project lock, recompute current journal state, increment fencing tokens for every nonterminal lease, set `PROJECT_WRITESET_RECOVERY`, persist the complete observed path set, and block transitions/admissions/integration preparation. Do not delete lane files or evidence.
+On any breach, use the already-held project lock from Task 5 or acquire it in the public observation API, recompute current journal state, advance the revocation fencing floor for every nonterminal or retained lease, set `PROJECT_WRITESET_RECOVERY`, persist the complete observed path set, and block transitions/admissions/guard/integration preparation. Do not delete lane files or evidence.
 
 - [ ] **Step 4: Implement authorized recovery closure**
 
-Require current project-owned recovery authority, process-quiescence proof for every affected lease, expected journal version, explicit per-lease decisions, and `replacementPlanRequired=true`. Mark overlapping/authority-affected leases `STALE`; retain immutable evidence; clear recovery only after the receipt is durable. A Task 4 `CANCELLED` lease remains capacity-bearing until this durable recovery proof verifies real process quiescence and explicitly records its release. Never widen a descriptor or reuse the old plan.
+Require the current no-follow `recovery-controller` OpenSSH key and valid SSHSIG, project-lock-established real quiescence plus exact proof for every affected lease, expected journal version, exact pending observed WriteSet, exact complete revoked-lease decisions, and `replacementPlanRequired=true`. Mark overlapping/authority-affected leases `STALE`; retain immutable evidence; clear recovery only in the same CAS write that durably appends the receipt and releases affected leases. A Task 4 `CANCELLED` lease remains capacity-bearing until included in this exact recovery proof. Never widen a descriptor or reuse an old plan/batch/attempt identity.
 
 - [ ] **Step 5: Run recovery and race tests**
 
@@ -526,10 +539,18 @@ Expected: PASS, including concurrent breach/acquire and crash-replay cases.
 - [ ] **Step 6: Commit Task 6**
 
 ```bash
-git add src/evolution_harness/controlled_recovery.py \
+git add -- src/evolution_harness/controlled_recovery.py \
+  tests/test_controlled_recovery.py \
   src/evolution_harness/controlled_coordinator.py \
   src/evolution_harness/controlled_write_guard.py \
-  tests/test_controlled_recovery.py
+  src/evolution_harness/coordinator_state.py \
+  tests/test_coordinator_state.py \
+  core/schemas/controlled-recovery-command.schema.json \
+  src/evolution_harness/controlled_coordinator_inputs.py \
+  tests/test_controlled_coordinator_inputs.py \
+  integrations/neutral-shadow/authority-map.yaml \
+  examples/external-project-source/recovery-authority-public.pem \
+  docs/superpowers/plans/2026-08-14-controlled-parallel-project-execution-phase-1b.md
 git commit -m "feat: quarantine controlled project write breaches"
 ```
 

@@ -95,6 +95,13 @@ authorities:
     required: true
     owns: []
     selectors: {}
+  - id: recovery-controller
+    path: recovery-authority-public.pem
+    format: MARKDOWN_KV
+    role: SPECIALIZED
+    required: true
+    owns: []
+    selectors: {}
   - id: release-control
     path: release-control.yaml
     format: YAML

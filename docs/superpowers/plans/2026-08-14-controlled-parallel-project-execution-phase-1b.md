@@ -121,7 +121,11 @@ Recovery command:
 
 All schemas use Draft 2020-12, `additionalProperties: false`, explicit enums, canonical set normalization, and SHA-256 command digests that cover every field except the digest itself.
 
-Authority/WriteSet migration (2026-08-14): the locked Acquire identity carries the complete Phase 1A `planningRequest` plus its normalized descriptor, envelope, snapshot, admission proof, and full conflict footprint. Envelope provenance is an independent issuer authority record referenced by `issuerId`, `issuerAuthorityReference`, and `issuerAuthorityDigest`. The six file-owned `controlled_planning.*` facts are owned by one separate planning manifest authority; `controlled_planning.batch_base_commit` is deliberately not a file-owned fact because that would create a Git-HEAD self-hash cycle. `admissionAuthorityProof` binds `manifestAuthorityId`, `manifestAuthorityReference`, and `manifestAuthorityDigest`; its manifest-serialized binding covers project, Slice, attempt, registered source, and lane, but excludes `expectedLaneBase`. The request and command independently require `batchBaseCommit == expectedLaneBase == rebuiltSnapshot.sourceRevision.head`. Under the project lock, Acquire reloads the registration, rebuilds the Authority Snapshot through the registered integration, exact-compares the complete snapshot, requires live `permission.development=ALLOW`, and rejects caller-rehashed facts. Transition lifecycle proof is a separately project-owned Ed25519 proof from the current required `lifecycle-controller` public-key authority. Its canonical signed payload closes over project execution key, lease, attempt, fencing token, snapshot fingerprint, expected/next state, Candidate/Parent/Tree identity, review binding/evidence digests, and assertion time. `REVIEW_GO` additionally requires an Ed25519 review from the current required `deep-reviewer` public-key authority whose canonical payload closes over the same execution identity and Candidate/Parent/Tree, reviewer id/role, verdict, finding counts, review time, and the acquired required-reviewer/minimum-verdict policy. Caller-computed SHA-256 digests remain structural bindings, never substitutes for signature verification; missing system OpenSSL, wrong algorithm/key/role/policy, or an invalid signature fails closed.
+Authority/WriteSet migration (2026-08-14): the locked Acquire identity carries the complete Phase 1A `planningRequest` plus its normalized descriptor, envelope, snapshot, admission proof, and full conflict footprint. Envelope provenance is an independent issuer authority record referenced by `issuerId`, `issuerAuthorityReference`, and `issuerAuthorityDigest`. The six file-owned `controlled_planning.*` facts are owned by one separate planning manifest authority; `controlled_planning.batch_base_commit` is deliberately not a file-owned fact because that would create a Git-HEAD self-hash cycle. `admissionAuthorityProof` binds `manifestAuthorityId`, `manifestAuthorityReference`, and `manifestAuthorityDigest`; its manifest-serialized binding covers project, Slice, attempt, registered source, and lane, but excludes `expectedLaneBase`. The request and command independently require `batchBaseCommit == expectedLaneBase == rebuiltSnapshot.sourceRevision.head`. Under the project lock, Acquire reloads the registration, rebuilds the Authority Snapshot through the registered integration, exact-compares the complete snapshot, requires live `permission.development=ALLOW`, and rejects caller-rehashed facts.
+
+Task 4 Review Fix Round 1 Authority + WriteSet migration (fixed base `5cbf34d5bfa69b12ecc95fbe872d9fa9d2ed87ee`): the actual nine-file WriteSet is `src/evolution_harness/controlled_coordinator.py`, `src/evolution_harness/controlled_coordinator_inputs.py`, `core/schemas/controlled-coordinator-transition-command.schema.json`, `tests/test_controlled_coordinator_lifecycle.py`, `tests/test_controlled_coordinator_inputs.py`, `integrations/neutral-shadow/authority-map.yaml`, `examples/external-project-source/lifecycle-authority-public.pem`, `examples/external-project-source/deep-reviewer-public.pem`, and this formal plan. The expansion was required to make lifecycle/review evidence unforgeable through current public-key authorities, to bind every candidate state and replay to the live no-follow Git Candidate/Parent/Tree, and to retain `CANCELLED` capacity until durable Task 6 recovery rather than trust caller quiescence arrays.
+
+Task 4 Review Fix Round 2 Authority + WriteSet migration: the continued subset is `src/evolution_harness/controlled_coordinator.py`, `core/schemas/controlled-coordinator-transition-command.schema.json`, `tests/test_controlled_coordinator_lifecycle.py`, `tests/test_controlled_coordinator_inputs.py`, both example public-key files, and this formal plan; Round 1's input normalizer and neutral authority-map bytes remain authoritative and unchanged. `signatureAlgorithm=ED25519` and `signatureFormat=OPENSSH_SSHSIG_V1` are closed. Lifecycle uses SSHSIG identity `lifecycle-controller` and namespace `agent-evolution-controlled-lifecycle-v1`; review uses the exact acquired reviewer identity and namespace `agent-evolution-controlled-review-v1`. The lifecycle canonical JSON payload binds authority id, project execution key, lease, attempt, fencing token, snapshot fingerprint, expected/next state, Candidate/Parent/Tree, review binding/evidence digests, and assertion time. The review canonical JSON payload binds project/lease/attempt/token/snapshot, Candidate/Parent/Tree, reviewer id/role, verdict, finding counts, review time, and the acquired reviewer/minimum-verdict policy. Verification executes only absolute `/usr/bin/ssh-keygen -Y verify`; immediately before execution it opens that exact no-follow regular file, requires root:wheel numeric uid/gid `0:0`, rejects group/world write, and requires SHA-256 `bddae9c4ea46fd903574ec6ff61eda75e133f940fa538f2adca80af474767596`. PATH and caller environment never select the verifier. Authority files contain one canonical OpenSSH `ssh-ed25519` public key; private keys are never repository material. Caller SHA-256 digests remain structural bindings, never substitutes for SSHSIG verification.
 
 Coordinator-projection migration (2026-08-14): `ACTIVE_LEASE_CONFLICT` is a locked closed-enum projection reason and `PROJECT_CAPACITY_LIMIT` remains the distinct project-wide capacity reason. The optional planner input is a closed `controlled-coordinator-snapshot/v1` object that binds project, project execution key, base provisional plan, journal version/digest/recovery state, envelope, conflict policy, source base, and the complete journal. When absent, the returned bundle and provisional execution-plan bytes are unchanged. When present, `bundle.executionPlan` is still that original provisional plan and the read-only result is added separately as `bundle.coordinatorProjection` with schema `controlled-coordinator-projection/v1`. A projection is not an Acquire `executionPlan`, never mutates coordinator state, and never removes `requiresCoordinatorRecheck=true`.
 
@@ -341,8 +345,15 @@ git commit -m "feat: acquire fenced project lane leases"
 
 **Files:**
 
-- Create: `tests/test_controlled_coordinator_lifecycle.py`
 - Modify: `src/evolution_harness/controlled_coordinator.py`
+- Modify: `src/evolution_harness/controlled_coordinator_inputs.py`
+- Modify: `core/schemas/controlled-coordinator-transition-command.schema.json`
+- Create/modify: `tests/test_controlled_coordinator_lifecycle.py`
+- Modify: `tests/test_controlled_coordinator_inputs.py`
+- Modify: `integrations/neutral-shadow/authority-map.yaml`
+- Create/modify: `examples/external-project-source/lifecycle-authority-public.pem`
+- Create/modify: `examples/external-project-source/deep-reviewer-public.pem`
+- Modify: `docs/superpowers/plans/2026-08-14-controlled-parallel-project-execution-phase-1b.md`
 
 **Interfaces:**
 
@@ -360,7 +371,7 @@ def test_exceptional_state_retains_lease(coordinator_factory, exceptional):
     assert result["state"] == exceptional
 ```
 
-Test every allowed normal transition, skipped-state rejection, stale/missing token, authority fingerprint drift, attempt mismatch, Ed25519 caller-rehash/wrong-key/wrong-role/policy failures, Candidate/Parent/Tree binding at `FIXED_CANDIDATE`, candidate object/HEAD/parent/tree and lane inode/symlink drift, zero-finding review binding at `REVIEW_GO`, exact replay live revalidation, retained lease through `INTEGRATING`, `CLOSED` release, signed `CANCELLED` with both empty and live caller process lists retaining capacity, terminal immutability, and subprocess loss retaining the lease.
+Test every allowed normal transition, skipped-state rejection, stale/missing token, authority fingerprint drift, attempt mismatch, SSHSIG caller-rehash/wrong-key/wrong-role/policy/namespace/identity failures, fake PATH success executables, pinned-verifier digest/owner/mode drift, Candidate/Parent/Tree binding at `FIXED_CANDIDATE`, candidate object/HEAD/parent/tree and lane inode/symlink drift, zero-finding review binding at `REVIEW_GO`, exact replay live revalidation, retained lease through `INTEGRATING`, `CLOSED` release, signed `CANCELLED` with both empty and live caller process lists retaining capacity, terminal immutability, and subprocess loss retaining the lease.
 
 - [ ] **Step 2: Run the lifecycle RED test**
 
@@ -370,7 +381,7 @@ Expected: FAIL on missing lifecycle behavior.
 
 - [ ] **Step 3: Implement the explicit state machine**
 
-Keep allowed transitions in one immutable mapping. Never infer project lifecycle changes: under the project lock, rebuild authority, resolve the exact required public-key records, no-follow read their current digest-matched keys, and use system OpenSSL to verify the closed Ed25519 payloads. Revalidate live lane physical and Git Candidate/Parent/Tree identity before every candidate-bound mutation and exact replay. Raise `nextFencingToken` monotonically when authority drift, cancellation, or recovery revokes an attempt while retaining the historical lease token in evidence; ordinary transitions preserve both. Release capacity only for valid `CLOSED`. Task 4 records `CANCELLED` as terminal but `released=false`, so caller process arrays and subprocess loss never establish recovery quiescence or free capacity; only Task 6 may durably release it.
+Keep allowed transitions in one immutable mapping. Never infer project lifecycle changes: under the project lock, rebuild authority, resolve the exact required public-key records, no-follow read their current digest-matched OpenSSH keys, integrity-pin absolute `/usr/bin/ssh-keygen`, and verify the closed identity/namespace SSHSIG payloads without PATH selection or caller environment. Revalidate live lane physical and Git Candidate/Parent/Tree identity before every candidate-bound mutation and exact replay. Raise `nextFencingToken` monotonically when authority drift, cancellation, or recovery revokes an attempt while retaining the historical lease token in evidence; ordinary transitions preserve both. Release capacity only for valid `CLOSED`. Task 4 records `CANCELLED` as terminal but `released=false`, so caller process arrays and subprocess loss never establish recovery quiescence or free capacity; only Task 6 may durably release it.
 
 - [ ] **Step 4: Run the lifecycle GREEN test**
 
@@ -382,6 +393,13 @@ Expected: PASS with no implicit transitions.
 
 ```bash
 git add src/evolution_harness/controlled_coordinator.py tests/test_controlled_coordinator_lifecycle.py
+git add src/evolution_harness/controlled_coordinator_inputs.py \
+  core/schemas/controlled-coordinator-transition-command.schema.json \
+  tests/test_controlled_coordinator_inputs.py \
+  integrations/neutral-shadow/authority-map.yaml \
+  examples/external-project-source/lifecycle-authority-public.pem \
+  examples/external-project-source/deep-reviewer-public.pem \
+  docs/superpowers/plans/2026-08-14-controlled-parallel-project-execution-phase-1b.md
 git commit -m "feat: enforce fenced lane lifecycle transitions"
 ```
 

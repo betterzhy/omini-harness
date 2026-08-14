@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-import base64
 import copy
+import os
+import stat
 import subprocess
 import sys
 import tempfile
@@ -14,6 +15,11 @@ from evolution_harness.authority import build_authority_snapshot
 from evolution_harness.controlled_coordinator_inputs import ControlledCoordinationError
 from evolution_harness.hashing import canonical_json_bytes, sha256_bytes
 from test_controlled_coordinator_acquire import AcquisitionFactory, _committed_source
+
+
+_SSH_KEYGEN = "/usr/bin/ssh-keygen"
+_LIFECYCLE_NAMESPACE = "agent-evolution-controlled-lifecycle-v1"
+_REVIEW_NAMESPACE = "agent-evolution-controlled-review-v1"
 
 
 def _sha256(value):
@@ -42,20 +48,23 @@ def lifecycle_factory(tmp_path, monkeypatch, repository_root, controlled_factory
     ):
         private_path = tmp_path / private_name
         subprocess.run(
-            ["openssl", "genpkey", "-algorithm", "ED25519", "-out", str(private_path)],
-            check=True,
-        )
-        subprocess.run(
             [
-                "openssl",
-                "pkey",
-                "-in",
+                _SSH_KEYGEN,
+                "-q",
+                "-t",
+                "ed25519",
+                "-N",
+                "",
+                "-f",
                 str(private_path),
-                "-pubout",
-                "-out",
-                str(source / public_name),
             ],
             check=True,
+        )
+        public_parts = Path(str(private_path) + ".pub").read_text(
+            encoding="utf-8"
+        ).split()
+        (source / public_name).write_text(
+            f"{public_parts[0]} {public_parts[1]}\n", encoding="utf-8"
         )
     subprocess.run(
         [
@@ -97,31 +106,32 @@ def _authority_or_file(factory, authorities, authority_id, reference):
     }
 
 
-def _sign(private_key, payload):
-    with tempfile.NamedTemporaryFile(prefix="task4-signing-payload-") as payload_file:
-        payload_file.write(canonical_json_bytes(payload))
-        payload_file.flush()
-        completed = subprocess.run(
+def _sign(private_key, payload, namespace):
+    with tempfile.TemporaryDirectory(prefix="task4-signing-payload-") as temporary:
+        payload_path = Path(temporary) / "payload.json"
+        payload_path.write_bytes(canonical_json_bytes(payload))
+        subprocess.run(
             [
-                "openssl",
-                "pkeyutl",
-                "-sign",
-                "-rawin",
-                "-inkey",
+                _SSH_KEYGEN,
+                "-Y",
+                "sign",
+                "-f",
                 str(private_key),
-                "-in",
-                payload_file.name,
+                "-n",
+                namespace,
+                str(payload_path),
             ],
             check=True,
             capture_output=True,
         )
-    return base64.b64encode(completed.stdout).decode("ascii")
+        return Path(str(payload_path) + ".sig").read_text(encoding="ascii")
 
 
 def _lifecycle_signature_payload(command):
     proof = command["lifecycleAuthorityProof"]
     return {
         "schemaVersion": "controlled-lifecycle-signature-payload/v1",
+        "authorityId": proof["authorityId"],
         "projectExecutionKey": command["projectExecutionKey"],
         "leaseId": command["leaseId"],
         "attemptId": command["attemptId"],
@@ -199,6 +209,7 @@ def _transition_command(
             "findingCounts": {"p0": 0, "p1": 0, "p2": 0},
             "reviewedAt": "2026-08-13T12:29:30Z",
             "signatureAlgorithm": "ED25519",
+            "signatureFormat": "OPENSSH_SSHSIG_V1",
         }
         review["reviewBindingDigest"] = _sha256(
             {
@@ -232,6 +243,7 @@ def _transition_command(
                 "requiredReviewerPolicy": ["deep-reviewer"],
                 "minimumReviewVerdict": "GO_ZERO_FINDINGS",
             },
+            _REVIEW_NAMESPACE,
         )
         review["evidenceDigest"] = _sha256(review)
 
@@ -258,11 +270,13 @@ def _transition_command(
         ),
         "assertedAt": "2026-08-13T12:29:00Z",
         "signatureAlgorithm": "ED25519",
+        "signatureFormat": "OPENSSH_SSHSIG_V1",
     }
     proof["signature"] = _sign(
         factory.lifecycle_private_key,
         {
             "schemaVersion": "controlled-lifecycle-signature-payload/v1",
+            "authorityId": proof["authorityId"],
             "projectExecutionKey": lease["projectExecutionKey"],
             "leaseId": lease["leaseId"],
             "attemptId": lease["attemptId"],
@@ -275,6 +289,7 @@ def _transition_command(
             "reviewEvidenceDigest": proof["reviewEvidenceDigest"],
             "assertedAt": proof["assertedAt"],
         },
+        _LIFECYCLE_NAMESPACE,
     )
     proof["proofDigest"] = _sha256(proof)
     return _command_digest(
@@ -354,6 +369,7 @@ def _rebind_transition(factory, command, *, resign=True):
                     "requiredReviewerPolicy": ["deep-reviewer"],
                     "minimumReviewVerdict": "GO_ZERO_FINDINGS",
                 },
+                _REVIEW_NAMESPACE,
             )
         review["evidenceDigest"] = _sha256(
             {key: value for key, value in review.items() if key != "evidenceDigest"}
@@ -385,6 +401,7 @@ def _rebind_transition(factory, command, *, resign=True):
             factory.lifecycle_private_key,
             {
                 "schemaVersion": "controlled-lifecycle-signature-payload/v1",
+                "authorityId": proof["authorityId"],
                 "projectExecutionKey": command["projectExecutionKey"],
                 "leaseId": command["leaseId"],
                 "attemptId": command["attemptId"],
@@ -399,6 +416,7 @@ def _rebind_transition(factory, command, *, resign=True):
                 "reviewEvidenceDigest": proof["reviewEvidenceDigest"],
                 "assertedAt": proof["assertedAt"],
             },
+            _LIFECYCLE_NAMESPACE,
         )
     proof["proofDigest"] = _sha256(
         {key: value for key, value in proof.items() if key != "proofDigest"}
@@ -709,17 +727,84 @@ def test_review_signature_rejects_wrong_authority_key(lifecycle_factory):
     assert rejected.value.code == "REVIEW_SIGNATURE_INVALID"
 
 
-def test_signature_verification_fails_closed_without_openssl(
-    lifecycle_factory, monkeypatch
+@pytest.mark.parametrize("drift", ["digest", "owner", "mode"])
+def test_sshsig_verifier_integrity_drift_fails_closed(
+    lifecycle_factory, monkeypatch, drift
 ):
     lease = _acquire(lifecycle_factory)
     command = _transition_command(lifecycle_factory, lease, "ACTIVE")
-    monkeypatch.setattr(coordinator.shutil, "which", lambda _name: None)
+    if drift == "digest":
+        monkeypatch.setattr(coordinator, "_SSH_KEYGEN_SHA256", "0" * 64)
+    else:
+        verifier_descriptors = set()
+        original_open = coordinator.os.open
+        original_fstat = coordinator.os.fstat
+
+        def tracking_open(path, *args, **kwargs):
+            descriptor = original_open(path, *args, **kwargs)
+            if path == "/usr/bin/ssh-keygen":
+                verifier_descriptors.add(descriptor)
+            return descriptor
+
+        def drifted_fstat(descriptor):
+            observed = original_fstat(descriptor)
+            if descriptor not in verifier_descriptors:
+                return observed
+            fields = list(observed)
+            if drift == "owner":
+                fields[4] = 501
+            else:
+                fields[0] |= stat.S_IWGRP
+            return os.stat_result(fields)
+
+        monkeypatch.setattr(coordinator.os, "open", tracking_open)
+        monkeypatch.setattr(coordinator.os, "fstat", drifted_fstat)
 
     with pytest.raises(ControlledCoordinationError) as rejected:
         _transition(lifecycle_factory, command)
 
-    assert rejected.value.code == "OPENSSL_UNAVAILABLE"
+    assert rejected.value.code == "SSH_KEYGEN_VERIFIER_INVALID"
+
+
+def test_lifecycle_sshsig_rejects_wrong_namespace(lifecycle_factory):
+    lease = _acquire(lifecycle_factory)
+    forged = _transition_command(lifecycle_factory, lease, "ACTIVE")
+    forged["lifecycleAuthorityProof"]["signature"] = _sign(
+        lifecycle_factory.lifecycle_private_key,
+        _lifecycle_signature_payload(forged),
+        "agent-evolution-wrong-namespace-v1",
+    )
+    _rebind_transition(lifecycle_factory, forged, resign=False)
+
+    with pytest.raises(ControlledCoordinationError) as rejected:
+        _transition(lifecycle_factory, forged)
+
+    assert rejected.value.code == "LIFECYCLE_SIGNATURE_INVALID"
+
+
+def test_lifecycle_verifier_ignores_fake_path_success_executable(
+    lifecycle_factory, tmp_path, monkeypatch
+):
+    lease = _acquire(lifecycle_factory)
+    forged = _transition_command(lifecycle_factory, lease, "ACTIVE")
+    forged["lifecycleAuthorityProof"]["signature"] = (
+        "-----BEGIN SSH SIGNATURE-----\n"
+        "U1NIU0lHAAAAAQ==\n"
+        "-----END SSH SIGNATURE-----\n"
+    )
+    _rebind_transition(lifecycle_factory, forged, resign=False)
+    fake_bin = tmp_path / "fake-bin"
+    fake_bin.mkdir()
+    for executable_name in ("openssl", "ssh-keygen"):
+        fake_executable = fake_bin / executable_name
+        fake_executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        fake_executable.chmod(0o755)
+    monkeypatch.setenv("PATH", str(fake_bin) + os.pathsep + os.environ["PATH"])
+
+    with pytest.raises(ControlledCoordinationError) as rejected:
+        _transition(lifecycle_factory, forged)
+
+    assert rejected.value.code == "LIFECYCLE_SIGNATURE_INVALID"
 
 
 def test_review_tampering_and_nonzero_findings_are_fail_closed(lifecycle_factory):

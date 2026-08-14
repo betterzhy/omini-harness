@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-import base64
 import copy
 import os
-import shutil
 import stat
 import subprocess
 import tempfile
@@ -65,6 +63,12 @@ _CANDIDATE_STATES = frozenset(
     }
 )
 _REVOCATION_STATES = frozenset({"STALE", "CANCELLED"})
+_SSH_KEYGEN_PATH = "/usr/bin/ssh-keygen"
+_SSH_KEYGEN_SHA256 = (
+    "bddae9c4ea46fd903574ec6ff61eda75e133f940fa538f2adca80af474767596"
+)
+_LIFECYCLE_SIGNATURE_NAMESPACE = "agent-evolution-controlled-lifecycle-v1"
+_REVIEW_SIGNATURE_NAMESPACE = "agent-evolution-controlled-review-v1"
 
 
 def _sha256(value: Any) -> str:
@@ -515,63 +519,127 @@ def _read_current_authority_bytes(
             os.close(root_descriptor)
 
 
-def _verify_ed25519_signature(
+def _verified_ssh_keygen_path() -> str:
+    if _SSH_KEYGEN_PATH != "/usr/bin/ssh-keygen":
+        raise ControlledCoordinationError(
+            "SSH_KEYGEN_VERIFIER_INVALID",
+            "SSHSIG verifier path is not the fixed system path",
+        )
+    descriptor = -1
+    try:
+        descriptor = os.open(
+            _SSH_KEYGEN_PATH,
+            os.O_RDONLY
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_CLOEXEC", 0),
+        )
+        before = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or before.st_uid != 0
+            or before.st_gid != 0
+            or stat.S_IMODE(before.st_mode) & (stat.S_IWGRP | stat.S_IWOTH)
+            or before.st_size > 16 * 1024 * 1024
+        ):
+            raise OSError("SSHSIG verifier ownership or mode is not trusted")
+        chunks: list[bytes] = []
+        remaining = 16 * 1024 * 1024 + 1
+        while remaining:
+            chunk = os.read(descriptor, min(65536, remaining))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        executable = b"".join(chunks)
+        after = os.fstat(descriptor)
+        path_stat = os.stat(_SSH_KEYGEN_PATH, follow_symlinks=False)
+        if (
+            not _same_physical_identity(before, after)
+            or not _same_physical_identity(before, path_stat)
+            or after.st_uid != 0
+            or after.st_gid != 0
+            or stat.S_IMODE(after.st_mode) & (stat.S_IWGRP | stat.S_IWOTH)
+            or len(executable) > 16 * 1024 * 1024
+            or sha256_bytes(executable) != _SSH_KEYGEN_SHA256
+        ):
+            raise OSError("SSHSIG verifier changed or failed its pinned digest")
+    except OSError as exc:
+        raise ControlledCoordinationError(
+            "SSH_KEYGEN_VERIFIER_INVALID",
+            "fixed system SSHSIG verifier failed integrity checks",
+        ) from exc
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+    return "/usr/bin/ssh-keygen"
+
+
+def _openssh_ed25519_public_key(public_key: bytes) -> bytes:
+    try:
+        parts = public_key.decode("ascii").strip().split()
+    except UnicodeDecodeError as exc:
+        raise ControlledCoordinationError(
+            "AUTHORITY_PUBLIC_KEY_INVALID",
+            "SSHSIG authority key must be canonical OpenSSH ASCII",
+        ) from exc
+    if len(parts) != 2 or parts[0] != "ssh-ed25519":
+        raise ControlledCoordinationError(
+            "AUTHORITY_PUBLIC_KEY_INVALID",
+            "SSHSIG authority must contain exactly one OpenSSH Ed25519 public key",
+        )
+    return f"{parts[0]} {parts[1]}".encode("ascii")
+
+
+def _verify_sshsig_signature(
     public_key: bytes,
     signature_text: str,
     payload: dict[str, Any],
     *,
+    identity: str,
+    namespace: str,
     invalid_code: str,
 ) -> None:
-    openssl = shutil.which("openssl")
-    if openssl is None:
-        raise ControlledCoordinationError(
-            "OPENSSL_UNAVAILABLE",
-            "system OpenSSL is required for Ed25519 transition verification",
-        )
+    verifier = _verified_ssh_keygen_path()
+    canonical_public_key = _openssh_ed25519_public_key(public_key)
     try:
-        signature = base64.b64decode(signature_text, validate=True)
-    except (ValueError, TypeError) as exc:
-        raise ControlledCoordinationError(
-            invalid_code, "transition evidence signature is not canonical base64"
-        ) from exc
-    if len(signature) != 64:
-        raise ControlledCoordinationError(
-            invalid_code, "transition evidence signature is not an Ed25519 signature"
-        )
-    try:
-        with tempfile.TemporaryDirectory(prefix="controlled-transition-verify-") as temporary:
+        signature = signature_text.encode("ascii")
+        with tempfile.TemporaryDirectory(prefix="controlled-sshsig-verify-") as temporary:
             temporary_root = Path(temporary)
-            public_key_path = temporary_root / "authority-public.pem"
-            signature_path = temporary_root / "signature.bin"
-            payload_path = temporary_root / "payload.json"
-            public_key_path.write_bytes(public_key)
+            allowed_signers_path = temporary_root / "allowed_signers"
+            signature_path = temporary_root / "evidence.sig"
+            allowed_signers_path.write_bytes(
+                identity.encode("ascii") + b" " + canonical_public_key + b"\n"
+            )
             signature_path.write_bytes(signature)
-            payload_path.write_bytes(canonical_json_bytes(payload))
+            allowed_signers_path.chmod(0o600)
+            signature_path.chmod(0o600)
             completed = subprocess.run(
                 [
-                    openssl,
-                    "pkeyutl",
-                    "-verify",
-                    "-rawin",
-                    "-pubin",
-                    "-inkey",
-                    str(public_key_path),
-                    "-sigfile",
+                    verifier,
+                    "-Y",
+                    "verify",
+                    "-f",
+                    str(allowed_signers_path),
+                    "-I",
+                    identity,
+                    "-n",
+                    namespace,
+                    "-s",
                     str(signature_path),
-                    "-in",
-                    str(payload_path),
                 ],
                 check=False,
                 capture_output=True,
+                input=canonical_json_bytes(payload),
+                env={"LC_ALL": "C"},
                 timeout=10,
             )
-    except (OSError, subprocess.SubprocessError) as exc:
+    except (OSError, UnicodeError, subprocess.SubprocessError) as exc:
         raise ControlledCoordinationError(
-            invalid_code, "OpenSSL could not verify transition evidence"
+            invalid_code, "fixed system ssh-keygen could not verify SSHSIG evidence"
         ) from exc
     if completed.returncode != 0:
         raise ControlledCoordinationError(
-            invalid_code, "transition evidence signature is not valid for current authority"
+            invalid_code, "SSHSIG evidence is not valid for the fixed authority identity"
         )
 
 
@@ -579,6 +647,7 @@ def _lifecycle_signature_payload(command: dict[str, Any]) -> dict[str, Any]:
     proof = command["lifecycleAuthorityProof"]
     return {
         "schemaVersion": "controlled-lifecycle-signature-payload/v1",
+        "authorityId": proof["authorityId"],
         "projectExecutionKey": command["projectExecutionKey"],
         "leaseId": command["leaseId"],
         "attemptId": command["attemptId"],
@@ -1063,10 +1132,12 @@ def transition_lane_lease(
             lifecycle_public_key = _read_current_authority_bytes(
                 source, lifecycle_authority
             )
-            _verify_ed25519_signature(
+            _verify_sshsig_signature(
                 lifecycle_public_key,
                 proof["signature"],
                 _lifecycle_signature_payload(normalized),
+                identity="lifecycle-controller",
+                namespace=_LIFECYCLE_SIGNATURE_NAMESPACE,
                 invalid_code="LIFECYCLE_SIGNATURE_INVALID",
             )
             if normalized["nextState"] == "REVIEW_GO":
@@ -1097,7 +1168,7 @@ def transition_lane_lease(
                 reviewer_public_key = _read_current_authority_bytes(
                     source, reviewer_authority
                 )
-                _verify_ed25519_signature(
+                _verify_sshsig_signature(
                     reviewer_public_key,
                     review["signature"],
                     _review_signature_payload(
@@ -1105,6 +1176,8 @@ def transition_lane_lease(
                         required_reviewers=required_reviewers,
                         minimum_review_verdict=minimum_verdict,
                     ),
+                    identity=review["reviewerId"],
+                    namespace=_REVIEW_SIGNATURE_NAMESPACE,
                     invalid_code="REVIEW_SIGNATURE_INVALID",
                 )
             if exact_replay is not None:

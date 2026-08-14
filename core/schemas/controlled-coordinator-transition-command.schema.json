@@ -4,7 +4,7 @@
   "$defs": {
     "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._:-]*$"},
     "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
-    "signature": {"type": "string", "pattern": "^[A-Za-z0-9+/]{86}==$"},
+    "signature": {"type": "string", "minLength": 64, "maxLength": 16384, "pattern": "^-----BEGIN SSH SIGNATURE-----\\n(?:[A-Za-z0-9+/=]+\\n)+-----END SSH SIGNATURE-----\\n?$"},
     "gitObject": {"type": "string", "pattern": "^[0-9a-f]{40}([0-9a-f]{24})?$"},
     "state": {"enum": ["PROPOSED", "READY", "ADMITTED", "ACTIVE", "FIXED_CANDIDATE", "REVIEW_GO", "QUEUED_FOR_INTEGRATION", "INTEGRATING", "CLOSED", "BLOCKED", "NO_GO", "STALE", "CANCELLED"]},
     "candidateIdentity": {
@@ -29,7 +29,7 @@
     },
     "lifecycleAuthorityProof": {
       "type": "object",
-      "required": ["authorityId", "authorityReference", "authorityDigest", "attemptId", "expectedState", "nextState", "candidateIdentity", "reviewBindingDigest", "reviewEvidenceDigest", "reviewerId", "reviewerAuthorityReference", "reviewerAuthorityDigest", "assertedAt", "signatureAlgorithm", "signature", "proofDigest"],
+      "required": ["authorityId", "authorityReference", "authorityDigest", "attemptId", "expectedState", "nextState", "candidateIdentity", "reviewBindingDigest", "reviewEvidenceDigest", "reviewerId", "reviewerAuthorityReference", "reviewerAuthorityDigest", "assertedAt", "signatureAlgorithm", "signatureFormat", "signature", "proofDigest"],
       "properties": {
         "authorityId": {"$ref": "#/$defs/id"},
         "authorityReference": {"type": "string", "minLength": 1},
@@ -45,6 +45,7 @@
         "reviewerAuthorityDigest": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/digest"}]},
         "assertedAt": {"type": "string", "minLength": 1},
         "signatureAlgorithm": {"const": "ED25519"},
+        "signatureFormat": {"const": "OPENSSH_SSHSIG_V1"},
         "signature": {"$ref": "#/$defs/signature"},
         "proofDigest": {"$ref": "#/$defs/digest"}
       },
@@ -52,7 +53,7 @@
     },
     "reviewEvidence": {
       "type": "object",
-      "required": ["candidateIdentity", "reviewerId", "reviewerRole", "projectExecutionKey", "leaseId", "attemptId", "fencingToken", "authoritySnapshotFingerprint", "reviewerAuthorityReference", "reviewerAuthorityDigest", "verdict", "findingCounts", "reviewedAt", "signatureAlgorithm", "signature", "reviewBindingDigest", "evidenceDigest"],
+      "required": ["candidateIdentity", "reviewerId", "reviewerRole", "projectExecutionKey", "leaseId", "attemptId", "fencingToken", "authoritySnapshotFingerprint", "reviewerAuthorityReference", "reviewerAuthorityDigest", "verdict", "findingCounts", "reviewedAt", "signatureAlgorithm", "signatureFormat", "signature", "reviewBindingDigest", "evidenceDigest"],
       "properties": {
         "candidateIdentity": {"$ref": "#/$defs/candidateIdentity"},
         "reviewerId": {"$ref": "#/$defs/id"},
@@ -73,6 +74,7 @@
         },
         "reviewedAt": {"type": "string", "minLength": 1},
         "signatureAlgorithm": {"const": "ED25519"},
+        "signatureFormat": {"const": "OPENSSH_SSHSIG_V1"},
         "signature": {"$ref": "#/$defs/signature"},
         "reviewBindingDigest": {"$ref": "#/$defs/digest"},
         "evidenceDigest": {"$ref": "#/$defs/digest"}

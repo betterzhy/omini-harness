@@ -19,6 +19,13 @@ from evolution_harness.hashing import canonical_json_bytes, sha256_bytes
 from evolution_harness.schema import SchemaStore, SchemaValidationError
 
 
+_FAKE_SSHSIG = (
+    "-----BEGIN SSH SIGNATURE-----\n"
+    "U1NIU0lHAAAAAQ==\n"
+    "-----END SSH SIGNATURE-----\n"
+)
+
+
 def _sha256(value):
     return "sha256:" + sha256_bytes(canonical_json_bytes(value))
 
@@ -273,7 +280,8 @@ class CoordinatorFactory:
                     "findingCounts": {"p0": 0, "p1": 0, "p2": 0},
                     "reviewedAt": "2026-08-13T12:29:30Z",
                     "signatureAlgorithm": "ED25519",
-                    "signature": "A" * 86 + "==",
+                    "signatureFormat": "OPENSSH_SSHSIG_V1",
+                    "signature": _FAKE_SSHSIG,
                 }
                 review["reviewBindingDigest"] = _sha256(
                     {
@@ -319,7 +327,8 @@ class CoordinatorFactory:
             ),
             "assertedAt": "2026-08-13T12:29:00Z",
             "signatureAlgorithm": "ED25519",
-            "signature": "B" * 86 + "==",
+            "signatureFormat": "OPENSSH_SSHSIG_V1",
+            "signature": _FAKE_SSHSIG,
         }
         authority_proof["proofDigest"] = _sha256(
             {
@@ -1158,6 +1167,9 @@ def test_transition_accepts_closed_ed25519_evidence_shape(
         "lifecycle-controller"
     )
     assert normalized["lifecycleAuthorityProof"]["signatureAlgorithm"] == "ED25519"
+    assert normalized["lifecycleAuthorityProof"]["signatureFormat"] == (
+        "OPENSSH_SSHSIG_V1"
+    )
     assert normalized["reviewEvidence"]["reviewerRole"] == "deep-reviewer"
     assert normalized["reviewEvidence"]["projectExecutionKey"] == (
         normalized["projectExecutionKey"]

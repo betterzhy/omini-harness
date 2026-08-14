@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import errno
+import hashlib
 import json
 import os
 import stat
@@ -279,6 +280,10 @@ def test_cas_binds_the_payload_and_inode_from_the_same_opened_snapshot(
     journal_path = _state_entries(root, ".journal.json")[0]
     changed, _ = coordinator_state_factory.journal(1)
     changed["nextFencingToken"] = 999
+    changed["receipts"][-1]["journalDigest"] = "sha256:" + "0" * 64
+    changed["receipts"][-1]["journalDigest"] = (
+        "sha256:" + hashlib.sha256(canonical_json_bytes(changed)).hexdigest()
+    )
     replacement = root / "replacement"
     replacement.write_bytes(canonical_json_bytes(changed) + b"\n")
     replacement.chmod(0o600)
@@ -311,6 +316,10 @@ def test_post_write_reread_binds_the_complete_canonical_journal(
     journal, receipt = coordinator_state_factory.journal(2)
     changed = json.loads(canonical_json_bytes(journal))
     changed["nextFencingToken"] = 999
+    changed["receipts"][-1]["journalDigest"] = "sha256:" + "0" * 64
+    changed["receipts"][-1]["journalDigest"] = (
+        "sha256:" + hashlib.sha256(canonical_json_bytes(changed)).hexdigest()
+    )
     replacement = root / "replacement"
     replacement.write_bytes(canonical_json_bytes(changed) + b"\n")
     replacement.chmod(0o600)
@@ -562,6 +571,42 @@ def test_read_rejects_corrupt_or_truncated_journal(
         store.read_journal()
 
     assert caught.value.code == "COORDINATOR_JOURNAL_INVALID"
+
+
+@pytest.mark.parametrize(
+    "tamper",
+    ["next-token", "lease", "receipt", "latest-digest", "receipt-chain"],
+)
+def test_read_rejects_semantically_corrupt_journal(
+    tmp_path, monkeypatch, coordinator_state_factory, tamper
+):
+    from evolution_harness.controlled_coordinator_inputs import ControlledCoordinationError
+    from evolution_harness.hashing import canonical_json_bytes
+
+    root = tmp_path / "state"
+    store = _open_store(root, monkeypatch)
+    _initialize(store, coordinator_state_factory)
+    journal_path = _state_entries(root, ".journal.json")[0]
+    journal = json.loads(journal_path.read_text(encoding="utf-8"))
+    if tamper == "next-token":
+        journal["nextFencingToken"] = 1
+    elif tamper == "lease":
+        journal["leases"][0]["attemptId"] = "attempt:tampered"
+    elif tamper == "receipt":
+        journal["receipts"][-1]["evidence"]["command"]["attemptId"] = (
+            "attempt:tampered"
+        )
+    elif tamper == "latest-digest":
+        journal["receipts"][-1]["journalDigest"] = "sha256:" + "f" * 64
+    else:
+        journal["receipts"][-1]["previousJournalVersion"] = 7
+    journal_path.write_bytes(canonical_json_bytes(journal) + b"\n")
+    journal_path.chmod(0o600)
+
+    with pytest.raises(ControlledCoordinationError) as caught:
+        store.read_journal()
+
+    assert caught.value.code == "COORDINATOR_STATE_CORRUPT"
 
 
 def test_read_rejects_wrong_journal_mode_and_owner_identity(

@@ -1,0 +1,10 @@
+schemaVersion: controlled-planning-authority/v1
+planning:
+  mode: CONTROLLED_PARALLEL
+  contractRegistryDigest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+  dependencyGraphDigest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+  authorizationEnvelopeDigest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+  sliceDescriptorDigests: []
+  conflictPolicyVersion: controlled-conflict-policy/v1
+admission:
+  bindings: []

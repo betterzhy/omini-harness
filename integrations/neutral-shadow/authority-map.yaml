@@ -1,5 +1,62 @@
 schemaVersion: project-authority-map/v1
 authorities:
+  - id: api-boundary-decision
+    path: decisions.md
+    format: MARKDOWN_KV
+    role: CANONICAL
+    required: true
+    owns:
+      - topic.api-boundary.status
+      - topic.api-boundary.baseline
+    selectors:
+      topic.api-boundary.status:
+        key: ApiBoundaryStatus
+        required: true
+      topic.api-boundary.baseline:
+        key: ApiBoundaryBaseline
+        required: true
+  - id: controlled-planning-manifest
+    path: controlled-planning.yaml
+    format: YAML
+    role: CANONICAL
+    required: true
+    owns:
+      - controlled_planning.mode
+      - controlled_planning.contract_registry_digest
+      - controlled_planning.dependency_graph_digest
+      - controlled_planning.authorization_envelope_digest
+      - controlled_planning.slice_descriptor_digests
+      - controlled_planning.conflict_policy_version
+      - controlled_coordination.admission.bindings
+    selectors:
+      controlled_planning.mode:
+        key: planning.mode
+        required: true
+      controlled_planning.contract_registry_digest:
+        key: planning.contractRegistryDigest
+        required: true
+      controlled_planning.dependency_graph_digest:
+        key: planning.dependencyGraphDigest
+        required: true
+      controlled_planning.authorization_envelope_digest:
+        key: planning.authorizationEnvelopeDigest
+        required: true
+      controlled_planning.slice_descriptor_digests:
+        key: planning.sliceDescriptorDigests
+        required: true
+      controlled_planning.conflict_policy_version:
+        key: planning.conflictPolicyVersion
+        required: true
+      controlled_coordination.admission.bindings:
+        key: admission.bindings
+        required: true
+  - id: coordinator-issuer
+    path: coordinator-issuer.yaml
+    format: YAML
+    role: CANONICAL
+    required: true
+    owns: []
+    selectors: {}
   - id: global-status
     path: status.md
     format: MARKDOWN_KV
@@ -39,21 +96,6 @@ authorities:
       permission.stage5:
         key: release.stage5
         required: true
-  - id: api-boundary-decision
-    path: decisions.md
-    format: MARKDOWN_KV
-    role: CANONICAL
-    required: true
-    owns:
-      - topic.api-boundary.status
-      - topic.api-boundary.baseline
-    selectors:
-      topic.api-boundary.status:
-        key: ApiBoundaryStatus
-        required: true
-      topic.api-boundary.baseline:
-        key: ApiBoundaryBaseline
-        required: true
   - id: status-summary
     path: reports/status-summary.json
     format: JSON
@@ -62,6 +104,13 @@ authorities:
     owns: []
     selectors: {}
 requiredFacts:
+  - controlled_planning.mode
+  - controlled_planning.contract_registry_digest
+  - controlled_planning.dependency_graph_digest
+  - controlled_planning.authorization_envelope_digest
+  - controlled_planning.slice_descriptor_digests
+  - controlled_planning.conflict_policy_version
+  - controlled_coordination.admission.bindings
   - project.stage
   - permission.development
   - permission.stage4

@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-evolution.local/core/schemas/controlled-coordinator-snapshot.schema.json",
+  "$defs": {
+    "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._:-]*$"},
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "gitObject": {"type": "string", "pattern": "^[0-9a-f]{40}([0-9a-f]{24})?$"}
+  },
+  "type": "object",
+  "required": [
+    "schemaVersion", "projectId", "projectExecutionKey", "baseBatchPlanId",
+    "journalVersion", "journalDigest", "recoveryState",
+    "authorizationEnvelopeDigest", "conflictPolicyVersion", "expectedLaneBase",
+    "journal"
+  ],
+  "properties": {
+    "schemaVersion": {"const": "controlled-coordinator-snapshot/v1"},
+    "projectId": {"$ref": "#/$defs/id"},
+    "projectExecutionKey": {"type": "string", "pattern": "^project-execution:[0-9a-f]{64}$"},
+    "baseBatchPlanId": {"type": "string", "pattern": "^batch-plan:[0-9a-f]{24}$"},
+    "journalVersion": {"type": "integer", "minimum": 0},
+    "journalDigest": {"$ref": "#/$defs/digest"},
+    "recoveryState": {"enum": ["CLEAR", "PROJECT_WRITESET_RECOVERY", "STATE_RECOVERY_REQUIRED"]},
+    "authorizationEnvelopeDigest": {"$ref": "#/$defs/digest"},
+    "conflictPolicyVersion": {"const": "controlled-conflict-policy/v1"},
+    "expectedLaneBase": {"$ref": "#/$defs/gitObject"},
+    "journal": {"$ref": "https://agent-evolution.local/core/schemas/controlled-coordinator-journal.schema.json"}
+  },
+  "additionalProperties": false
+}

@@ -121,9 +121,9 @@ Recovery command:
 
 All schemas use Draft 2020-12, `additionalProperties: false`, explicit enums, canonical set normalization, and SHA-256 command digests that cover every field except the digest itself.
 
-Authority/WriteSet migration (2026-08-14): the locked Acquire identity now carries the complete Phase 1A `planningRequest` plus its normalized descriptor, envelope, snapshot, admission proof, and full conflict footprint. Validation replays Phase 1A canonical input checks and rebuilding of the target admission instead of trusting a caller-rehashed plan. The locked Transition lifecycle proof carries Candidate/Parent/Tree and, for `REVIEW_GO`, the review binding digest, full evidence digest, reviewer identity, and reviewer authority reference/digest; the review evidence carries the same reviewer authority binding. These are schema and command-identity evidence migrations only. Live authority-file lookup, lease CAS/fencing, process quiescence enforcement, protected execution, and recovery execution remain owned by their later Phase 1B tasks.
+Authority/WriteSet migration (2026-08-14): the locked Acquire identity carries the complete Phase 1A `planningRequest` plus its normalized descriptor, envelope, snapshot, admission proof, and full conflict footprint. Envelope provenance is an independent issuer authority record referenced by `issuerId`, `issuerAuthorityReference`, and `issuerAuthorityDigest`. The six file-owned `controlled_planning.*` facts are owned by one separate planning manifest authority; `controlled_planning.batch_base_commit` is deliberately not a file-owned fact because that would create a Git-HEAD self-hash cycle. `admissionAuthorityProof` binds `manifestAuthorityId`, `manifestAuthorityReference`, and `manifestAuthorityDigest`; its manifest-serialized binding covers project, Slice, attempt, registered source, and lane, but excludes `expectedLaneBase`. The request and command independently require `batchBaseCommit == expectedLaneBase == rebuiltSnapshot.sourceRevision.head`. Under the project lock, Acquire reloads the registration, rebuilds the Authority Snapshot through the registered integration, exact-compares the complete snapshot, requires live `permission.development=ALLOW`, and rejects caller-rehashed facts. Transition lifecycle proof remains separately project-owned and carries Candidate/Parent/Tree and review evidence as locked by Task 1.
 
-Coordinator-projection migration (2026-08-14): `ACTIVE_LEASE_CONFLICT` is a locked closed-enum execution-plan reason. It identifies a conflict with a nonterminal lease from the immutable coordinator snapshot; `PROJECT_CAPACITY_LIMIT` remains the distinct project-wide capacity reason. This migration extends only the Phase 1A plan reason vocabulary and does not make planning mutating or remove the coordinator recheck requirement.
+Coordinator-projection migration (2026-08-14): `ACTIVE_LEASE_CONFLICT` is a locked closed-enum projection reason and `PROJECT_CAPACITY_LIMIT` remains the distinct project-wide capacity reason. The optional planner input is a closed `controlled-coordinator-snapshot/v1` object that binds project, project execution key, base provisional plan, journal version/digest/recovery state, envelope, conflict policy, source base, and the complete journal. When absent, the returned bundle and provisional execution-plan bytes are unchanged. When present, `bundle.executionPlan` is still that original provisional plan and the read-only result is added separately as `bundle.coordinatorProjection` with schema `controlled-coordinator-projection/v1`. A projection is not an Acquire `executionPlan`, never mutates coordinator state, and never removes `requiresCoordinatorRecheck=true`.
 
 ### Journal invariants
 
@@ -139,7 +139,7 @@ receipts = append-only ordered mutation receipts
 integrationTransactions = [] in Phase 1B
 ```
 
-Every lease stores the complete normalized conflict footprint, not only its digest. Candidate identity is either `null` or exactly `{commit, parent, tree}`. A transition receipt stores the previous and next journal versions, command digest, fencing token, state transition, authority bindings, and journal digest.
+Every lease stores the complete target footprint plus the authority-bound planning footprints needed to reconstruct the cross-plan dependency/producer-consumer closure. It also stores the existing lane directory's no-follow `{device, inode, type}` physical identity. Candidate identity is either `null` or exactly `{commit, parent, tree}`. On every read and replacement the store validates the ordered receipt/version/lease association, requires `nextFencingToken` above every durable token, and verifies the latest receipt digest against the complete sentinel-normalized journal. Corruption fails closed as `COORDINATOR_STATE_CORRUPT`; recovery execution remains Task 6.
 `recoveryEvidence` is always present. Both pending recovery states require non-null complete evidence; `CLEAR` permits `null` before any recovery and retains non-null immutable evidence after an authorized recovery closes.
 
 ---
@@ -269,7 +269,23 @@ git commit -m "feat: persist project coordinator journals"
 - Create: `src/evolution_harness/controlled_coordinator.py`
 - Create: `tests/test_controlled_coordinator_acquire.py`
 - Modify: `src/evolution_harness/controlled_planner.py`
+- Modify: `src/evolution_harness/controlled_inputs.py`
+- Modify: `src/evolution_harness/controlled_coordinator_inputs.py`
+- Modify: `src/evolution_harness/coordinator_state.py`
+- Modify: `core/schemas/controlled-coordinator-acquire-command.schema.json`
+- Modify: `core/schemas/controlled-execution-lease.schema.json`
 - Modify: `core/schemas/controlled-execution-plan.schema.json`
+- Create: `core/schemas/controlled-coordinator-snapshot.schema.json`
+- Create: `core/schemas/controlled-coordinator-projection.schema.json`
+- Modify: `integrations/neutral-shadow/authority-map.yaml`
+- Create: `examples/external-project-source/coordinator-issuer.yaml`
+- Create: `examples/external-project-source/controlled-planning.yaml`
+- Modify: `tests/conftest.py`
+- Modify: `tests/test_controlled_inputs.py`
+- Modify: `tests/test_controlled_coordinator_inputs.py`
+- Modify: `tests/test_coordinator_state.py`
+- Modify: `tests/test_controlled_planner.py`
+- Modify: `tests/test_neutral_integration_fixture.py`
 - Modify: `docs/superpowers/plans/2026-08-14-controlled-parallel-project-execution-phase-1b.md`
 
 **Interfaces:**
@@ -288,7 +304,7 @@ def test_cross_batch_same_owner_is_serialized(coordinator_factory):
     assert first["fencingToken"] == 1
 ```
 
-Cover cross-target aliases of the same repository, cross-plan and cross-batch capacity, disjoint project keys, full-footprint conflicts, changed policy version, stale snapshot, changed envelope, source HEAD drift, lane-root outside the approved isolation root, same-key replay, same key with changed payload, terminal replay, and two-process simultaneous acquisition where exactly one process succeeds.
+Cover cross-target aliases of the same repository, cross-plan and cross-batch capacity, cross-plan transitive conflict paths, disjoint project keys, changed policy/envelope/snapshot/HEAD, caller-forged facts, real development DENY, corrupt journals, lane missing/symlink/physical identity, same-key replay/changed payload/terminal replay, and two-process simultaneous acquisition where exactly one process succeeds.
 
 - [ ] **Step 2: Run the focused RED test**
 
@@ -298,11 +314,11 @@ Expected: FAIL because acquisition is not implemented.
 
 - [ ] **Step 3: Implement identity and acquire CAS**
 
-Derive the project key from registration fields plus source-root `st_dev`, `st_ino`, and directory type captured no-follow. Under the project lock: reread the journal; reject recovery state; re-run normalization and live registration/authority bindings; compare the proposed full footprint against every nonterminal lease using the Phase 1A conflict predicate; enforce `min(envelope.maxParallelLanes, 3)` globally; allocate the next fencing token; append the lease and receipt; atomically persist and reread.
+Derive the project key from registration fields plus source-root `st_dev`, `st_ino`, and directory type captured no-follow. Under the project lock: reread and integrity-check the journal; reject recovery state; re-run normalization; reload registration; rebuild and exact-compare live Authority; require development ALLOW; validate the existing approved lane directory no-follow from `/` through every ancestor; compare each nonterminal target using one closure built from every active lease planning graph plus the complete current descriptor graph; enforce `min(envelope.maxParallelLanes, 3)` globally; allocate the monotonic fencing token; append the physically bound lease and receipt; atomically persist and integrity-check the reread.
 
 - [ ] **Step 4: Make Phase 1A planning coordinator-aware without making it mutating**
 
-Add an optional immutable coordinator snapshot parameter to the planner. When supplied, subtract nonterminal leases from lane capacity and queue conflicting proposals with `ACTIVE_LEASE_CONFLICT` or `PROJECT_CAPACITY_LIMIT`. When absent, preserve the existing provisional behavior and `requiresCoordinatorRecheck: true`.
+Add the optional immutable `controlled-coordinator-snapshot/v1` parameter to the planner. Reject cross-project/envelope/policy/base/recovery/version/digest bindings. When supplied, preserve the original provisional `executionPlan` and add a separate `controlled-coordinator-projection/v1` that subtracts nonterminal leases from capacity and queues conflicts with `ACTIVE_LEASE_CONFLICT` or `PROJECT_CAPACITY_LIMIT`. When absent, preserve the complete pre-Task-3 bundle bytes and `requiresCoordinatorRecheck: true`.
 
 - [ ] **Step 5: Run focused and Phase 1A compatibility tests**
 

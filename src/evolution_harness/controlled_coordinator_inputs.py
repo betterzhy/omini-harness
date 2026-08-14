@@ -224,8 +224,9 @@ def _normalize_acquire_evidence(
         )
 
     proof = command["admissionAuthorityProof"]
-    proof["authorityReference"] = _canonical_relative_path(
-        proof["authorityReference"], "admissionAuthorityProof.authorityReference"
+    proof["manifestAuthorityReference"] = _canonical_relative_path(
+        proof["manifestAuthorityReference"],
+        "admissionAuthorityProof.manifestAuthorityReference",
     )
     binding = proof["binding"]
     binding["originalSourceRoot"] = _canonical_absolute_path(
@@ -304,46 +305,53 @@ def _validate_admission_authority(command: dict[str, Any]) -> None:
         "attemptId": command["attemptId"],
         "originalSourceRoot": command["originalSourceRoot"],
         "laneRoot": command["laneRoot"],
-        "expectedLaneBase": command["expectedLaneBase"],
     }
     if binding != expected_binding:
         raise ControlledCoordinationError(
             "ADMISSION_AUTHORITY_BINDING_MISMATCH",
             "admission authority proof does not bind acquire identity",
         )
-    expected_fact_id = f"controlled_coordination.admission.{command['sliceId']}"
     fact = snapshot["facts"].get(proof["factId"])
-    if proof["factId"] != expected_fact_id or not isinstance(fact, dict):
+    if not isinstance(fact, dict):
         raise ControlledCoordinationError(
             "ADMISSION_AUTHORITY_BINDING_MISMATCH",
             "project-authorized admission fact is missing",
         )
-    envelope = command["authorizationEnvelope"]
     expected_fact_value = canonical_json_bytes(binding).decode("utf-8")
+    fact_value = fact.get("normalizedValue")
+    try:
+        admitted_bindings = json.loads(fact_value)
+    except (TypeError, ValueError):
+        admitted_bindings = None
+    admission_matches = (
+        fact_value == expected_fact_value
+        or (
+            isinstance(admitted_bindings, list)
+            and canonical_json_bytes(admitted_bindings).decode("utf-8") == fact_value
+            and binding in admitted_bindings
+        )
+    )
     if (
-        fact.get("owner") != envelope["issuerId"]
-        or fact.get("sourcePath") != proof["authorityReference"]
-        or fact.get("rawValue") != expected_fact_value
-        or fact.get("normalizedValue") != expected_fact_value
-        or proof["authorityReference"] != envelope["issuerAuthorityReference"]
-        or proof["authorityDigest"] != envelope["issuerAuthorityDigest"]
+        fact.get("owner") != proof["manifestAuthorityId"]
+        or fact.get("sourcePath") != proof["manifestAuthorityReference"]
+        or not admission_matches
     ):
         raise ControlledCoordinationError(
             "ADMISSION_AUTHORITY_BINDING_MISMATCH",
-            "admission fact is not bound to envelope authority",
+            "admission fact is not bound to the planning manifest",
         )
     authority = next(
         (
             item
             for item in snapshot["authorities"]
-            if item["path"] == proof["authorityReference"]
+            if item["path"] == proof["manifestAuthorityReference"]
         ),
         None,
     )
     if (
         authority is None
-        or authority["id"] != envelope["issuerId"]
-        or proof["authorityDigest"] != "sha256:" + authority["sha256"]
+        or authority["id"] != proof["manifestAuthorityId"]
+        or proof["manifestAuthorityDigest"] != "sha256:" + authority["sha256"]
     ):
         raise ControlledCoordinationError(
             "ADMISSION_AUTHORITY_BINDING_MISMATCH",
@@ -354,8 +362,9 @@ def _validate_admission_authority(command: dict[str, Any]) -> None:
         planning_fact = snapshot["facts"].get(fact_id)
         if (
             not isinstance(planning_fact, dict)
-            or planning_fact.get("owner") != envelope["issuerId"]
-            or planning_fact.get("sourcePath") != proof["authorityReference"]
+            or planning_fact.get("owner") != proof["manifestAuthorityId"]
+            or planning_fact.get("sourcePath")
+            != proof["manifestAuthorityReference"]
             or not isinstance(planning_fact.get("normalizedValue"), str)
         ):
             raise ControlledCoordinationError(
@@ -364,9 +373,27 @@ def _validate_admission_authority(command: dict[str, Any]) -> None:
             )
         return planning_fact["normalizedValue"]
 
+    def planning_fact_allows(fact_id: str, expected_value: Any) -> bool:
+        normalized_value = planning_fact_value(fact_id)
+        expected_text = (
+            expected_value
+            if isinstance(expected_value, str)
+            else canonical_json_bytes(expected_value).decode("utf-8")
+        )
+        if normalized_value == expected_text:
+            return True
+        try:
+            choices = json.loads(normalized_value)
+        except (TypeError, ValueError):
+            return False
+        return (
+            isinstance(choices, list)
+            and canonical_json_bytes(choices).decode("utf-8") == normalized_value
+            and expected_value in choices
+        )
+
     expected_facts = {
-        "controlled_planning.batch_base_commit": command["expectedLaneBase"],
-        "controlled_planning.authorization_envelope_digest": envelope[
+        "controlled_planning.authorization_envelope_digest": command["authorizationEnvelope"][
             "envelopeDigest"
         ],
         "controlled_planning.conflict_policy_version": command[
@@ -374,27 +401,17 @@ def _validate_admission_authority(command: dict[str, Any]) -> None:
         ],
     }
     for fact_id, expected_value in expected_facts.items():
-        if planning_fact_value(fact_id) != expected_value:
+        if not planning_fact_allows(fact_id, expected_value):
             raise ControlledCoordinationError(
                 "ADMISSION_AUTHORITY_BINDING_MISMATCH",
                 f"planning authority fact changed: {fact_id}",
             )
-    descriptor_fact = planning_fact_value(
-        "controlled_planning.slice_descriptor_digests"
+    request_descriptor_digests = sorted(
+        item["descriptorDigest"] for item in command["planningRequest"]["slices"]
     )
-    try:
-        descriptor_digests = json.loads(descriptor_fact)
-    except (TypeError, ValueError) as exc:
-        raise ControlledCoordinationError(
-            "ADMISSION_AUTHORITY_BINDING_MISMATCH",
-            "descriptor authority fact is not canonical JSON",
-        ) from exc
-    if (
-        not isinstance(descriptor_digests, list)
-        or any(not isinstance(item, str) for item in descriptor_digests)
-        or descriptor_digests != sorted(set(descriptor_digests))
-        or canonical_json_bytes(descriptor_digests).decode("utf-8") != descriptor_fact
-        or command["sliceDescriptor"]["descriptorDigest"] not in descriptor_digests
+    if not planning_fact_allows(
+        "controlled_planning.slice_descriptor_digests",
+        request_descriptor_digests,
     ):
         raise ControlledCoordinationError(
             "ADMISSION_AUTHORITY_BINDING_MISMATCH",

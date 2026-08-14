@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-evolution.local/core/schemas/controlled-coordinator-projection.schema.json",
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+  },
+  "type": "object",
+  "required": [
+    "schemaVersion", "projectId", "projectExecutionKey", "baseBatchPlanId",
+    "journalVersion", "journalDigest", "recoveryState", "availableProjectLanes",
+    "proposedAdmissions", "queued"
+  ],
+  "properties": {
+    "schemaVersion": {"const": "controlled-coordinator-projection/v1"},
+    "projectId": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._:-]*$"},
+    "projectExecutionKey": {"type": "string", "pattern": "^project-execution:[0-9a-f]{64}$"},
+    "baseBatchPlanId": {"type": "string", "pattern": "^batch-plan:[0-9a-f]{24}$"},
+    "journalVersion": {"type": "integer", "minimum": 0},
+    "journalDigest": {"$ref": "#/$defs/digest"},
+    "recoveryState": {"const": "CLEAR"},
+    "availableProjectLanes": {"type": "integer", "minimum": 0, "maximum": 3},
+    "proposedAdmissions": {
+      "type": "array",
+      "items": {"$ref": "https://agent-evolution.local/core/schemas/controlled-execution-plan.schema.json#/$defs/proposedEntry"},
+      "uniqueItems": true
+    },
+    "queued": {
+      "type": "array",
+      "items": {"$ref": "https://agent-evolution.local/core/schemas/controlled-execution-plan.schema.json#/$defs/outputEntry"},
+      "uniqueItems": true
+    }
+  },
+  "additionalProperties": false
+}

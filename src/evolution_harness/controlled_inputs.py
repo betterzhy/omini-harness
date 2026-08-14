@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import json
 import re
 from datetime import datetime
 from pathlib import Path
@@ -32,7 +33,6 @@ _RFC3339_PATTERN = re.compile(
 )
 _FACT_IDS = (
     "controlled_planning.mode",
-    "controlled_planning.batch_base_commit",
     "controlled_planning.contract_registry_digest",
     "controlled_planning.dependency_graph_digest",
     "controlled_planning.authorization_envelope_digest",
@@ -174,11 +174,15 @@ def _validate_snapshot(
     }
 
 
-def _validate_authority_facts(request: dict[str, Any], descriptors: list[dict[str, Any]], envelope: dict[str, Any]) -> None:
+def _validate_authority_facts(
+    request: dict[str, Any],
+    descriptors: list[dict[str, Any]],
+    envelope: dict[str, Any],
+    authorities_by_path: dict[str, dict[str, Any]],
+) -> None:
     snapshot = request["authoritySnapshot"]
     expected = {
         "controlled_planning.mode": request["planningMode"],
-        "controlled_planning.batch_base_commit": request["batchBaseCommit"],
         "controlled_planning.contract_registry_digest": request["contractRegistryDigest"],
         "controlled_planning.dependency_graph_digest": request["dependencyGraphDigest"],
         "controlled_planning.authorization_envelope_digest": envelope["envelopeDigest"],
@@ -187,6 +191,24 @@ def _validate_authority_facts(request: dict[str, Any], descriptors: list[dict[st
         ).decode("utf-8"),
         "controlled_planning.conflict_policy_version": request["conflictPolicyVersion"],
     }
+    def authorizes(normalized_value: str, expected_value: str) -> bool:
+        if normalized_value == expected_value:
+            return True
+        try:
+            choices = json.loads(normalized_value)
+        except (TypeError, ValueError):
+            return False
+        if not isinstance(choices, list) or canonical_json_bytes(choices).decode(
+            "utf-8"
+        ) != normalized_value:
+            return False
+        try:
+            structured_expected = json.loads(expected_value)
+        except (TypeError, ValueError):
+            structured_expected = expected_value
+        return structured_expected in choices
+
+    manifest_identity: tuple[str, str] | None = None
     for fact_id in _FACT_IDS:
         fact = snapshot["facts"].get(fact_id)
         if not isinstance(fact, dict):
@@ -197,13 +219,37 @@ def _validate_authority_facts(request: dict[str, Any], descriptors: list[dict[st
         canonical_source_path = _safe_path(
             source_path, f"authoritySnapshot.facts.{fact_id}.sourcePath"
         )
+        current_identity = (fact.get("owner"), canonical_source_path)
         if (
-            fact.get("owner") != envelope["issuerId"]
-            or canonical_source_path != envelope["issuerAuthorityReference"]
+            not isinstance(current_identity[0], str)
             or not isinstance(fact.get("normalizedValue"), str)
-            or fact["normalizedValue"] != expected[fact_id]
+            or not authorizes(fact["normalizedValue"], expected[fact_id])
         ):
             raise ControlledPlanningError("AUTHORITY_FACT_MISMATCH", f"authority fact mismatch: {fact_id}")
+        if manifest_identity is None:
+            manifest_identity = current_identity
+        elif current_identity != manifest_identity:
+            raise ControlledPlanningError(
+                "AUTHORITY_FACT_MISMATCH",
+                "controlled planning facts must have one manifest authority",
+            )
+
+    assert manifest_identity is not None
+    manifest_id, manifest_path = manifest_identity
+    manifest = authorities_by_path.get(manifest_path)
+    if manifest is None or manifest["id"] != manifest_id:
+        raise ControlledPlanningError(
+            "AUTHORITY_REFERENCE_UNBOUND",
+            "controlled planning manifest is not bound to the authority snapshot",
+        )
+    if (
+        manifest_id == envelope["issuerId"]
+        or manifest_path == envelope["issuerAuthorityReference"]
+    ):
+        raise ControlledPlanningError(
+            "AUTHORITY_FACT_MISMATCH",
+            "controlled planning manifest must be independent from the envelope issuer",
+        )
 
 
 def _validate_authority_references(
@@ -245,7 +291,9 @@ def normalize_planning_request(repository_root: Path, value: dict[str, Any]) -> 
         raise ControlledPlanningError("PROJECT_ID_MISMATCH", "request, snapshot, and envelope project IDs must match")
     if dependency_graph_digest(descriptors) != normalized["dependencyGraphDigest"]:
         raise ControlledPlanningError("DEPENDENCY_GRAPH_DIGEST_MISMATCH", "dependency graph digest mismatch")
-    _validate_authority_facts(normalized, descriptors, envelope)
+    _validate_authority_facts(
+        normalized, descriptors, envelope, authorities_by_path
+    )
     _validate_authority_references(authorities_by_path, descriptors, envelope)
     as_of = parse_rfc3339(normalized["asOf"])
     issued_at = parse_rfc3339(envelope["issuedAt"])

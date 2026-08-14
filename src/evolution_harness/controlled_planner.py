@@ -17,6 +17,8 @@ from .controlled_inputs import (
     normalize_planning_request,
     parse_rfc3339,
 )
+from .controlled_coordinator_inputs import ControlledCoordinationError
+from .coordinator_state import _validate_journal_integrity
 from .hashing import canonical_json_bytes, sha256_bytes
 from .schema import SchemaStore
 
@@ -24,6 +26,8 @@ from .schema import SchemaStore
 _DECISION_SCHEMA = "core/schemas/controlled-authorization-decision.schema.json"
 _REPORT_SCHEMA = "core/schemas/controlled-conflict-report.schema.json"
 _PLAN_SCHEMA = "core/schemas/controlled-execution-plan.schema.json"
+_COORDINATOR_SNAPSHOT_SCHEMA = "core/schemas/controlled-coordinator-snapshot.schema.json"
+_COORDINATOR_PROJECTION_SCHEMA = "core/schemas/controlled-coordinator-projection.schema.json"
 _PROTECTED_ACTION_CLASSES = frozenset(
     {
         "action:database-write",
@@ -202,6 +206,136 @@ def _execution_requirements(
     }
 
 
+def _coordinator_projection(
+    repository_root: Path,
+    normalized: dict[str, Any],
+    plan: dict[str, Any],
+    conflict_report: dict[str, Any],
+    snapshot: dict[str, Any],
+) -> dict[str, Any]:
+    store = SchemaStore(repository_root)
+    store.validate(_COORDINATOR_SNAPSHOT_SCHEMA, snapshot)
+    journal = snapshot["journal"]
+    try:
+        _validate_journal_integrity(journal)
+    except ControlledCoordinationError as exc:
+        raise ControlledPlanningError(
+            "COORDINATOR_SNAPSHOT_CORRUPT", str(exc)
+        ) from exc
+    if snapshot["recoveryState"] != "CLEAR" or journal["recoveryState"] != "CLEAR":
+        raise ControlledPlanningError(
+            "COORDINATOR_RECOVERY_REQUIRED",
+            "coordinator projection is unavailable while recovery is required",
+        )
+    expected_digest = (
+        journal["receipts"][-1]["journalDigest"]
+        if journal["receipts"]
+        else "sha256:" + sha256_bytes(canonical_json_bytes(journal))
+    )
+    if (
+        snapshot["projectId"] != normalized["projectId"]
+        or snapshot["projectExecutionKey"] != journal["projectExecutionKey"]
+        or snapshot["baseBatchPlanId"] != plan["batchPlanId"]
+        or snapshot["journalVersion"] != journal["journalVersion"]
+        or snapshot["journalDigest"] != expected_digest
+        or snapshot["recoveryState"] != journal["recoveryState"]
+        or snapshot["authorizationEnvelopeDigest"]
+        != normalized["authorizationEnvelope"]["envelopeDigest"]
+        or snapshot["conflictPolicyVersion"]
+        != normalized["conflictPolicyVersion"]
+        or snapshot["expectedLaneBase"] != normalized["batchBaseCommit"]
+    ):
+        raise ControlledPlanningError(
+            "COORDINATOR_SNAPSHOT_BINDING_MISMATCH",
+            "coordinator snapshot does not bind the immutable provisional plan",
+        )
+    active = [
+        lease
+        for lease in journal["leases"]
+        if not (
+            lease["state"] in {"CLOSED", "CANCELLED"}
+            and lease["released"] is True
+        )
+    ]
+    if any(
+        lease["authorizationEnvelopeDigest"]
+        != snapshot["authorizationEnvelopeDigest"]
+        or lease["conflictPolicyVersion"] != snapshot["conflictPolicyVersion"]
+        or lease["expectedLaneBase"] != snapshot["expectedLaneBase"]
+        for lease in active
+    ):
+        raise ControlledPlanningError(
+            "COORDINATOR_SNAPSHOT_BINDING_MISMATCH",
+            "active lease envelope, policy, or base differs from the projection",
+        )
+    acquire_projects = {
+        receipt["evidence"]["command"]["projectId"]
+        for receipt in journal["receipts"]
+        if receipt["receiptType"] == "ACQUIRE"
+    }
+    if acquire_projects and acquire_projects != {snapshot["projectId"]}:
+        raise ControlledPlanningError(
+            "COORDINATOR_SNAPSHOT_BINDING_MISMATCH",
+            "active journal acquisition evidence belongs to another project",
+        )
+
+    by_slice: dict[str, dict[str, Any]] = {}
+    for footprint in [
+        *(item for lease in active for item in lease["planningFootprints"]),
+        *conflict_report["footprints"],
+    ]:
+        prior = by_slice.get(footprint["sliceId"])
+        if prior is not None and canonical_json_bytes(prior) != canonical_json_bytes(
+            footprint
+        ):
+            raise ControlledPlanningError(
+                "COORDINATOR_SNAPSHOT_BINDING_MISMATCH",
+                "slice footprint identity changed across the active planning graph",
+            )
+        by_slice[footprint["sliceId"]] = footprint
+    graph = [by_slice[slice_id] for slice_id in sorted(by_slice)]
+    dependency_closure = _dependency_closure(graph)
+    owner_closure = _owner_closure(graph)
+    footprints = {item["sliceId"]: item for item in conflict_report["footprints"]}
+    retained = []
+    queued = []
+    lane_cap = plan["projectLaneCap"]
+    for admission in plan["proposedAdmissions"]:
+        current = footprints[admission["sliceId"]]
+        if any(
+            _conflict_reasons(
+                lease["fullFootprint"],
+                current,
+                dependency_closure,
+                owner_closure,
+            )
+            for lease in active
+        ):
+            queued.append(
+                {"sliceId": admission["sliceId"], "reasons": ["ACTIVE_LEASE_CONFLICT"]}
+            )
+        elif len(active) + len(retained) >= lane_cap:
+            queued.append(
+                {"sliceId": admission["sliceId"], "reasons": ["PROJECT_CAPACITY_LIMIT"]}
+            )
+        else:
+            retained.append(copy.deepcopy(admission))
+    projection = {
+        "schemaVersion": "controlled-coordinator-projection/v1",
+        "projectId": normalized["projectId"],
+        "projectExecutionKey": snapshot["projectExecutionKey"],
+        "baseBatchPlanId": plan["batchPlanId"],
+        "journalVersion": snapshot["journalVersion"],
+        "journalDigest": snapshot["journalDigest"],
+        "recoveryState": "CLEAR",
+        "availableProjectLanes": max(0, lane_cap - len(active)),
+        "proposedAdmissions": retained,
+        "queued": sorted(queued, key=lambda item: item["sliceId"]),
+    }
+    store.validate(_COORDINATOR_PROJECTION_SCHEMA, projection)
+    return projection
+
+
 def build_provisional_execution_plan(
     repository_root: Path,
     request: dict[str, Any],
@@ -209,20 +343,7 @@ def build_provisional_execution_plan(
 ) -> dict[str, Any]:
     """Build deterministic coordinator inputs without admitting or executing work."""
     normalized = normalize_planning_request(repository_root, request)
-    snapshot = None
-    if coordinator_snapshot is not None:
-        snapshot = copy.deepcopy(coordinator_snapshot)
-        SchemaStore(repository_root).validate(
-            "core/schemas/controlled-coordinator-journal.schema.json", snapshot
-        )
-    active_leases = [] if snapshot is None else [
-        lease
-        for lease in snapshot["leases"]
-        if not (
-            lease["state"] in {"CLOSED", "CANCELLED"}
-            and lease["released"] is True
-        )
-    ]
+    snapshot = None if coordinator_snapshot is None else copy.deepcopy(coordinator_snapshot)
     descriptors = normalized["slices"]
     by_id = {item["sliceId"]: item for item in descriptors}
     depths = _dependency_depths(descriptors)
@@ -241,12 +362,6 @@ def build_provisional_execution_plan(
         for cluster in conflict_report["clusters"]
         for slice_id in cluster["sliceIds"]
     }
-    footprint_by_slice = (
-        {item["sliceId"]: item for item in conflict_report["footprints"]}
-        if active_leases
-        else {}
-    )
-
     blocked = []
     rejected = []
     eligible = []
@@ -277,27 +392,11 @@ def build_provisional_execution_plan(
         key=lambda item: (item["priority"], depths[item["sliceId"]], item["sliceId"]),
     ):
         cluster_id = cluster_by_slice[descriptor["sliceId"]]
-        active_conflict = False
-        if active_leases:
-            footprint = footprint_by_slice[descriptor["sliceId"]]
-            active_conflict = any(
-                _conflict_reasons(
-                    footprint,
-                    lease["fullFootprint"],
-                    _dependency_closure([footprint, lease["fullFootprint"]]),
-                    _owner_closure([footprint, lease["fullFootprint"]]),
-                )
-                for lease in active_leases
-            )
-        if active_conflict:
-            queued.append(
-                {"sliceId": descriptor["sliceId"], "reasons": ["ACTIVE_LEASE_CONFLICT"]}
-            )
-        elif cluster_id in occupied_clusters:
+        if cluster_id in occupied_clusters:
             queued.append(
                 {"sliceId": descriptor["sliceId"], "reasons": ["CONFLICT_CLUSTER_BUSY"]}
             )
-        elif len(active_leases) + len(proposed_descriptors) >= lane_cap:
+        elif len(proposed_descriptors) >= lane_cap:
             queued.append(
                 {"sliceId": descriptor["sliceId"], "reasons": ["PROJECT_CAPACITY_LIMIT"]}
             )
@@ -343,8 +442,13 @@ def build_provisional_execution_plan(
     store.validate(_REPORT_SCHEMA, conflict_report)
     store.validate(_DECISION_SCHEMA, decision)
     store.validate(_PLAN_SCHEMA, plan)
-    return {
+    bundle = {
         "conflictReport": conflict_report,
         "authorizationDecision": decision,
         "executionPlan": plan,
     }
+    if snapshot is not None:
+        bundle["coordinatorProjection"] = _coordinator_projection(
+            repository_root, normalized, plan, conflict_report, snapshot
+        )
+    return bundle

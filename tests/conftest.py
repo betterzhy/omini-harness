@@ -79,10 +79,16 @@ class ControlledPlanningFactory:
     def authority_snapshot(
         self, *, descriptors, envelope, contract_registry_digest, dependency_graph_digest_value
     ):
-        authority_records = [{
-            "id": "authority-neutral", "path": "authority/portfolio.yaml",
-            "role": "CANONICAL", "sha256": "1" * 64,
-        }]
+        authority_records = [
+            {
+                "id": "authority-neutral", "path": "authority/portfolio.yaml",
+                "role": "CANONICAL", "sha256": "1" * 64,
+            },
+            {
+                "id": "authority-planning", "path": "authority/controlled-planning.yaml",
+                "role": "CANONICAL", "sha256": "6" * 64,
+            },
+        ]
         descriptor_paths = sorted({
             path for descriptor in descriptors for path in descriptor["authorityReferences"]
             if path != "authority/portfolio.yaml"
@@ -97,7 +103,6 @@ class ControlledPlanningFactory:
         ).decode("utf-8")
         normalized_facts = {
             "controlled_planning.mode": "CONTROLLED_PARALLEL",
-            "controlled_planning.batch_base_commit": "a" * 40,
             "controlled_planning.contract_registry_digest": contract_registry_digest,
             "controlled_planning.dependency_graph_digest": dependency_graph_digest_value,
             "controlled_planning.authorization_envelope_digest": envelope["envelopeDigest"],
@@ -114,7 +119,7 @@ class ControlledPlanningFactory:
             },
             "authorities": authority_records,
             "facts": {
-                fact_id: {"owner": "authority-neutral", "sourcePath": "authority/portfolio.yaml", "rawValue": normalized_value, "normalizedValue": normalized_value}
+                fact_id: {"owner": "authority-planning", "sourcePath": "authority/controlled-planning.yaml", "rawValue": normalized_value, "normalizedValue": normalized_value}
                 for fact_id, normalized_value in sorted(normalized_facts.items())
             },
             "conflicts": [], "missingFacts": [], "excludedPaths": [], "gate": "PASS",
@@ -154,8 +159,8 @@ class CoordinatorStateFactory:
         command = {
             "schemaVersion": "controlled-coordinator-transition-command/v1",
             "projectExecutionKey": key,
-            "leaseId": "lease:" + "2" * 24,
-            "attemptId": "attempt:neutral-a",
+            "leaseId": "lease:" + f"{version:024x}",
+            "attemptId": f"attempt:neutral-{version}",
             "fencingToken": version,
             "expectedState": "ACTIVE",
             "nextState": "FIXED_CANDIDATE",
@@ -201,23 +206,85 @@ class CoordinatorStateFactory:
             "evidence": {"command": command},
         }
 
+    def lease(self, token: int, *, project_execution_key: str | None = None):
+        key = project_execution_key or self.project_execution_key
+        suffix = f"neutral-{token}"
+        footprint = {
+            "conflictFootprintId": "footprint:" + f"{token:024x}",
+            "sliceId": f"slice:{suffix}",
+            "ownerSet": [f"owner:{suffix}"],
+            "factFamilySet": [f"fact:{suffix}"],
+            "publicContractSet": [],
+            "producerConsumerSet": [],
+            "bindingSet": [],
+            "exactWriteSet": [f"services/{suffix}"],
+            "ephemeralWriteSet": [f"build/{suffix}"],
+            "sharedArtifactSet": [],
+            "dependencySet": [],
+            "migrationResourceSet": [],
+            "authorityReferences": ["status.md"],
+        }
+        return {
+            "schemaVersion": "controlled-execution-lease/v1",
+            "projectExecutionKey": key,
+            "leaseId": "lease:" + f"{token:024x}",
+            "batchPlanId": "batch-plan:" + f"{token:024x}",
+            "sliceId": f"slice:{suffix}",
+            "attemptId": f"attempt:neutral-{token}",
+            "authoritySnapshotFingerprint": "sha256:" + "3" * 64,
+            "authorizationEnvelopeDigest": "sha256:" + "7" * 64,
+            "conflictPolicyVersion": "controlled-conflict-policy/v1",
+            "descriptorDigest": "sha256:" + "8" * 64,
+            "fullFootprint": footprint,
+            "planningFootprints": [copy.deepcopy(footprint)],
+            "originalSourceRoot": "/projects/neutral",
+            "laneRoot": f"/projects/neutral-lanes/{suffix}",
+            "lanePhysicalIdentity": {
+                "device": 1, "inode": token, "type": "DIRECTORY"
+            },
+            "expectedLaneBase": "a" * 40,
+            "fencingToken": token,
+            "state": "FIXED_CANDIDATE",
+            "candidateIdentity": {
+                "commit": "4" * 40, "parent": "5" * 40, "tree": "6" * 40
+            },
+            "acquiredAt": "2026-08-13T12:00:00Z",
+            "lastTransitionAt": "2026-08-13T12:31:00Z",
+            "released": False,
+            "recoveryStatus": "CLEAR",
+        }
+
     def journal(self, version: int, *, project_execution_key: str | None = None):
         key = project_execution_key or self.project_execution_key
         receipt = self.receipt(version, project_execution_key=key)
-        return {
+        journal = {
             "schemaVersion": "controlled-coordinator-journal/v1",
             "projectExecutionKey": key,
             "journalVersion": version,
             "nextFencingToken": version + 1,
             "recoveryState": "CLEAR",
             "recoveryEvidence": None,
-            "leases": [],
+            "leases": [
+                self.lease(item, project_execution_key=key)
+                for item in range(1, version + 1)
+            ],
             "receipts": [
                 self.receipt(item, project_execution_key=key)
                 for item in range(1, version + 1)
             ],
             "integrationTransactions": [],
-        }, receipt
+        }
+        for index in range(len(journal["receipts"])):
+            prefix = copy.deepcopy(journal)
+            prefix["journalVersion"] = index + 1
+            prefix["nextFencingToken"] = index + 2
+            prefix["leases"] = prefix["leases"][: index + 1]
+            prefix["receipts"] = prefix["receipts"][: index + 1]
+            prefix["receipts"][-1]["journalDigest"] = "sha256:" + "0" * 64
+            journal["receipts"][index]["journalDigest"] = (
+                "sha256:" + sha256_bytes(canonical_json_bytes(prefix))
+            )
+        return journal, copy.deepcopy(journal["receipts"][-1])
 
 
 @pytest.fixture

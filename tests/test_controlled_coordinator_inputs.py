@@ -172,13 +172,12 @@ class CoordinatorFactory:
             "attemptId": "attempt:neutral-a",
             "originalSourceRoot": "/projects/neutral",
             "laneRoot": "/projects/neutral-lanes/slice-neutral-a",
-            "expectedLaneBase": "a" * 40,
         }
         request = self.controlled_factory.request(descriptor, envelope=envelope)
         fact_id = f"controlled_coordination.admission.{descriptor['sliceId']}"
         request["authoritySnapshot"]["facts"][fact_id] = {
-            "owner": envelope["issuerId"],
-            "sourcePath": envelope["issuerAuthorityReference"],
+            "owner": "authority-planning",
+            "sourcePath": "authority/controlled-planning.yaml",
             "rawValue": canonical_json_bytes(binding).decode("utf-8"),
             "normalizedValue": canonical_json_bytes(binding).decode("utf-8"),
         }
@@ -198,8 +197,9 @@ class CoordinatorFactory:
         )
         authority_proof = {
             "factId": fact_id,
-            "authorityReference": envelope["issuerAuthorityReference"],
-            "authorityDigest": envelope["issuerAuthorityDigest"],
+            "manifestAuthorityId": "authority-planning",
+            "manifestAuthorityReference": "authority/controlled-planning.yaml",
+            "manifestAuthorityDigest": "sha256:" + "6" * 64,
             "binding": binding,
         }
         authority_proof["proofDigest"] = _sha256(authority_proof)
@@ -394,7 +394,7 @@ def _mutate_acquire(command, field):
         }
     )
     changed_proof = copy.deepcopy(command["admissionAuthorityProof"])
-    changed_proof["authorityDigest"] = "sha256:" + "c" * 64
+    changed_proof["manifestAuthorityDigest"] = "sha256:" + "c" * 64
     changed_proof["proofDigest"] = _sha256(
         {key: value for key, value in changed_proof.items() if key != "proofDigest"}
     )
@@ -1261,9 +1261,15 @@ def test_lease_journal_and_receipt_schemas_are_closed(
         "descriptorDigest": acquire["executionPlan"]["proposedAdmissions"][0][
             "descriptorDigest"
         ],
-        "fullFootprint": acquire["fullFootprint"],
-        "originalSourceRoot": acquire["originalSourceRoot"],
-        "laneRoot": acquire["laneRoot"],
+            "fullFootprint": acquire["fullFootprint"],
+            "planningFootprints": [acquire["fullFootprint"]],
+            "originalSourceRoot": acquire["originalSourceRoot"],
+            "laneRoot": acquire["laneRoot"],
+            "lanePhysicalIdentity": {
+                "device": 1,
+                "inode": 2,
+                "type": "DIRECTORY",
+            },
         "expectedLaneBase": acquire["expectedLaneBase"],
         "fencingToken": 1,
         "state": "ADMITTED",

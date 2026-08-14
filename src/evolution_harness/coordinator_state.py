@@ -30,6 +30,19 @@ _DIRECTORY_FLAGS = (
 _NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
 _CLOEXEC = getattr(os, "O_CLOEXEC", 0)
 _MAX_STATE_BYTES = 64 * 1024 * 1024
+_PLANNING_FOOTPRINT_FIELDS = (
+    "ownerSet",
+    "factFamilySet",
+    "publicContractSet",
+    "producerConsumerSet",
+    "bindingSet",
+    "exactWriteSet",
+    "ephemeralWriteSet",
+    "sharedArtifactSet",
+    "dependencySet",
+    "migrationResourceSet",
+    "authorityReferences",
+)
 
 
 @dataclass(frozen=True)
@@ -86,6 +99,164 @@ def _json_object(raw: bytes) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ValueError("coordinator state must be a JSON object")
     return value
+
+
+def _state_corrupt(message: str) -> None:
+    raise ControlledCoordinationError("COORDINATOR_STATE_CORRUPT", message)
+
+
+def _acquire_planning_footprints(command: dict[str, Any]) -> list[dict[str, Any]]:
+    footprints = []
+    for descriptor in command["planningRequest"]["slices"]:
+        footprint = {"sliceId": descriptor["sliceId"]}
+        for field in _PLANNING_FOOTPRINT_FIELDS:
+            footprint[field] = copy.deepcopy(descriptor[field])
+        footprint["conflictFootprintId"] = (
+            "footprint:"
+            + sha256_bytes(
+                canonical_json_bytes(
+                    {
+                        "projectId": command["projectId"],
+                        "conflictPolicyVersion": command["conflictPolicyVersion"],
+                        **footprint,
+                    }
+                )
+            )[:24]
+        )
+        footprints.append(footprint)
+    return sorted(footprints, key=lambda item: item["sliceId"])
+
+
+def _validate_journal_integrity(journal: dict[str, Any]) -> None:
+    receipts = journal["receipts"]
+    leases = journal["leases"]
+    if any(
+        lease["projectExecutionKey"] != journal["projectExecutionKey"]
+        for lease in leases
+    ):
+        _state_corrupt("lease belongs to another project execution key")
+    lease_ids = [lease["leaseId"] for lease in leases]
+    idempotency_keys = [
+        (lease["batchPlanId"], lease["sliceId"], lease["attemptId"])
+        for lease in leases
+    ]
+    if len(lease_ids) != len(set(lease_ids)) or len(idempotency_keys) != len(
+        set(idempotency_keys)
+    ):
+        _state_corrupt("lease identities and acquisition keys must be unique")
+    active = [
+        lease
+        for lease in leases
+        if not (
+            lease["state"] in {"CLOSED", "CANCELLED"}
+            and lease["released"] is True
+        )
+    ]
+    lane_paths = [lease["laneRoot"] for lease in active]
+    lane_identities = [
+        (
+            lease["lanePhysicalIdentity"]["device"],
+            lease["lanePhysicalIdentity"]["inode"],
+            lease["lanePhysicalIdentity"]["type"],
+        )
+        for lease in active
+    ]
+    if len(lane_paths) != len(set(lane_paths)) or len(lane_identities) != len(
+        set(lane_identities)
+    ):
+        _state_corrupt("active lease lanes must be logically and physically unique")
+    if journal["journalVersion"] != len(receipts):
+        _state_corrupt("journal version does not match the complete receipt chain")
+    for index, receipt in enumerate(receipts, start=1):
+        if (
+            receipt["projectExecutionKey"] != journal["projectExecutionKey"]
+            or receipt["previousJournalVersion"] != index - 1
+            or receipt["nextJournalVersion"] != index
+        ):
+            _state_corrupt("receipt versions or project identity do not form one chain")
+        command = receipt["evidence"]["command"]
+        if receipt["commandDigest"] != command["commandDigest"]:
+            _state_corrupt("receipt command digest is not associated with its evidence")
+        if receipt["receiptType"] == "ACQUIRE":
+            associated = [
+                lease
+                for lease in leases
+                if (
+                    lease["batchPlanId"],
+                    lease["sliceId"],
+                    lease["attemptId"],
+                )
+                == (
+                    command["batchPlanId"],
+                    command["sliceId"],
+                    command["attemptId"],
+                )
+            ]
+        elif receipt["receiptType"] == "TRANSITION":
+            associated = [
+                lease
+                for lease in leases
+                if lease["leaseId"] == command["leaseId"]
+                and lease["attemptId"] == command["attemptId"]
+            ]
+        else:
+            associated = []
+        if receipt["receiptType"] in {"ACQUIRE", "TRANSITION"} and (
+            len(associated) != 1
+            or associated[0]["fencingToken"] != receipt["fencingToken"]
+            or command.get("fencingToken", receipt["fencingToken"])
+            != receipt["fencingToken"]
+        ):
+            _state_corrupt("receipt is not associated with exactly one fenced lease")
+        if receipt["receiptType"] == "ACQUIRE":
+            lease = associated[0]
+            expected_lease_bindings = {
+                "batchPlanId": command["batchPlanId"],
+                "sliceId": command["sliceId"],
+                "attemptId": command["attemptId"],
+                "authoritySnapshotFingerprint": command[
+                    "authoritySnapshotFingerprint"
+                ],
+                "authorizationEnvelopeDigest": command[
+                    "authorizationEnvelopeDigest"
+                ],
+                "conflictPolicyVersion": command["conflictPolicyVersion"],
+                "descriptorDigest": command["sliceDescriptor"]["descriptorDigest"],
+                "fullFootprint": command["fullFootprint"],
+                "originalSourceRoot": command["originalSourceRoot"],
+                "laneRoot": command["laneRoot"],
+                "expectedLaneBase": command["expectedLaneBase"],
+            }
+            if any(
+                canonical_json_bytes(lease[field])
+                != canonical_json_bytes(expected_value)
+                for field, expected_value in expected_lease_bindings.items()
+            ) or lease["planningFootprints"] != _acquire_planning_footprints(command):
+                _state_corrupt(
+                    "acquired lease does not preserve its authority-bound command graph"
+                )
+        elif receipt["receiptType"] == "TRANSITION" and (
+            receipt["previousState"] != command["expectedState"]
+            or receipt["nextState"] != command["nextState"]
+            or receipt["authoritySnapshotFingerprint"]
+            != command["authoritySnapshotFingerprint"]
+        ):
+            _state_corrupt("transition receipt does not preserve its command binding")
+
+    tokens = [lease["fencingToken"] for lease in leases]
+    if len(tokens) != len(set(tokens)):
+        _state_corrupt("persisted lease fencing tokens must be unique")
+    durable_tokens = tokens + [receipt["fencingToken"] for receipt in receipts]
+    if durable_tokens and journal["nextFencingToken"] <= max(durable_tokens):
+        _state_corrupt("next fencing token is not above all durable tokens")
+
+    if receipts:
+        payload = copy.deepcopy(journal)
+        observed = payload["receipts"][-1]["journalDigest"]
+        payload["receipts"][-1]["journalDigest"] = "sha256:" + "0" * 64
+        expected = "sha256:" + sha256_bytes(canonical_json_bytes(payload))
+        if observed != expected:
+            _state_corrupt("latest receipt does not digest the complete journal")
 
 
 def _validate_directory(current: os.stat_result, *, uid: int) -> None:
@@ -653,6 +824,7 @@ class CoordinatorStateStore:
                 "COORDINATOR_JOURNAL_IDENTITY_MISMATCH",
                 "journal belongs to a different project execution key",
             )
+        _validate_journal_integrity(journal)
         if initialized is None:
             raise ControlledCoordinationError(
                 "COORDINATOR_STATE_INCONSISTENT",
@@ -689,6 +861,7 @@ class CoordinatorStateStore:
                 "COORDINATOR_JOURNAL_IDENTITY_MISMATCH",
                 "journal or receipt belongs to a different project",
             )
+        _validate_journal_integrity(journal)
         if (
             journal["journalVersion"] != expected_version + 1
             or receipt["previousJournalVersion"] != expected_version
@@ -775,13 +948,16 @@ class CoordinatorStateStore:
             )
         candidate = copy.deepcopy(journal)
         candidate_receipt = copy.deepcopy(receipt)
-        self._validate_replacement(expected_version, candidate, candidate_receipt)
         current_receipts = [] if current is None else current["receipts"]
-        if candidate["receipts"][:-1] != current_receipts:
+        if (
+            not isinstance(candidate.get("receipts"), list)
+            or candidate["receipts"][:-1] != current_receipts
+        ):
             raise ControlledCoordinationError(
                 "COORDINATOR_RECEIPT_HISTORY_REWRITE",
                 "journal replacement must preserve the complete ordered receipt history",
             )
+        self._validate_replacement(expected_version, candidate, candidate_receipt)
         payload = canonical_json_bytes(candidate) + b"\n"
         temporary = f".{self._journal_name}.tmp-{uuid.uuid4().hex}"
         descriptor = -1

@@ -7,11 +7,12 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-from .anchored_fs import AnchoredPathError, AnchoredRoot
+from .authority import IntegrationAuthorityError, build_authority_snapshot
 from .controlled_conflicts import (
     _conflict_reasons,
     _dependency_closure,
     _owner_closure,
+    build_conflict_report,
 )
 from .controlled_coordinator_inputs import (
     ControlledCoordinationError,
@@ -131,7 +132,31 @@ def _git_identity(source_root: Path) -> tuple[Path, str]:
     return top_level, head
 
 
-def _validate_lane_root(source_root: Path, command: dict[str, Any]) -> None:
+_DIRECTORY_FLAGS = (
+    os.O_RDONLY
+    | getattr(os, "O_DIRECTORY", 0)
+    | getattr(os, "O_NOFOLLOW", 0)
+    | getattr(os, "O_CLOEXEC", 0)
+)
+
+
+def _open_absolute_directory_no_follow(path: Path) -> tuple[int, os.stat_result]:
+    current = os.open("/", _DIRECTORY_FLAGS)
+    try:
+        for part in path.parts[1:]:
+            following = os.open(part, _DIRECTORY_FLAGS, dir_fd=current)
+            os.close(current)
+            current = following
+        opened = os.fstat(current)
+        if not stat.S_ISDIR(opened.st_mode):
+            raise OSError("path is not a directory")
+        return current, opened
+    except BaseException:
+        os.close(current)
+        raise
+
+
+def _validate_lane_root(source_root: Path, command: dict[str, Any]) -> dict[str, Any]:
     lane_root = Path(command["laneRoot"])
     approved_root = source_root.parent / f"{source_root.name}-lanes"
     try:
@@ -146,51 +171,35 @@ def _validate_lane_root(source_root: Path, command: dict[str, Any]) -> None:
             "LANE_ROOT_OUTSIDE_ISOLATION",
             "the isolation root itself cannot be used as a lane root",
         )
-
-
-def _validate_live_authority_files(
-    source_root: Path, snapshot: dict[str, Any]
-) -> None:
-    records = snapshot["authorities"]
-    by_id = {item["id"]: item for item in records}
-    by_path = {item["path"]: item for item in records}
-    if len(by_id) != len(records) or len(by_path) != len(records):
-        raise ControlledCoordinationError(
-            "AUTHORITY_RECORD_DUPLICATE", "authority identities and paths must be unique"
-        )
-    for fact_id, fact in snapshot["facts"].items():
-        record = by_id.get(fact["owner"])
-        if record is None or record["path"] != fact["sourcePath"]:
-            raise ControlledCoordinationError(
-                "LIVE_AUTHORITY_BINDING_MISMATCH",
-                f"authority fact is not bound to its declared live record: {fact_id}",
-            )
-
+    approved_descriptor = lane_descriptor = -1
     try:
-        with AnchoredRoot(source_root) as filesystem:
-            for record in records:
-                before = filesystem.lstat(record["path"])
-                if before is None or not stat.S_ISREG(before.st_mode):
-                    raise ControlledCoordinationError(
-                        "AUTHORITY_FILE_UNSAFE",
-                        f"authority path is missing or not a regular file: {record['path']}",
-                    )
-                data = filesystem.read_bytes(record["path"])
-                after = filesystem.lstat(record["path"])
-                if after is None or not _same_physical_identity(before, after):
-                    raise ControlledCoordinationError(
-                        "AUTHORITY_FILE_CHANGED_DURING_READ",
-                        f"authority path identity changed during validation: {record['path']}",
-                    )
-                if sha256_bytes(data) != record["sha256"]:
-                    raise ControlledCoordinationError(
-                        "AUTHORITY_FILE_CHANGED",
-                        f"authority content changed after snapshot: {record['path']}",
-                    )
-    except AnchoredPathError as exc:
+        approved_descriptor, _ = _open_absolute_directory_no_follow(approved_root)
+        current = approved_descriptor
+        for part in relative.parts:
+            lane_descriptor = os.open(part, _DIRECTORY_FLAGS, dir_fd=current)
+            if current != approved_descriptor:
+                os.close(current)
+            current = lane_descriptor
+            lane_descriptor = -1
+        lane_descriptor = current
+        observed = os.fstat(lane_descriptor)
+        if not stat.S_ISDIR(observed.st_mode):
+            raise OSError("lane is not a directory")
+        return {
+            "device": observed.st_dev,
+            "inode": observed.st_ino,
+            "type": "DIRECTORY",
+        }
+    except OSError as exc:
         raise ControlledCoordinationError(
-            "AUTHORITY_FILE_UNSAFE", "authority path cannot be opened no-follow"
+            "LANE_ROOT_UNSAFE",
+            "approved root and lane must be existing no-follow directories",
         ) from exc
+    finally:
+        if lane_descriptor >= 0:
+            os.close(lane_descriptor)
+        if approved_descriptor >= 0 and approved_descriptor != lane_descriptor:
+            os.close(approved_descriptor)
 
 
 def _validate_live_bindings(
@@ -198,7 +207,7 @@ def _validate_live_bindings(
     source_root: Path,
     identity: dict[str, Any],
     command: dict[str, Any],
-) -> None:
+) -> dict[str, Any]:
     current_identity = resolve_project_execution_identity(repository_root, source_root)
     if current_identity != identity:
         raise ControlledCoordinationError(
@@ -229,8 +238,31 @@ def _validate_live_bindings(
         raise ControlledCoordinationError(
             "SOURCE_HEAD_CHANGED", "registered source HEAD differs from the planned lane base"
         )
-    _validate_lane_root(source_root, command)
-    _validate_live_authority_files(source_root, snapshot)
+    lane_identity = _validate_lane_root(source_root, command)
+    try:
+        live_snapshot = build_authority_snapshot(
+            repository_root, loaded["integrationRoot"], source_root
+        )
+    except IntegrationAuthorityError as exc:
+        raise ControlledCoordinationError(
+            "LIVE_AUTHORITY_SNAPSHOT_INVALID",
+            "registered integration could not rebuild a live authority snapshot",
+        ) from exc
+    if canonical_json_bytes(live_snapshot) != canonical_json_bytes(snapshot):
+        raise ControlledCoordinationError(
+            "LIVE_AUTHORITY_SNAPSHOT_MISMATCH",
+            "supplied authority snapshot differs from the registered live rebuild",
+        )
+    development = live_snapshot["facts"].get("permission.development")
+    if (
+        not isinstance(development, dict)
+        or development.get("normalizedValue") != "ALLOW"
+    ):
+        raise ControlledCoordinationError(
+            "DEVELOPMENT_AUTHORITY_DENIED",
+            "live project authority does not permit controlled development",
+        )
+    return lane_identity
 
 
 def _is_nonterminal(lease: dict[str, Any]) -> bool:
@@ -239,14 +271,46 @@ def _is_nonterminal(lease: dict[str, Any]) -> bool:
     )
 
 
-def _footprints_conflict(left: dict[str, Any], right: dict[str, Any]) -> bool:
-    descriptors = [left, right]
+def _planning_graph(
+    repository_root: Path,
+    active_leases: list[dict[str, Any]],
+    command: dict[str, Any],
+) -> list[dict[str, Any]]:
+    report = build_conflict_report(
+        repository_root,
+        project_id=command["projectId"],
+        authority_snapshot_fingerprint=command["authoritySnapshotFingerprint"],
+        conflict_policy_version=command["conflictPolicyVersion"],
+        descriptors=command["planningRequest"]["slices"],
+    )
+    by_slice: dict[str, dict[str, Any]] = {}
+    for footprint in [
+        *(item for lease in active_leases for item in lease["planningFootprints"]),
+        *report["footprints"],
+    ]:
+        prior = by_slice.get(footprint["sliceId"])
+        if prior is not None and canonical_json_bytes(prior) != canonical_json_bytes(
+            footprint
+        ):
+            raise ControlledCoordinationError(
+                "ACTIVE_PLANNING_GRAPH_CHANGED",
+                "the same slice identity has different authority-bound planning footprints",
+            )
+        by_slice[footprint["sliceId"]] = copy.deepcopy(footprint)
+    return [by_slice[slice_id] for slice_id in sorted(by_slice)]
+
+
+def _footprints_conflict(
+    left: dict[str, Any],
+    right: dict[str, Any],
+    graph: list[dict[str, Any]],
+) -> bool:
     return bool(
         _conflict_reasons(
             left,
             right,
-            _dependency_closure(descriptors),
-            _owner_closure(descriptors),
+            _dependency_closure(graph),
+            _owner_closure(graph),
         )
     )
 
@@ -353,9 +417,14 @@ def acquire_lane_lease(
                         "the acquisition idempotency key is bound to another payload",
                     )
                 normalized_replay = normalize_acquire_command(repository, raw)
-                _validate_live_bindings(
+                replay_lane_identity = _validate_live_bindings(
                     repository, source, identity, normalized_replay
                 )
+                if replay_lane_identity != existing["lanePhysicalIdentity"]:
+                    raise ControlledCoordinationError(
+                        "LANE_ROOT_IDENTITY_CHANGED",
+                        "replayed lane root no longer has its leased physical identity",
+                    )
                 if canonical_json_bytes(receipt["evidence"]["command"]) != canonical_json_bytes(
                     normalized_replay
                 ):
@@ -366,7 +435,9 @@ def acquire_lane_lease(
                 return copy.deepcopy(existing)
 
             normalized = normalize_acquire_command(repository, raw)
-            _validate_live_bindings(repository, source, identity, normalized)
+            lane_identity = _validate_live_bindings(
+                repository, source, identity, normalized
+            )
             active = [lease for lease in current["leases"] if _is_nonterminal(lease)]
             if any(
                 lease["authorizationEnvelopeDigest"]
@@ -393,12 +464,21 @@ def acquire_lane_lease(
                     "SOURCE_HEAD_CHANGED",
                     "nonterminal lanes are fenced to another source HEAD",
                 )
-            if any(lease["laneRoot"] == normalized["laneRoot"] for lease in active):
+            if any(
+                lease["lanePhysicalIdentity"] == lane_identity
+                or lease["laneRoot"] == normalized["laneRoot"]
+                for lease in active
+            ):
                 raise ControlledCoordinationError(
                     "LANE_ROOT_CONFLICT", "lane roots are exclusive across nonterminal leases"
                 )
+            planning_graph = _planning_graph(repository, active, normalized)
             if any(
-                _footprints_conflict(lease["fullFootprint"], normalized["fullFootprint"])
+                _footprints_conflict(
+                    lease["fullFootprint"],
+                    normalized["fullFootprint"],
+                    planning_graph,
+                )
                 for lease in active
             ):
                 raise ControlledCoordinationError(
@@ -413,6 +493,11 @@ def acquire_lane_lease(
 
             previous_version = current["journalVersion"]
             token = current["nextFencingToken"]
+            if _validate_lane_root(source, normalized) != lane_identity:
+                raise ControlledCoordinationError(
+                    "LANE_ROOT_IDENTITY_CHANGED",
+                    "lane root identity changed before lease persistence",
+                )
             lease = {
                 "schemaVersion": "controlled-execution-lease/v1",
                 "projectExecutionKey": project_execution_key,
@@ -429,8 +514,18 @@ def acquire_lane_lease(
                 "conflictPolicyVersion": normalized["conflictPolicyVersion"],
                 "descriptorDigest": normalized["sliceDescriptor"]["descriptorDigest"],
                 "fullFootprint": copy.deepcopy(normalized["fullFootprint"]),
+                "planningFootprints": [
+                    copy.deepcopy(item)
+                    for item in planning_graph
+                    if item["sliceId"]
+                    in {
+                        descriptor["sliceId"]
+                        for descriptor in normalized["planningRequest"]["slices"]
+                    }
+                ],
                 "originalSourceRoot": normalized["originalSourceRoot"],
                 "laneRoot": normalized["laneRoot"],
+                "lanePhysicalIdentity": lane_identity,
                 "expectedLaneBase": normalized["expectedLaneBase"],
                 "fencingToken": token,
                 "state": "ADMITTED",

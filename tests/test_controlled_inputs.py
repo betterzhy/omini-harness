@@ -204,10 +204,12 @@ def test_canonical_authority_paths_bind_without_rewriting_the_signed_snapshot(
 ):
     request = controlled_factory.request(controlled_factory.descriptor())
     snapshot = request["authoritySnapshot"]
-    snapshot["authorities"][0]["path"] = "authority//portfolio.yaml"
-    snapshot["authorities"][1]["path"] = "authority//slice-neutral-a.yaml"
+    by_id = {item["id"]: item for item in snapshot["authorities"]}
+    by_id["authority-neutral"]["path"] = "authority//portfolio.yaml"
+    by_id["authority-planning"]["path"] = "authority//controlled-planning.yaml"
+    by_id["authority-slice-00"]["path"] = "authority//slice-neutral-a.yaml"
     for fact in snapshot["facts"].values():
-        fact["sourcePath"] = "authority//portfolio.yaml"
+        fact["sourcePath"] = "authority//controlled-planning.yaml"
     snapshot["sourceRevision"]["authoritySetDigest"] = "sha256:" + sha256_bytes(
         canonical_json_bytes(snapshot["authorities"])
     )
@@ -215,15 +217,19 @@ def test_canonical_authority_paths_bind_without_rewriting_the_signed_snapshot(
 
     normalized = normalize_planning_request(repository_root, request)
 
-    assert normalized["authoritySnapshot"]["authorities"][0]["path"] == (
-        "authority//portfolio.yaml"
+    normalized_by_id = {
+        item["id"]: item for item in normalized["authoritySnapshot"]["authorities"]
+    }
+    assert normalized_by_id["authority-neutral"]["path"] == "authority//portfolio.yaml"
+    assert normalized_by_id["authority-planning"]["path"] == (
+        "authority//controlled-planning.yaml"
     )
-    assert normalized["authoritySnapshot"]["authorities"][1]["path"] == (
+    assert normalized_by_id["authority-slice-00"]["path"] == (
         "authority//slice-neutral-a.yaml"
     )
     assert normalized["authoritySnapshot"]["facts"]["controlled_planning.mode"][
         "sourcePath"
-    ] == "authority//portfolio.yaml"
+    ] == "authority//controlled-planning.yaml"
 
 
 def test_missing_authority_fact_is_rejected(repository_root, controlled_factory):
@@ -233,6 +239,24 @@ def test_missing_authority_fact_is_rejected(repository_root, controlled_factory)
     with pytest.raises(ControlledPlanningError) as exc:
         normalize_planning_request(repository_root, request)
     assert exc.value.code == "AUTHORITY_FACT_MISSING"
+
+
+def test_planning_manifest_is_independent_from_envelope_issuer_and_head(
+    repository_root, controlled_factory
+):
+    request = controlled_factory.request(controlled_factory.descriptor())
+    snapshot = request["authoritySnapshot"]
+
+    assert "controlled_planning.batch_base_commit" not in snapshot["facts"]
+    assert {
+        fact["owner"] for fact_id, fact in snapshot["facts"].items()
+        if fact_id.startswith("controlled_planning.")
+    } == {"authority-planning"}
+    assert request["authorizationEnvelope"]["issuerId"] == "authority-neutral"
+
+    normalized = normalize_planning_request(repository_root, request)
+
+    assert normalized["batchBaseCommit"] == snapshot["sourceRevision"]["head"]
 
 
 def test_non_string_authority_fact_is_rejected(repository_root, controlled_factory):

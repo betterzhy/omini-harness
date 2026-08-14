@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-evolution.local/core/schemas/controlled-coordinator-journal.schema.json",
+  "type": "object",
+  "required": [
+    "schemaVersion", "projectExecutionKey", "journalVersion",
+    "nextFencingToken", "recoveryState", "leases", "receipts",
+    "integrationTransactions"
+  ],
+  "properties": {
+    "schemaVersion": {"const": "controlled-coordinator-journal/v1"},
+    "projectExecutionKey": {"type": "string", "pattern": "^project-execution:[0-9a-f]{64}$"},
+    "journalVersion": {"type": "integer", "minimum": 0},
+    "nextFencingToken": {"type": "integer", "minimum": 1},
+    "recoveryState": {"enum": ["CLEAR", "PROJECT_WRITESET_RECOVERY", "STATE_RECOVERY_REQUIRED"]},
+    "leases": {
+      "type": "array",
+      "items": {"$ref": "https://agent-evolution.local/core/schemas/controlled-execution-lease.schema.json"}
+    },
+    "receipts": {
+      "type": "array",
+      "items": {"$ref": "https://agent-evolution.local/core/schemas/controlled-coordinator-receipt.schema.json"}
+    },
+    "integrationTransactions": {"type": "array", "maxItems": 0}
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-evolution.local/core/schemas/controlled-coordinator-transition-command.schema.json",
+  "$defs": {
+    "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._:-]*$"},
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "gitObject": {"type": "string", "pattern": "^[0-9a-f]{40}([0-9a-f]{24})?$"},
+    "state": {"enum": ["PROPOSED", "READY", "ADMITTED", "ACTIVE", "FIXED_CANDIDATE", "REVIEW_GO", "QUEUED_FOR_INTEGRATION", "INTEGRATING", "CLOSED", "BLOCKED", "NO_GO", "STALE", "CANCELLED"]},
+    "candidateIdentity": {
+      "type": "object",
+      "required": ["commit", "parent", "tree"],
+      "properties": {
+        "commit": {"$ref": "#/$defs/gitObject"},
+        "parent": {"$ref": "#/$defs/gitObject"},
+        "tree": {"$ref": "#/$defs/gitObject"}
+      },
+      "additionalProperties": false
+    },
+    "processQuiescence": {
+      "type": "object",
+      "required": ["status", "observedAt", "processIds"],
+      "properties": {
+        "status": {"const": "QUIESCENT"},
+        "observedAt": {"type": "string", "minLength": 1},
+        "processIds": {"type": "array", "items": {"type": "integer", "minimum": 1}, "uniqueItems": true}
+      },
+      "additionalProperties": false
+    }
+  },
+  "type": "object",
+  "required": [
+    "schemaVersion", "projectExecutionKey", "leaseId", "attemptId",
+    "fencingToken", "expectedState", "nextState",
+    "authoritySnapshotFingerprint", "candidateIdentity",
+    "processQuiescence", "commandDigest"
+  ],
+  "properties": {
+    "schemaVersion": {"const": "controlled-coordinator-transition-command/v1"},
+    "projectExecutionKey": {"type": "string", "pattern": "^project-execution:[0-9a-f]{64}$"},
+    "leaseId": {"type": "string", "pattern": "^lease:[0-9a-f]{24}$"},
+    "attemptId": {"$ref": "#/$defs/id"},
+    "fencingToken": {"type": "integer", "minimum": 1},
+    "expectedState": {"$ref": "#/$defs/state"},
+    "nextState": {"$ref": "#/$defs/state"},
+    "authoritySnapshotFingerprint": {"$ref": "#/$defs/digest"},
+    "candidateIdentity": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/candidateIdentity"}]},
+    "processQuiescence": {"$ref": "#/$defs/processQuiescence"},
+    "commandDigest": {"$ref": "#/$defs/digest"}
+  },
+  "additionalProperties": false
+}

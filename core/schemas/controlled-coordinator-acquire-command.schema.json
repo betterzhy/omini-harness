@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-evolution.local/core/schemas/controlled-coordinator-acquire-command.schema.json",
+  "$defs": {
+    "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._:-]*$"},
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "gitObject": {"type": "string", "pattern": "^[0-9a-f]{40}([0-9a-f]{24})?$"},
+    "absolutePath": {"type": "string", "pattern": "^/[^\\u0000]*$", "minLength": 2}
+  },
+  "type": "object",
+  "required": [
+    "schemaVersion", "projectId", "batchPlanId", "sliceId", "attemptId",
+    "authoritySnapshotFingerprint", "authorizationEnvelopeDigest",
+    "conflictPolicyVersion", "asOf", "executionPlan", "fullFootprint",
+    "originalSourceRoot", "laneRoot", "expectedLaneBase", "commandDigest"
+  ],
+  "properties": {
+    "schemaVersion": {"const": "controlled-coordinator-acquire-command/v1"},
+    "projectId": {"$ref": "#/$defs/id"},
+    "batchPlanId": {"type": "string", "pattern": "^batch-plan:[0-9a-f]{24}$"},
+    "sliceId": {"$ref": "#/$defs/id"},
+    "attemptId": {"$ref": "#/$defs/id"},
+    "authoritySnapshotFingerprint": {"$ref": "#/$defs/digest"},
+    "authorizationEnvelopeDigest": {"$ref": "#/$defs/digest"},
+    "conflictPolicyVersion": {"const": "controlled-conflict-policy/v1"},
+    "asOf": {"type": "string", "minLength": 1},
+    "executionPlan": {"$ref": "https://agent-evolution.local/core/schemas/controlled-execution-plan.schema.json"},
+    "fullFootprint": {"$ref": "https://agent-evolution.local/core/schemas/controlled-conflict-report.schema.json#/$defs/footprint"},
+    "originalSourceRoot": {"$ref": "#/$defs/absolutePath"},
+    "laneRoot": {"$ref": "#/$defs/absolutePath"},
+    "expectedLaneBase": {"$ref": "#/$defs/gitObject"},
+    "commandDigest": {"$ref": "#/$defs/digest"}
+  },
+  "additionalProperties": false
+}

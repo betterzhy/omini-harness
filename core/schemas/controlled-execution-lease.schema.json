@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-evolution.local/core/schemas/controlled-execution-lease.schema.json",
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "gitObject": {"type": "string", "pattern": "^[0-9a-f]{40}([0-9a-f]{24})?$"},
+    "state": {"enum": ["ADMITTED", "ACTIVE", "FIXED_CANDIDATE", "REVIEW_GO", "QUEUED_FOR_INTEGRATION", "INTEGRATING", "CLOSED", "BLOCKED", "NO_GO", "STALE", "CANCELLED"]},
+    "candidateIdentity": {
+      "type": "object",
+      "required": ["commit", "parent", "tree"],
+      "properties": {
+        "commit": {"$ref": "#/$defs/gitObject"},
+        "parent": {"$ref": "#/$defs/gitObject"},
+        "tree": {"$ref": "#/$defs/gitObject"}
+      },
+      "additionalProperties": false
+    }
+  },
+  "type": "object",
+  "required": [
+    "schemaVersion", "projectExecutionKey", "leaseId", "batchPlanId",
+    "sliceId", "attemptId", "authoritySnapshotFingerprint",
+    "authorizationEnvelopeDigest", "conflictPolicyVersion",
+    "descriptorDigest", "fullFootprint", "originalSourceRoot", "laneRoot",
+    "expectedLaneBase", "fencingToken", "state", "candidateIdentity",
+    "acquiredAt", "lastTransitionAt", "released", "recoveryStatus"
+  ],
+  "properties": {
+    "schemaVersion": {"const": "controlled-execution-lease/v1"},
+    "projectExecutionKey": {"type": "string", "pattern": "^project-execution:[0-9a-f]{64}$"},
+    "leaseId": {"type": "string", "pattern": "^lease:[0-9a-f]{24}$"},
+    "batchPlanId": {"type": "string", "pattern": "^batch-plan:[0-9a-f]{24}$"},
+    "sliceId": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._:-]*$"},
+    "attemptId": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._:-]*$"},
+    "authoritySnapshotFingerprint": {"$ref": "#/$defs/digest"},
+    "authorizationEnvelopeDigest": {"$ref": "#/$defs/digest"},
+    "conflictPolicyVersion": {"const": "controlled-conflict-policy/v1"},
+    "descriptorDigest": {"$ref": "#/$defs/digest"},
+    "fullFootprint": {"$ref": "https://agent-evolution.local/core/schemas/controlled-conflict-report.schema.json#/$defs/footprint"},
+    "originalSourceRoot": {"type": "string", "pattern": "^/[^\\u0000]*$", "minLength": 2},
+    "laneRoot": {"type": "string", "pattern": "^/[^\\u0000]*$", "minLength": 2},
+    "expectedLaneBase": {"$ref": "#/$defs/gitObject"},
+    "fencingToken": {"type": "integer", "minimum": 1},
+    "state": {"$ref": "#/$defs/state"},
+    "candidateIdentity": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/candidateIdentity"}]},
+    "acquiredAt": {"type": "string", "minLength": 1},
+    "lastTransitionAt": {"type": "string", "minLength": 1},
+    "released": {"type": "boolean"},
+    "recoveryStatus": {"enum": ["CLEAR", "PROJECT_WRITESET_RECOVERY", "STATE_RECOVERY_REQUIRED"]}
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-evolution.local/core/schemas/controlled-write-observation-command.schema.json",
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "pathSet": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
+    "processQuiescence": {
+      "type": "object",
+      "required": ["status", "observedAt", "processIds"],
+      "properties": {
+        "status": {"const": "QUIESCENT"},
+        "observedAt": {"type": "string", "minLength": 1},
+        "processIds": {"type": "array", "items": {"type": "integer", "minimum": 1}, "uniqueItems": true}
+      },
+      "additionalProperties": false
+    }
+  },
+  "type": "object",
+  "required": [
+    "schemaVersion", "projectExecutionKey", "leaseId", "fencingToken",
+    "beforeInventoryDigest", "observedPaths", "ephemeralPathsRemoved",
+    "processQuiescence", "commandDigest"
+  ],
+  "properties": {
+    "schemaVersion": {"const": "controlled-write-observation-command/v1"},
+    "projectExecutionKey": {"type": "string", "pattern": "^project-execution:[0-9a-f]{64}$"},
+    "leaseId": {"type": "string", "pattern": "^lease:[0-9a-f]{24}$"},
+    "fencingToken": {"type": "integer", "minimum": 1},
+    "beforeInventoryDigest": {"$ref": "#/$defs/digest"},
+    "observedPaths": {"$ref": "#/$defs/pathSet"},
+    "ephemeralPathsRemoved": {"$ref": "#/$defs/pathSet"},
+    "processQuiescence": {"$ref": "#/$defs/processQuiescence"},
+    "commandDigest": {"$ref": "#/$defs/digest"}
+  },
+  "additionalProperties": false
+}

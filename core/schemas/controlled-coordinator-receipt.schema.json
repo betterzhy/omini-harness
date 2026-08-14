@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-evolution.local/core/schemas/controlled-coordinator-receipt.schema.json",
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "state": {"enum": ["ADMITTED", "ACTIVE", "FIXED_CANDIDATE", "REVIEW_GO", "QUEUED_FOR_INTEGRATION", "INTEGRATING", "CLOSED", "BLOCKED", "NO_GO", "STALE", "CANCELLED"]},
+    "nullableState": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/state"}]}
+  },
+  "type": "object",
+  "required": [
+    "schemaVersion", "receiptId", "receiptType", "projectExecutionKey",
+    "previousJournalVersion", "nextJournalVersion", "commandDigest",
+    "fencingToken", "previousState", "nextState",
+    "authoritySnapshotFingerprint", "journalDigest", "recordedAt"
+  ],
+  "properties": {
+    "schemaVersion": {"const": "controlled-coordinator-receipt/v1"},
+    "receiptId": {"type": "string", "pattern": "^coordinator-receipt:[0-9a-f]{24}$"},
+    "receiptType": {"enum": ["ACQUIRE", "TRANSITION", "WRITE_OBSERVATION", "RECOVERY"]},
+    "projectExecutionKey": {"type": "string", "pattern": "^project-execution:[0-9a-f]{64}$"},
+    "previousJournalVersion": {"type": "integer", "minimum": 0},
+    "nextJournalVersion": {"type": "integer", "minimum": 1},
+    "commandDigest": {"$ref": "#/$defs/digest"},
+    "fencingToken": {"type": "integer", "minimum": 1},
+    "previousState": {"$ref": "#/$defs/nullableState"},
+    "nextState": {"$ref": "#/$defs/nullableState"},
+    "authoritySnapshotFingerprint": {"$ref": "#/$defs/digest"},
+    "journalDigest": {"$ref": "#/$defs/digest"},
+    "recordedAt": {"type": "string", "minLength": 1}
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-evolution.local/core/schemas/controlled-recovery-command.schema.json",
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "quiescenceProof": {
+      "type": "object",
+      "required": ["leaseId", "fencingToken", "status", "observedAt"],
+      "properties": {
+        "leaseId": {"type": "string", "pattern": "^lease:[0-9a-f]{24}$"},
+        "fencingToken": {"type": "integer", "minimum": 1},
+        "status": {"const": "QUIESCENT"},
+        "observedAt": {"type": "string", "minLength": 1}
+      },
+      "additionalProperties": false
+    },
+    "affectedLeaseDecision": {
+      "type": "object",
+      "required": ["leaseId", "decision", "reason"],
+      "properties": {
+        "leaseId": {"type": "string", "pattern": "^lease:[0-9a-f]{24}$"},
+        "decision": {"enum": ["STALE", "CANCELLED"]},
+        "reason": {"enum": ["WRITESET_OVERLAP", "AUTHORITY_AFFECTED", "PROJECT_RECOVERY"]}
+      },
+      "additionalProperties": false
+    }
+  },
+  "type": "object",
+  "required": [
+    "schemaVersion", "projectExecutionKey", "recoveryId",
+    "recoveryAuthorityReference", "recoveryAuthorityDigest",
+    "expectedJournalVersion", "processQuiescenceProofs", "observedWriteSet",
+    "affectedLeaseDecisions", "replacementPlanRequired", "commandDigest"
+  ],
+  "properties": {
+    "schemaVersion": {"const": "controlled-recovery-command/v1"},
+    "projectExecutionKey": {"type": "string", "pattern": "^project-execution:[0-9a-f]{64}$"},
+    "recoveryId": {"type": "string", "pattern": "^recovery:[0-9a-f]{24}$"},
+    "recoveryAuthorityReference": {"type": "string", "minLength": 1},
+    "recoveryAuthorityDigest": {"$ref": "#/$defs/digest"},
+    "expectedJournalVersion": {"type": "integer", "minimum": 0},
+    "processQuiescenceProofs": {"type": "array", "items": {"$ref": "#/$defs/quiescenceProof"}, "uniqueItems": true},
+    "observedWriteSet": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
+    "affectedLeaseDecisions": {"type": "array", "items": {"$ref": "#/$defs/affectedLeaseDecision"}, "uniqueItems": true},
+    "replacementPlanRequired": {"const": true},
+    "commandDigest": {"$ref": "#/$defs/digest"}
+  },
+  "additionalProperties": false
+}

@@ -5,6 +5,7 @@ import os
 import stat
 import subprocess
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any
 
 from .authority import IntegrationAuthorityError, build_authority_snapshot
@@ -17,6 +18,7 @@ from .controlled_conflicts import (
 from .controlled_coordinator_inputs import (
     ControlledCoordinationError,
     normalize_acquire_command,
+    normalize_transition_command,
 )
 from .coordinator_state import CoordinatorStateStore
 from .hashing import canonical_json_bytes, sha256_bytes
@@ -24,6 +26,42 @@ from .registration import ProjectRegistrationError, load_project_registration
 
 
 _TERMINAL_STATES = frozenset({"CLOSED", "CANCELLED"})
+_ALLOWED_LEASE_TRANSITIONS = MappingProxyType(
+    {
+        "ADMITTED": frozenset({"ACTIVE", "BLOCKED", "NO_GO", "STALE", "CANCELLED"}),
+        "ACTIVE": frozenset(
+            {"FIXED_CANDIDATE", "BLOCKED", "NO_GO", "STALE", "CANCELLED"}
+        ),
+        "FIXED_CANDIDATE": frozenset(
+            {"REVIEW_GO", "BLOCKED", "NO_GO", "STALE", "CANCELLED"}
+        ),
+        "REVIEW_GO": frozenset(
+            {
+                "QUEUED_FOR_INTEGRATION",
+                "BLOCKED",
+                "NO_GO",
+                "STALE",
+                "CANCELLED",
+            }
+        ),
+        "QUEUED_FOR_INTEGRATION": frozenset(
+            {"INTEGRATING", "BLOCKED", "NO_GO", "STALE", "CANCELLED"}
+        ),
+        "INTEGRATING": frozenset(
+            {"CLOSED", "BLOCKED", "NO_GO", "STALE", "CANCELLED"}
+        ),
+    }
+)
+_CANDIDATE_STATES = frozenset(
+    {
+        "FIXED_CANDIDATE",
+        "REVIEW_GO",
+        "QUEUED_FOR_INTEGRATION",
+        "INTEGRATING",
+        "CLOSED",
+    }
+)
+_REVOCATION_STATES = frozenset({"STALE", "CANCELLED"})
 
 
 def _sha256(value: Any) -> str:
@@ -371,6 +409,90 @@ def _journal_digest(journal: dict[str, Any], receipt_index: int) -> str:
     return _sha256(payload)
 
 
+def _transition_result(lease: dict[str, Any]) -> dict[str, Any]:
+    result = copy.deepcopy(lease)
+    result["leaseRetained"] = not result["released"]
+    return result
+
+
+def _transition_receipts_for(
+    journal: dict[str, Any], lease_id: str
+) -> list[dict[str, Any]]:
+    return [
+        receipt
+        for receipt in journal["receipts"]
+        if receipt["receiptType"] == "TRANSITION"
+        and receipt["evidence"]["command"]["leaseId"] == lease_id
+    ]
+
+
+def _current_authority_record(
+    snapshot: dict[str, Any],
+    *,
+    reference: str,
+    digest: str,
+    authority_id: str | None = None,
+    code: str,
+) -> dict[str, Any]:
+    record = next(
+        (item for item in snapshot["authorities"] if item["path"] == reference),
+        None,
+    )
+    if (
+        record is None
+        or digest != "sha256:" + record["sha256"]
+        or (authority_id is not None and record["id"] != authority_id)
+    ):
+        raise ControlledCoordinationError(
+            code, "transition authority is absent from the current live snapshot"
+        )
+    return record
+
+
+def _rebuild_transition_snapshot(
+    repository_root: Path,
+    source_root: Path,
+    identity: dict[str, Any],
+    acquire_command: dict[str, Any],
+) -> dict[str, Any]:
+    if resolve_project_execution_identity(repository_root, source_root) != identity:
+        raise ControlledCoordinationError(
+            "PROJECT_EXECUTION_IDENTITY_CHANGED",
+            "project registration or physical source identity changed under lock",
+        )
+    try:
+        loaded = load_project_registration(repository_root, source_root)
+    except ProjectRegistrationError as exc:
+        raise ControlledCoordinationError("PROJECT_REGISTRATION_CHANGED", str(exc)) from exc
+    registration = loaded["registration"]
+    integration = loaded["integration"]["config"]
+    if (
+        Path(loaded["sourceRoot"]).resolve() != source_root
+        or registration["sourceAccess"] != "READ_ONLY"
+        or registration["integrationId"] != integration["id"]
+        or integration["projectId"] != acquire_command["projectId"]
+    ):
+        raise ControlledCoordinationError(
+            "LIVE_AUTHORITY_BINDING_MISMATCH",
+            "registration, integration, source, and acquisition identities changed",
+        )
+    try:
+        snapshot = build_authority_snapshot(
+            repository_root, loaded["integrationRoot"], source_root
+        )
+    except IntegrationAuthorityError as exc:
+        raise ControlledCoordinationError(
+            "LIVE_AUTHORITY_SNAPSHOT_INVALID",
+            "registered integration could not rebuild a live authority snapshot",
+        ) from exc
+    if snapshot["projectId"] != acquire_command["projectId"]:
+        raise ControlledCoordinationError(
+            "LIVE_AUTHORITY_BINDING_MISMATCH",
+            "current authority snapshot belongs to another project",
+        )
+    return snapshot
+
+
 def acquire_lane_lease(
     repository_root: Path,
     source_root: Path,
@@ -579,3 +701,239 @@ def acquire_lane_lease(
                     "persisted acquisition did not reproduce lease and receipt",
                 )
             return copy.deepcopy(persisted_lease)
+
+
+def transition_lane_lease(
+    repository_root: Path,
+    source_root: Path,
+    command: dict[str, object],
+) -> dict[str, object]:
+    """Apply one project-authorized, fenced lease transition under the project CAS."""
+    repository = Path(repository_root).resolve()
+    source = Path(source_root).resolve()
+    identity = resolve_project_execution_identity(repository, source_root)
+    project_execution_key = identity["projectExecutionKey"]
+    with CoordinatorStateStore.open(identity) as store:
+        with store.exclusive_project_lock():
+            observed = store.read_journal()
+            if observed is None:
+                raise ControlledCoordinationError(
+                    "COORDINATOR_LEASE_NOT_FOUND",
+                    "cannot transition a lease before coordinator acquisition",
+                )
+            current = copy.deepcopy(observed)
+            normalized = normalize_transition_command(repository, copy.deepcopy(command))
+            if normalized["projectExecutionKey"] != project_execution_key:
+                raise ControlledCoordinationError(
+                    "PROJECT_EXECUTION_KEY_MISMATCH",
+                    "transition command belongs to another project execution key",
+                )
+            lease = next(
+                (
+                    item
+                    for item in current["leases"]
+                    if item["leaseId"] == normalized["leaseId"]
+                ),
+                None,
+            )
+            if lease is None:
+                raise ControlledCoordinationError(
+                    "COORDINATOR_LEASE_NOT_FOUND", "transition lease is not durable"
+                )
+
+            prior_transitions = _transition_receipts_for(current, lease["leaseId"])
+            exact_replay = next(
+                (
+                    receipt
+                    for receipt in prior_transitions
+                    if receipt["commandDigest"] == normalized["commandDigest"]
+                    and canonical_json_bytes(receipt["evidence"]["command"])
+                    == canonical_json_bytes(normalized)
+                ),
+                None,
+            )
+            conflicting_replay = next(
+                (
+                    receipt
+                    for receipt in prior_transitions
+                    if (
+                        receipt["previousState"],
+                        receipt["nextState"],
+                    )
+                    == (normalized["expectedState"], normalized["nextState"])
+                ),
+                None,
+            )
+
+            if current["recoveryState"] != "CLEAR":
+                raise ControlledCoordinationError(
+                    "COORDINATOR_RECOVERY_REQUIRED",
+                    "project coordinator recovery must close before lease transition",
+                )
+            if lease["attemptId"] != normalized["attemptId"]:
+                raise ControlledCoordinationError(
+                    "LEASE_ATTEMPT_MISMATCH",
+                    "transition attempt does not own the durable lease",
+                )
+            if lease["fencingToken"] != normalized["fencingToken"]:
+                raise ControlledCoordinationError(
+                    "STALE_FENCING_TOKEN",
+                    "transition fencing token is not current for the durable lease",
+                )
+
+            acquire_receipt = _acquire_receipt_for(current, lease)
+            if acquire_receipt is None:
+                raise ControlledCoordinationError(
+                    "COORDINATOR_STATE_CORRUPT",
+                    "durable lease has no acquisition authority receipt",
+                )
+            acquire_command = acquire_receipt["evidence"]["command"]
+            if lease["originalSourceRoot"] != str(source):
+                raise ControlledCoordinationError(
+                    "LIVE_AUTHORITY_BINDING_MISMATCH",
+                    "transition source does not own the durable lease",
+                )
+            live_snapshot = _rebuild_transition_snapshot(
+                repository, source, identity, acquire_command
+            )
+            live_fingerprint = live_snapshot["snapshotFingerprint"]
+            authority_drifted = live_fingerprint != lease["authoritySnapshotFingerprint"]
+            if normalized["authoritySnapshotFingerprint"] != live_fingerprint:
+                raise ControlledCoordinationError(
+                    "LIVE_AUTHORITY_SNAPSHOT_MISMATCH",
+                    "transition fingerprint is not the current live authority snapshot",
+                )
+            if authority_drifted and normalized["nextState"] not in _REVOCATION_STATES:
+                raise ControlledCoordinationError(
+                    "AUTHORITY_SNAPSHOT_DRIFT",
+                    "authority drift requires explicit stale or cancelled revocation",
+                )
+
+            proof = normalized["lifecycleAuthorityProof"]
+            _current_authority_record(
+                live_snapshot,
+                reference=proof["authorityReference"],
+                digest=proof["authorityDigest"],
+                code="LIFECYCLE_AUTHORITY_NOT_CURRENT",
+            )
+            if normalized["nextState"] == "REVIEW_GO":
+                review = normalized["reviewEvidence"]
+                assert review is not None
+                _current_authority_record(
+                    live_snapshot,
+                    reference=review["reviewerAuthorityReference"],
+                    digest=review["reviewerAuthorityDigest"],
+                    authority_id=review["reviewerId"],
+                    code="REVIEWER_AUTHORITY_NOT_CURRENT",
+                )
+            if exact_replay is not None:
+                return _transition_result(lease)
+            if conflicting_replay is not None:
+                raise ControlledCoordinationError(
+                    "TRANSITION_IDEMPOTENCY_CONFLICT",
+                    "a transition edge is already bound to another command payload",
+                )
+            if lease["state"] in _TERMINAL_STATES or lease["released"]:
+                raise ControlledCoordinationError(
+                    "TERMINAL_LEASE_IMMUTABLE",
+                    "terminal lease state cannot be changed",
+                )
+            if lease["state"] != normalized["expectedState"]:
+                raise ControlledCoordinationError(
+                    "LEASE_STATE_MISMATCH",
+                    "transition expected state is not the durable current state",
+                )
+            if normalized["nextState"] not in _ALLOWED_LEASE_TRANSITIONS.get(
+                lease["state"], frozenset()
+            ):
+                raise ControlledCoordinationError(
+                    "INVALID_STATE_TRANSITION",
+                    f"transition {lease['state']} -> {normalized['nextState']} is not allowed",
+                )
+
+            if lease["candidateIdentity"] is None:
+                if normalized["nextState"] == "FIXED_CANDIDATE":
+                    next_candidate = copy.deepcopy(normalized["candidateIdentity"])
+                elif normalized["candidateIdentity"] is None:
+                    next_candidate = None
+                else:
+                    raise ControlledCoordinationError(
+                        "CANDIDATE_IDENTITY_MISMATCH",
+                        "candidate identity cannot appear before FIXED_CANDIDATE",
+                    )
+            else:
+                if normalized["candidateIdentity"] != lease["candidateIdentity"]:
+                    raise ControlledCoordinationError(
+                        "CANDIDATE_IDENTITY_MISMATCH",
+                        "Candidate/Parent/Tree identity changed after fixation",
+                    )
+                next_candidate = copy.deepcopy(lease["candidateIdentity"])
+            if (
+                normalized["nextState"] in _CANDIDATE_STATES
+                and next_candidate is None
+            ):
+                raise ControlledCoordinationError(
+                    "CANDIDATE_IDENTITY_REQUIRED",
+                    "candidate identity is required for candidate-bound lifecycle states",
+                )
+
+            release = normalized["nextState"] in _TERMINAL_STATES
+            if release and normalized["processQuiescence"]["processIds"]:
+                raise ControlledCoordinationError(
+                    "PROCESS_NOT_QUIESCENT",
+                    "terminal capacity release requires empty live process evidence",
+                )
+
+            previous_version = current["journalVersion"]
+            next_version = previous_version + 1
+            lease["state"] = normalized["nextState"]
+            lease["candidateIdentity"] = next_candidate
+            lease["lastTransitionAt"] = proof["assertedAt"]
+            lease["released"] = release
+            if normalized["nextState"] in _REVOCATION_STATES or authority_drifted:
+                current["nextFencingToken"] = max(
+                    current["nextFencingToken"], lease["fencingToken"] + 1
+                )
+            current["journalVersion"] = next_version
+            receipt = {
+                "schemaVersion": "controlled-coordinator-receipt/v1",
+                "receiptId": _stable_id(
+                    "coordinator-receipt",
+                    {
+                        "projectExecutionKey": project_execution_key,
+                        "journalVersion": next_version,
+                        "commandDigest": normalized["commandDigest"],
+                        "fencingToken": lease["fencingToken"],
+                    },
+                ),
+                "receiptType": "TRANSITION",
+                "projectExecutionKey": project_execution_key,
+                "previousJournalVersion": previous_version,
+                "nextJournalVersion": next_version,
+                "commandDigest": normalized["commandDigest"],
+                "fencingToken": lease["fencingToken"],
+                "previousState": normalized["expectedState"],
+                "nextState": normalized["nextState"],
+                "authoritySnapshotFingerprint": normalized[
+                    "authoritySnapshotFingerprint"
+                ],
+                "journalDigest": "sha256:" + "0" * 64,
+                "recordedAt": proof["assertedAt"],
+                "evidence": {"command": normalized},
+            }
+            current["receipts"].append(receipt)
+            receipt["journalDigest"] = _journal_digest(
+                current, len(current["receipts"]) - 1
+            )
+            persisted = store.replace_journal(previous_version, current, receipt)
+            persisted_lease = next(
+                item
+                for item in persisted["leases"]
+                if item["leaseId"] == lease["leaseId"]
+            )
+            if persisted_lease != lease or persisted["receipts"][-1] != receipt:
+                raise ControlledCoordinationError(
+                    "COORDINATOR_POST_WRITE_MISMATCH",
+                    "persisted transition did not reproduce lease and receipt",
+                )
+            return _transition_result(persisted_lease)

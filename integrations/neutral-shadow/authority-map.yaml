@@ -57,6 +57,13 @@ authorities:
     required: true
     owns: []
     selectors: {}
+  - id: deep-reviewer
+    path: deep-reviewer-public.pem
+    format: MARKDOWN_KV
+    role: SPECIALIZED
+    required: true
+    owns: []
+    selectors: {}
   - id: global-status
     path: status.md
     format: MARKDOWN_KV
@@ -81,6 +88,13 @@ authorities:
               expected: 'NO'
               value: DENY
           default: UNKNOWN
+  - id: lifecycle-controller
+    path: lifecycle-authority-public.pem
+    format: MARKDOWN_KV
+    role: SPECIALIZED
+    required: true
+    owns: []
+    selectors: {}
   - id: release-control
     path: release-control.yaml
     format: YAML

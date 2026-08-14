@@ -18,7 +18,7 @@
 - Every coordinator write uses one non-blocking OS process lock keyed by `projectExecutionKey`, then fsyncs a same-directory temporary file, atomically replaces the journal, fsyncs the directory, rereads the journal, and validates the persisted receipt before unlocking.
 - The acquisition idempotency key is `(projectExecutionKey, batchPlanId, sliceId, attemptId)`. A replay returns the existing nonterminal lease; a terminal replay is rejected.
 - Every transition and guarded command requires the current fencing token. Missing or stale tokens fail closed.
-- `BLOCKED`, `NO_GO`, and `STALE` retain the lease. Only `CLOSED`, or a project-authorized and quiescence-proven `CANCELLED`, releases it.
+- `BLOCKED`, `NO_GO`, `STALE`, and `CANCELLED` retain the lease. Task 4 releases only a valid `CLOSED`; a retained `CANCELLED` can release only through Task 6's durable project-authorized recovery receipt with verified process quiescence.
 - Any persistent WriteSet breach freezes all nonterminal leases for the project, revokes their tokens, blocks new admissions, records `PROJECT_WRITESET_RECOVERY`, and requires a fresh plan after explicit recovery.
 - Protected actions remain denied: formal database writes, migration application, destructive operations, production/secret access, Landing, Wave entry, push, release, and deployment.
 - Use RED -> GREEN for every behavior task. Run focused tests during iteration; run the full Harness suite and one `gpt-5.6-sol/xhigh` fixed-candidate gate only after the Phase 1B candidate stabilizes.
@@ -121,7 +121,7 @@ Recovery command:
 
 All schemas use Draft 2020-12, `additionalProperties: false`, explicit enums, canonical set normalization, and SHA-256 command digests that cover every field except the digest itself.
 
-Authority/WriteSet migration (2026-08-14): the locked Acquire identity carries the complete Phase 1A `planningRequest` plus its normalized descriptor, envelope, snapshot, admission proof, and full conflict footprint. Envelope provenance is an independent issuer authority record referenced by `issuerId`, `issuerAuthorityReference`, and `issuerAuthorityDigest`. The six file-owned `controlled_planning.*` facts are owned by one separate planning manifest authority; `controlled_planning.batch_base_commit` is deliberately not a file-owned fact because that would create a Git-HEAD self-hash cycle. `admissionAuthorityProof` binds `manifestAuthorityId`, `manifestAuthorityReference`, and `manifestAuthorityDigest`; its manifest-serialized binding covers project, Slice, attempt, registered source, and lane, but excludes `expectedLaneBase`. The request and command independently require `batchBaseCommit == expectedLaneBase == rebuiltSnapshot.sourceRevision.head`. Under the project lock, Acquire reloads the registration, rebuilds the Authority Snapshot through the registered integration, exact-compares the complete snapshot, requires live `permission.development=ALLOW`, and rejects caller-rehashed facts. Transition lifecycle proof remains separately project-owned and carries Candidate/Parent/Tree and review evidence as locked by Task 1.
+Authority/WriteSet migration (2026-08-14): the locked Acquire identity carries the complete Phase 1A `planningRequest` plus its normalized descriptor, envelope, snapshot, admission proof, and full conflict footprint. Envelope provenance is an independent issuer authority record referenced by `issuerId`, `issuerAuthorityReference`, and `issuerAuthorityDigest`. The six file-owned `controlled_planning.*` facts are owned by one separate planning manifest authority; `controlled_planning.batch_base_commit` is deliberately not a file-owned fact because that would create a Git-HEAD self-hash cycle. `admissionAuthorityProof` binds `manifestAuthorityId`, `manifestAuthorityReference`, and `manifestAuthorityDigest`; its manifest-serialized binding covers project, Slice, attempt, registered source, and lane, but excludes `expectedLaneBase`. The request and command independently require `batchBaseCommit == expectedLaneBase == rebuiltSnapshot.sourceRevision.head`. Under the project lock, Acquire reloads the registration, rebuilds the Authority Snapshot through the registered integration, exact-compares the complete snapshot, requires live `permission.development=ALLOW`, and rejects caller-rehashed facts. Transition lifecycle proof is a separately project-owned Ed25519 proof from the current required `lifecycle-controller` public-key authority. Its canonical signed payload closes over project execution key, lease, attempt, fencing token, snapshot fingerprint, expected/next state, Candidate/Parent/Tree identity, review binding/evidence digests, and assertion time. `REVIEW_GO` additionally requires an Ed25519 review from the current required `deep-reviewer` public-key authority whose canonical payload closes over the same execution identity and Candidate/Parent/Tree, reviewer id/role, verdict, finding counts, review time, and the acquired required-reviewer/minimum-verdict policy. Caller-computed SHA-256 digests remain structural bindings, never substitutes for signature verification; missing system OpenSSL, wrong algorithm/key/role/policy, or an invalid signature fails closed.
 
 Coordinator-projection migration (2026-08-14): `ACTIVE_LEASE_CONFLICT` is a locked closed-enum projection reason and `PROJECT_CAPACITY_LIMIT` remains the distinct project-wide capacity reason. The optional planner input is a closed `controlled-coordinator-snapshot/v1` object that binds project, project execution key, base provisional plan, journal version/digest/recovery state, envelope, conflict policy, source base, and the complete journal. When absent, the returned bundle and provisional execution-plan bytes are unchanged. When present, `bundle.executionPlan` is still that original provisional plan and the read-only result is added separately as `bundle.coordinatorProjection` with schema `controlled-coordinator-projection/v1`. A projection is not an Acquire `executionPlan`, never mutates coordinator state, and never removes `requiresCoordinatorRecheck=true`.
 
@@ -139,7 +139,7 @@ receipts = append-only ordered mutation receipts
 integrationTransactions = [] in Phase 1B
 ```
 
-Every lease stores the complete target footprint plus the authority-bound planning footprints needed to reconstruct the cross-plan dependency/producer-consumer closure. It also stores the existing lane directory's no-follow `{device, inode, type}` physical identity. Candidate identity is either `null` or exactly `{commit, parent, tree}`. On every read and replacement the store validates the ordered receipt/version/lease association, requires `nextFencingToken` above every durable token, and verifies the latest receipt digest against the complete sentinel-normalized journal. Corruption fails closed as `COORDINATOR_STATE_CORRUPT`; recovery execution remains Task 6.
+Every lease stores the complete target footprint plus the authority-bound planning footprints needed to reconstruct the cross-plan dependency/producer-consumer closure. It also stores the existing lane directory's no-follow `{device, inode, type}` physical identity. Candidate identity is either `null` or exactly `{commit, parent, tree}`. At `FIXED_CANDIDATE`, every later candidate-bound transition, and exact replay, Task 4 reopens the lane from `/` without following symlinks, matches that durable physical identity, requires the Git top-level to equal `laneRoot`, requires live `HEAD == commit`, and proves that commit exists with exactly one `parent` and the exact `tree`. On every read and replacement the store validates the ordered receipt/version/lease association, requires `nextFencingToken` above every durable token, and verifies the latest receipt digest against the complete sentinel-normalized journal. Corruption fails closed as `COORDINATOR_STATE_CORRUPT`; recovery execution remains Task 6.
 `recoveryEvidence` is always present. Both pending recovery states require non-null complete evidence; `CLEAR` permits `null` before any recovery and retains non-null immutable evidence after an authorized recovery closes.
 
 ---
@@ -346,7 +346,7 @@ git commit -m "feat: acquire fenced project lane leases"
 
 **Interfaces:**
 
-- Consumes: a current lease, project-owned lifecycle evidence, current fencing token, process-quiescence evidence, and optional Candidate/Parent/Tree identity.
+- Consumes: a current lease, current signed project-owned lifecycle/reviewer evidence, current fencing token, process evidence, durable lane physical identity, and optional Candidate/Parent/Tree identity.
 - Produces: `transition_lane_lease` and immutable transition receipts.
 
 - [ ] **Step 1: Add RED transition-matrix tests**
@@ -360,7 +360,7 @@ def test_exceptional_state_retains_lease(coordinator_factory, exceptional):
     assert result["state"] == exceptional
 ```
 
-Test every allowed normal transition, skipped-state rejection, stale/missing token, authority fingerprint drift, attempt mismatch, Candidate/Parent/Tree binding at `FIXED_CANDIDATE`, zero-finding review binding at `REVIEW_GO`, retained lease through `INTEGRATING`, `CLOSED` release, `CANCELLED` without authority/quiescence rejection, terminal immutability, and subprocess loss retaining the lease.
+Test every allowed normal transition, skipped-state rejection, stale/missing token, authority fingerprint drift, attempt mismatch, Ed25519 caller-rehash/wrong-key/wrong-role/policy failures, Candidate/Parent/Tree binding at `FIXED_CANDIDATE`, candidate object/HEAD/parent/tree and lane inode/symlink drift, zero-finding review binding at `REVIEW_GO`, exact replay live revalidation, retained lease through `INTEGRATING`, `CLOSED` release, signed `CANCELLED` with both empty and live caller process lists retaining capacity, terminal immutability, and subprocess loss retaining the lease.
 
 - [ ] **Step 2: Run the lifecycle RED test**
 
@@ -370,7 +370,7 @@ Expected: FAIL on missing lifecycle behavior.
 
 - [ ] **Step 3: Implement the explicit state machine**
 
-Keep allowed transitions in one immutable mapping. Never infer project lifecycle changes: require the transition command's authority reference and digest to exist in the current snapshot. Increment the fencing token when authority drift, cancellation, or recovery revokes an attempt; otherwise retain the current token. Release capacity only for valid `CLOSED` or recovered `CANCELLED` receipts.
+Keep allowed transitions in one immutable mapping. Never infer project lifecycle changes: under the project lock, rebuild authority, resolve the exact required public-key records, no-follow read their current digest-matched keys, and use system OpenSSL to verify the closed Ed25519 payloads. Revalidate live lane physical and Git Candidate/Parent/Tree identity before every candidate-bound mutation and exact replay. Raise `nextFencingToken` monotonically when authority drift, cancellation, or recovery revokes an attempt while retaining the historical lease token in evidence; ordinary transitions preserve both. Release capacity only for valid `CLOSED`. Task 4 records `CANCELLED` as terminal but `released=false`, so caller process arrays and subprocess loss never establish recovery quiescence or free capacity; only Task 6 may durably release it.
 
 - [ ] **Step 4: Run the lifecycle GREEN test**
 
@@ -484,7 +484,7 @@ On any breach, reacquire the project lock, recompute current journal state, incr
 
 - [ ] **Step 4: Implement authorized recovery closure**
 
-Require current project-owned recovery authority, process-quiescence proof for every affected lease, expected journal version, explicit per-lease decisions, and `replacementPlanRequired=true`. Mark overlapping/authority-affected leases `STALE`; retain immutable evidence; clear recovery only after the receipt is durable. Never widen a descriptor or reuse the old plan.
+Require current project-owned recovery authority, process-quiescence proof for every affected lease, expected journal version, explicit per-lease decisions, and `replacementPlanRequired=true`. Mark overlapping/authority-affected leases `STALE`; retain immutable evidence; clear recovery only after the receipt is durable. A Task 4 `CANCELLED` lease remains capacity-bearing until this durable recovery proof verifies real process quiescence and explicitly records its release. Never widen a descriptor or reuse the old plan.
 
 - [ ] **Step 5: Run recovery and race tests**
 

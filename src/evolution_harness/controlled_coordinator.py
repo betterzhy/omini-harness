@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import base64
 import copy
 import os
+import shutil
 import stat
 import subprocess
+import tempfile
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any
@@ -449,6 +452,241 @@ def _current_authority_record(
     return record
 
 
+def _read_current_authority_bytes(
+    source_root: Path, record: dict[str, Any]
+) -> bytes:
+    reference = Path(record["path"])
+    if (
+        reference.is_absolute()
+        or not reference.parts
+        or any(part in {"", ".", ".."} for part in reference.parts)
+    ):
+        raise ControlledCoordinationError(
+            "AUTHORITY_PUBLIC_KEY_UNREADABLE",
+            "authority public key reference is not a safe source-relative path",
+        )
+    root_descriptor = current_descriptor = file_descriptor = -1
+    try:
+        root_descriptor, _ = _open_absolute_directory_no_follow(source_root)
+        current_descriptor = root_descriptor
+        for part in reference.parts[:-1]:
+            following = os.open(part, _DIRECTORY_FLAGS, dir_fd=current_descriptor)
+            if current_descriptor != root_descriptor:
+                os.close(current_descriptor)
+            current_descriptor = following
+        file_descriptor = os.open(
+            reference.parts[-1],
+            os.O_RDONLY
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_CLOEXEC", 0),
+            dir_fd=current_descriptor,
+        )
+        before = os.fstat(file_descriptor)
+        if not stat.S_ISREG(before.st_mode) or before.st_size > 1024 * 1024:
+            raise OSError("authority public key must be a bounded regular file")
+        chunks: list[bytes] = []
+        remaining = 1024 * 1024 + 1
+        while remaining:
+            chunk = os.read(file_descriptor, min(65536, remaining))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        public_key = b"".join(chunks)
+        after = os.fstat(file_descriptor)
+        if (
+            not _same_physical_identity(before, after)
+            or len(public_key) > 1024 * 1024
+            or sha256_bytes(public_key) != record["sha256"]
+        ):
+            raise OSError("authority public key changed during the locked read")
+        return public_key
+    except OSError as exc:
+        raise ControlledCoordinationError(
+            "AUTHORITY_PUBLIC_KEY_UNREADABLE",
+            "current authority public key could not be read no-follow",
+        ) from exc
+    finally:
+        if file_descriptor >= 0:
+            os.close(file_descriptor)
+        if current_descriptor >= 0 and current_descriptor != root_descriptor:
+            os.close(current_descriptor)
+        if root_descriptor >= 0:
+            os.close(root_descriptor)
+
+
+def _verify_ed25519_signature(
+    public_key: bytes,
+    signature_text: str,
+    payload: dict[str, Any],
+    *,
+    invalid_code: str,
+) -> None:
+    openssl = shutil.which("openssl")
+    if openssl is None:
+        raise ControlledCoordinationError(
+            "OPENSSL_UNAVAILABLE",
+            "system OpenSSL is required for Ed25519 transition verification",
+        )
+    try:
+        signature = base64.b64decode(signature_text, validate=True)
+    except (ValueError, TypeError) as exc:
+        raise ControlledCoordinationError(
+            invalid_code, "transition evidence signature is not canonical base64"
+        ) from exc
+    if len(signature) != 64:
+        raise ControlledCoordinationError(
+            invalid_code, "transition evidence signature is not an Ed25519 signature"
+        )
+    try:
+        with tempfile.TemporaryDirectory(prefix="controlled-transition-verify-") as temporary:
+            temporary_root = Path(temporary)
+            public_key_path = temporary_root / "authority-public.pem"
+            signature_path = temporary_root / "signature.bin"
+            payload_path = temporary_root / "payload.json"
+            public_key_path.write_bytes(public_key)
+            signature_path.write_bytes(signature)
+            payload_path.write_bytes(canonical_json_bytes(payload))
+            completed = subprocess.run(
+                [
+                    openssl,
+                    "pkeyutl",
+                    "-verify",
+                    "-rawin",
+                    "-pubin",
+                    "-inkey",
+                    str(public_key_path),
+                    "-sigfile",
+                    str(signature_path),
+                    "-in",
+                    str(payload_path),
+                ],
+                check=False,
+                capture_output=True,
+                timeout=10,
+            )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise ControlledCoordinationError(
+            invalid_code, "OpenSSL could not verify transition evidence"
+        ) from exc
+    if completed.returncode != 0:
+        raise ControlledCoordinationError(
+            invalid_code, "transition evidence signature is not valid for current authority"
+        )
+
+
+def _lifecycle_signature_payload(command: dict[str, Any]) -> dict[str, Any]:
+    proof = command["lifecycleAuthorityProof"]
+    return {
+        "schemaVersion": "controlled-lifecycle-signature-payload/v1",
+        "projectExecutionKey": command["projectExecutionKey"],
+        "leaseId": command["leaseId"],
+        "attemptId": command["attemptId"],
+        "fencingToken": command["fencingToken"],
+        "authoritySnapshotFingerprint": command["authoritySnapshotFingerprint"],
+        "expectedState": command["expectedState"],
+        "nextState": command["nextState"],
+        "candidateIdentity": command["candidateIdentity"],
+        "reviewBindingDigest": proof["reviewBindingDigest"],
+        "reviewEvidenceDigest": proof["reviewEvidenceDigest"],
+        "assertedAt": proof["assertedAt"],
+    }
+
+
+def _review_signature_payload(
+    command: dict[str, Any],
+    *,
+    required_reviewers: list[str],
+    minimum_review_verdict: str,
+) -> dict[str, Any]:
+    review = command["reviewEvidence"]
+    assert review is not None
+    return {
+        "schemaVersion": "controlled-review-signature-payload/v1",
+        "projectExecutionKey": command["projectExecutionKey"],
+        "leaseId": command["leaseId"],
+        "attemptId": command["attemptId"],
+        "fencingToken": command["fencingToken"],
+        "authoritySnapshotFingerprint": command["authoritySnapshotFingerprint"],
+        "candidateIdentity": command["candidateIdentity"],
+        "reviewerId": review["reviewerId"],
+        "reviewerRole": review["reviewerRole"],
+        "verdict": review["verdict"],
+        "findingCounts": review["findingCounts"],
+        "reviewedAt": review["reviewedAt"],
+        "requiredReviewerPolicy": required_reviewers,
+        "minimumReviewVerdict": minimum_review_verdict,
+    }
+
+
+def _validate_lane_physical_identity(lease: dict[str, Any]) -> None:
+    descriptor = -1
+    try:
+        descriptor, observed = _open_absolute_directory_no_follow(
+            Path(lease["laneRoot"])
+        )
+    except OSError as exc:
+        raise ControlledCoordinationError(
+            "LANE_ROOT_IDENTITY_CHANGED",
+            "leased lane root is no longer an existing no-follow directory",
+        ) from exc
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+    durable = lease["lanePhysicalIdentity"]
+    if (
+        observed.st_dev != durable["device"]
+        or observed.st_ino != durable["inode"]
+        or not stat.S_ISDIR(observed.st_mode)
+        or durable["type"] != "DIRECTORY"
+    ):
+        raise ControlledCoordinationError(
+            "LANE_ROOT_IDENTITY_CHANGED",
+            "leased lane root no longer has its durable physical identity",
+        )
+
+
+def _validate_live_lane_candidate(
+    lease: dict[str, Any], candidate: dict[str, Any]
+) -> None:
+    lane_root = Path(lease["laneRoot"])
+    _validate_lane_physical_identity(lease)
+
+    def git(*arguments: str) -> str:
+        try:
+            return subprocess.run(
+                ["git", "-C", str(lane_root), *arguments],
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            ).stdout.strip()
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise ControlledCoordinationError(
+                "LANE_CANDIDATE_INVALID",
+                "candidate-bound lane Git evidence is not readable",
+            ) from exc
+
+    top_level = git("rev-parse", "--show-toplevel")
+    live_head = git("rev-parse", "HEAD")
+    commit = git("rev-parse", "--verify", f"{candidate['commit']}^{{commit}}")
+    parents = git("show", "-s", "--format=%P", candidate["commit"]).split()
+    tree = git("rev-parse", f"{candidate['commit']}^{{tree}}")
+    _validate_lane_physical_identity(lease)
+    if (
+        top_level != str(lane_root)
+        or live_head != candidate["commit"]
+        or commit != candidate["commit"]
+        or len(parents) != 1
+        or parents[0] != candidate["parent"]
+        or tree != candidate["tree"]
+    ):
+        raise ControlledCoordinationError(
+            "LANE_CANDIDATE_INVALID",
+            "live lane must exactly reproduce Candidate/Parent/Tree identity",
+        )
+
+
 def _rebuild_transition_snapshot(
     repository_root: Path,
     source_root: Path,
@@ -810,23 +1048,69 @@ def transition_lane_lease(
                 )
 
             proof = normalized["lifecycleAuthorityProof"]
-            _current_authority_record(
+            if proof["authorityId"] != "lifecycle-controller":
+                raise ControlledCoordinationError(
+                    "LIFECYCLE_AUTHORITY_NOT_CURRENT",
+                    "transition proof is not issued by the lifecycle controller",
+                )
+            lifecycle_authority = _current_authority_record(
                 live_snapshot,
                 reference=proof["authorityReference"],
                 digest=proof["authorityDigest"],
+                authority_id="lifecycle-controller",
                 code="LIFECYCLE_AUTHORITY_NOT_CURRENT",
+            )
+            lifecycle_public_key = _read_current_authority_bytes(
+                source, lifecycle_authority
+            )
+            _verify_ed25519_signature(
+                lifecycle_public_key,
+                proof["signature"],
+                _lifecycle_signature_payload(normalized),
+                invalid_code="LIFECYCLE_SIGNATURE_INVALID",
             )
             if normalized["nextState"] == "REVIEW_GO":
                 review = normalized["reviewEvidence"]
                 assert review is not None
-                _current_authority_record(
+                required_reviewers = acquire_command["authorizationEnvelope"][
+                    "requiredReviewers"
+                ]
+                minimum_verdict = acquire_command["authorizationEnvelope"][
+                    "minimumReviewVerdict"
+                ]
+                if (
+                    required_reviewers != [review["reviewerRole"]]
+                    or review["reviewerId"] != review["reviewerRole"]
+                    or review["verdict"] != minimum_verdict
+                ):
+                    raise ControlledCoordinationError(
+                        "REVIEWER_POLICY_MISMATCH",
+                        "review evidence does not satisfy the acquired reviewer policy",
+                    )
+                reviewer_authority = _current_authority_record(
                     live_snapshot,
                     reference=review["reviewerAuthorityReference"],
                     digest=review["reviewerAuthorityDigest"],
                     authority_id=review["reviewerId"],
                     code="REVIEWER_AUTHORITY_NOT_CURRENT",
                 )
+                reviewer_public_key = _read_current_authority_bytes(
+                    source, reviewer_authority
+                )
+                _verify_ed25519_signature(
+                    reviewer_public_key,
+                    review["signature"],
+                    _review_signature_payload(
+                        normalized,
+                        required_reviewers=required_reviewers,
+                        minimum_review_verdict=minimum_verdict,
+                    ),
+                    invalid_code="REVIEW_SIGNATURE_INVALID",
+                )
             if exact_replay is not None:
+                replay_candidate = normalized["candidateIdentity"]
+                if replay_candidate is not None:
+                    _validate_live_lane_candidate(lease, replay_candidate)
                 return _transition_result(lease)
             if conflicting_replay is not None:
                 raise ControlledCoordinationError(
@@ -876,12 +1160,14 @@ def transition_lane_lease(
                     "CANDIDATE_IDENTITY_REQUIRED",
                     "candidate identity is required for candidate-bound lifecycle states",
                 )
+            if next_candidate is not None:
+                _validate_live_lane_candidate(lease, next_candidate)
 
-            release = normalized["nextState"] in _TERMINAL_STATES
+            release = normalized["nextState"] == "CLOSED"
             if release and normalized["processQuiescence"]["processIds"]:
                 raise ControlledCoordinationError(
                     "PROCESS_NOT_QUIESCENT",
-                    "terminal capacity release requires empty live process evidence",
+                    "closed capacity release requires empty live process evidence",
                 )
 
             previous_version = current["journalVersion"]

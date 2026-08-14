@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import base64
 import copy
 import subprocess
 import sys
+import tempfile
+from pathlib import Path
 
 import pytest
 
@@ -11,13 +14,6 @@ from evolution_harness.authority import build_authority_snapshot
 from evolution_harness.controlled_coordinator_inputs import ControlledCoordinationError
 from evolution_harness.hashing import canonical_json_bytes, sha256_bytes
 from test_controlled_coordinator_acquire import AcquisitionFactory, _committed_source
-
-
-_CANDIDATE = {
-    "commit": "4" * 40,
-    "parent": "5" * 40,
-    "tree": "6" * 40,
-}
 
 
 def _sha256(value):
@@ -39,7 +35,46 @@ def lifecycle_factory(tmp_path, monkeypatch, repository_root, controlled_factory
     source = _committed_source(
         repository_root, tmp_path / "external-project", controlled_factory
     )
-    return AcquisitionFactory(repository_root, source, controlled_factory)
+    factory = AcquisitionFactory(repository_root, source, controlled_factory)
+    for private_name, public_name in (
+        ("lifecycle-private.pem", "lifecycle-authority-public.pem"),
+        ("reviewer-private.pem", "deep-reviewer-public.pem"),
+    ):
+        private_path = tmp_path / private_name
+        subprocess.run(
+            ["openssl", "genpkey", "-algorithm", "ED25519", "-out", str(private_path)],
+            check=True,
+        )
+        subprocess.run(
+            [
+                "openssl",
+                "pkey",
+                "-in",
+                str(private_path),
+                "-pubout",
+                "-out",
+                str(source / public_name),
+            ],
+            check=True,
+        )
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(source),
+            "add",
+            "lifecycle-authority-public.pem",
+            "deep-reviewer-public.pem",
+        ],
+        check=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(source), "commit", "-qm", "test signing authorities"],
+        check=True,
+    )
+    factory.lifecycle_private_key = tmp_path / "lifecycle-private.pem"
+    factory.reviewer_private_key = tmp_path / "reviewer-private.pem"
+    return factory
 
 
 def _current_authorities(factory):
@@ -49,6 +84,76 @@ def _current_authorities(factory):
         factory.source_root,
     )
     return snapshot, {item["id"]: item for item in snapshot["authorities"]}
+
+
+def _authority_or_file(factory, authorities, authority_id, reference):
+    current = authorities.get(authority_id)
+    if current is not None:
+        return current
+    return {
+        "id": authority_id,
+        "path": reference,
+        "sha256": sha256_bytes((factory.source_root / reference).read_bytes()),
+    }
+
+
+def _sign(private_key, payload):
+    with tempfile.NamedTemporaryFile(prefix="task4-signing-payload-") as payload_file:
+        payload_file.write(canonical_json_bytes(payload))
+        payload_file.flush()
+        completed = subprocess.run(
+            [
+                "openssl",
+                "pkeyutl",
+                "-sign",
+                "-rawin",
+                "-inkey",
+                str(private_key),
+                "-in",
+                payload_file.name,
+            ],
+            check=True,
+            capture_output=True,
+        )
+    return base64.b64encode(completed.stdout).decode("ascii")
+
+
+def _lifecycle_signature_payload(command):
+    proof = command["lifecycleAuthorityProof"]
+    return {
+        "schemaVersion": "controlled-lifecycle-signature-payload/v1",
+        "projectExecutionKey": command["projectExecutionKey"],
+        "leaseId": command["leaseId"],
+        "attemptId": command["attemptId"],
+        "fencingToken": command["fencingToken"],
+        "authoritySnapshotFingerprint": command["authoritySnapshotFingerprint"],
+        "expectedState": command["expectedState"],
+        "nextState": command["nextState"],
+        "candidateIdentity": command["candidateIdentity"],
+        "reviewBindingDigest": proof["reviewBindingDigest"],
+        "reviewEvidenceDigest": proof["reviewEvidenceDigest"],
+        "assertedAt": proof["assertedAt"],
+    }
+
+
+def _review_signature_payload(command):
+    review = command["reviewEvidence"]
+    return {
+        "schemaVersion": "controlled-review-signature-payload/v1",
+        "projectExecutionKey": command["projectExecutionKey"],
+        "leaseId": command["leaseId"],
+        "attemptId": command["attemptId"],
+        "fencingToken": command["fencingToken"],
+        "authoritySnapshotFingerprint": command["authoritySnapshotFingerprint"],
+        "candidateIdentity": command["candidateIdentity"],
+        "reviewerId": review["reviewerId"],
+        "reviewerRole": review["reviewerRole"],
+        "verdict": review["verdict"],
+        "findingCounts": review["findingCounts"],
+        "reviewedAt": review["reviewedAt"],
+        "requiredReviewerPolicy": ["deep-reviewer"],
+        "minimumReviewVerdict": "GO_ZERO_FINDINGS",
+    }
 
 
 def _transition_command(
@@ -61,12 +166,19 @@ def _transition_command(
     candidate_identity=None,
 ):
     snapshot, authorities = _current_authorities(factory)
-    lifecycle_authority = authorities["global-status"]
-    reviewer_authority = authorities["coordinator-issuer"]
+    lifecycle_authority = _authority_or_file(
+        factory,
+        authorities,
+        "lifecycle-controller",
+        "lifecycle-authority-public.pem",
+    )
+    reviewer_authority = _authority_or_file(
+        factory, authorities, "deep-reviewer", "deep-reviewer-public.pem"
+    )
     expected = expected_state or lease["state"]
     if candidate_identity is None:
         if next_state == "FIXED_CANDIDATE":
-            candidate_identity = copy.deepcopy(_CANDIDATE)
+            candidate_identity = _create_live_candidate(lease)
         else:
             candidate_identity = copy.deepcopy(lease["candidateIdentity"])
 
@@ -75,25 +187,56 @@ def _transition_command(
         review = {
             "candidateIdentity": copy.deepcopy(candidate_identity),
             "reviewerId": reviewer_authority["id"],
+            "reviewerRole": "deep-reviewer",
+            "projectExecutionKey": lease["projectExecutionKey"],
+            "leaseId": lease["leaseId"],
+            "attemptId": lease["attemptId"],
+            "fencingToken": lease["fencingToken"],
+            "authoritySnapshotFingerprint": snapshot["snapshotFingerprint"],
             "reviewerAuthorityReference": reviewer_authority["path"],
             "reviewerAuthorityDigest": "sha256:" + reviewer_authority["sha256"],
             "verdict": "GO_ZERO_FINDINGS",
             "findingCounts": {"p0": 0, "p1": 0, "p2": 0},
             "reviewedAt": "2026-08-13T12:29:30Z",
+            "signatureAlgorithm": "ED25519",
         }
         review["reviewBindingDigest"] = _sha256(
             {
                 "candidateIdentity": candidate_identity,
-                "authoritySnapshotFingerprint": snapshot["snapshotFingerprint"],
+                "projectExecutionKey": lease["projectExecutionKey"],
+                "leaseId": lease["leaseId"],
                 "attemptId": lease["attemptId"],
+                "fencingToken": lease["fencingToken"],
+                "authoritySnapshotFingerprint": snapshot["snapshotFingerprint"],
                 "reviewerId": review["reviewerId"],
+                "reviewerRole": review["reviewerRole"],
                 "reviewerAuthorityReference": review["reviewerAuthorityReference"],
                 "reviewerAuthorityDigest": review["reviewerAuthorityDigest"],
             }
         )
+        review["signature"] = _sign(
+            factory.reviewer_private_key,
+            {
+                "schemaVersion": "controlled-review-signature-payload/v1",
+                "projectExecutionKey": lease["projectExecutionKey"],
+                "leaseId": lease["leaseId"],
+                "attemptId": lease["attemptId"],
+                "fencingToken": lease["fencingToken"],
+                "authoritySnapshotFingerprint": snapshot["snapshotFingerprint"],
+                "candidateIdentity": candidate_identity,
+                "reviewerId": review["reviewerId"],
+                "reviewerRole": review["reviewerRole"],
+                "verdict": review["verdict"],
+                "findingCounts": review["findingCounts"],
+                "reviewedAt": review["reviewedAt"],
+                "requiredReviewerPolicy": ["deep-reviewer"],
+                "minimumReviewVerdict": "GO_ZERO_FINDINGS",
+            },
+        )
         review["evidenceDigest"] = _sha256(review)
 
     proof = {
+        "authorityId": lifecycle_authority["id"],
         "authorityReference": lifecycle_authority["path"],
         "authorityDigest": "sha256:" + lifecycle_authority["sha256"],
         "attemptId": lease["attemptId"],
@@ -114,7 +257,25 @@ def _transition_command(
             None if review is None else review["reviewerAuthorityDigest"]
         ),
         "assertedAt": "2026-08-13T12:29:00Z",
+        "signatureAlgorithm": "ED25519",
     }
+    proof["signature"] = _sign(
+        factory.lifecycle_private_key,
+        {
+            "schemaVersion": "controlled-lifecycle-signature-payload/v1",
+            "projectExecutionKey": lease["projectExecutionKey"],
+            "leaseId": lease["leaseId"],
+            "attemptId": lease["attemptId"],
+            "fencingToken": lease["fencingToken"],
+            "authoritySnapshotFingerprint": snapshot["snapshotFingerprint"],
+            "expectedState": expected,
+            "nextState": next_state,
+            "candidateIdentity": candidate_identity,
+            "reviewBindingDigest": proof["reviewBindingDigest"],
+            "reviewEvidenceDigest": proof["reviewEvidenceDigest"],
+            "assertedAt": proof["assertedAt"],
+        },
+    )
     proof["proofDigest"] = _sha256(proof)
     return _command_digest(
         {
@@ -140,24 +301,60 @@ def _transition_command(
     )
 
 
-def _rebind_transition(command):
+def _rebind_transition(factory, command, *, resign=True):
     review = command["reviewEvidence"]
     if review is not None:
         review["candidateIdentity"] = copy.deepcopy(command["candidateIdentity"])
         review["reviewBindingDigest"] = _sha256(
             {
                 "candidateIdentity": command["candidateIdentity"],
-                "authoritySnapshotFingerprint": command[
-                    "authoritySnapshotFingerprint"
-                ],
+                "projectExecutionKey": command["projectExecutionKey"],
+                "leaseId": command["leaseId"],
                 "attemptId": command["attemptId"],
+                "fencingToken": command["fencingToken"],
+                "authoritySnapshotFingerprint": command["authoritySnapshotFingerprint"],
                 "reviewerId": review["reviewerId"],
+                "reviewerRole": review["reviewerRole"],
                 "reviewerAuthorityReference": review[
                     "reviewerAuthorityReference"
                 ],
                 "reviewerAuthorityDigest": review["reviewerAuthorityDigest"],
             }
         )
+        review.update(
+            {
+                "candidateIdentity": copy.deepcopy(command["candidateIdentity"]),
+                "projectExecutionKey": command["projectExecutionKey"],
+                "leaseId": command["leaseId"],
+                "attemptId": command["attemptId"],
+                "fencingToken": command["fencingToken"],
+                "authoritySnapshotFingerprint": command[
+                    "authoritySnapshotFingerprint"
+                ],
+            }
+        )
+        if resign:
+            review["signature"] = _sign(
+                factory.reviewer_private_key,
+                {
+                    "schemaVersion": "controlled-review-signature-payload/v1",
+                    "projectExecutionKey": command["projectExecutionKey"],
+                    "leaseId": command["leaseId"],
+                    "attemptId": command["attemptId"],
+                    "fencingToken": command["fencingToken"],
+                    "authoritySnapshotFingerprint": command[
+                        "authoritySnapshotFingerprint"
+                    ],
+                    "candidateIdentity": command["candidateIdentity"],
+                    "reviewerId": review["reviewerId"],
+                    "reviewerRole": review["reviewerRole"],
+                    "verdict": review["verdict"],
+                    "findingCounts": review["findingCounts"],
+                    "reviewedAt": review["reviewedAt"],
+                    "requiredReviewerPolicy": ["deep-reviewer"],
+                    "minimumReviewVerdict": "GO_ZERO_FINDINGS",
+                },
+            )
         review["evidenceDigest"] = _sha256(
             {key: value for key, value in review.items() if key != "evidenceDigest"}
         )
@@ -183,17 +380,104 @@ def _rebind_transition(command):
             ),
         }
     )
+    if resign:
+        proof["signature"] = _sign(
+            factory.lifecycle_private_key,
+            {
+                "schemaVersion": "controlled-lifecycle-signature-payload/v1",
+                "projectExecutionKey": command["projectExecutionKey"],
+                "leaseId": command["leaseId"],
+                "attemptId": command["attemptId"],
+                "fencingToken": command["fencingToken"],
+                "authoritySnapshotFingerprint": command[
+                    "authoritySnapshotFingerprint"
+                ],
+                "expectedState": command["expectedState"],
+                "nextState": command["nextState"],
+                "candidateIdentity": command["candidateIdentity"],
+                "reviewBindingDigest": proof["reviewBindingDigest"],
+                "reviewEvidenceDigest": proof["reviewEvidenceDigest"],
+                "assertedAt": proof["assertedAt"],
+            },
+        )
     proof["proofDigest"] = _sha256(
         {key: value for key, value in proof.items() if key != "proofDigest"}
     )
     return _command_digest(command)
 
 
-def _acquire(factory):
+def _create_live_candidate(lease):
+    lane = Path(lease["laneRoot"])
+    head = subprocess.run(
+        ["git", "-C", str(lane), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    if head == lease["expectedLaneBase"]:
+        (lane / "candidate.txt").write_text("fixed candidate\n", encoding="utf-8")
+        subprocess.run(["git", "-C", str(lane), "add", "candidate.txt"], check=True)
+        subprocess.run(
+            ["git", "-C", str(lane), "commit", "-qm", "fixed candidate"],
+            check=True,
+        )
+    commit = subprocess.run(
+        ["git", "-C", str(lane), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    parent = subprocess.run(
+        ["git", "-C", str(lane), "rev-parse", "HEAD^"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    tree = subprocess.run(
+        ["git", "-C", str(lane), "rev-parse", "HEAD^{tree}"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    return {"commit": commit, "parent": parent, "tree": tree}
+
+
+def _commit_lane_file(lease, name="later.txt"):
+    lane = Path(lease["laneRoot"])
+    (lane / name).write_text(f"{name}\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(lane), "add", name], check=True)
+    subprocess.run(
+        ["git", "-C", str(lane), "commit", "-qm", f"add {name}"], check=True
+    )
+
+
+def _acquire(factory, **changes):
+    command = factory.acquire(create_lane=False, **changes)
+    lane = Path(command["laneRoot"])
+    lane.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run(
+        ["git", "clone", "-q", "--no-hardlinks", str(factory.source_root), str(lane)],
+        check=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(lane), "config", "user.name", "Coordinator Test"],
+        check=True,
+    )
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(lane),
+            "config",
+            "user.email",
+            "coordinator@example.test",
+        ],
+        check=True,
+    )
     return coordinator.acquire_lane_lease(
         factory.repository_root,
         factory.source_root,
-        factory.acquire(),
+        command,
     )
 
 
@@ -234,7 +518,7 @@ def test_all_allowed_normal_edges_retain_until_closed(lifecycle_factory):
         assert result["leaseRetained"] is (next_state != "CLOSED")
         assert result["released"] is (next_state == "CLOSED")
         if next_state == "FIXED_CANDIDATE":
-            assert result["candidateIdentity"] == _CANDIDATE
+            assert result["candidateIdentity"] == command["candidateIdentity"]
         if next_state == "INTEGRATING":
             assert result["leaseRetained"] is True
         lease = result
@@ -310,7 +594,7 @@ def test_missing_token_and_attempt_mismatch_fail_closed(lifecycle_factory):
 
     other_attempt = _transition_command(lifecycle_factory, lease, "ACTIVE")
     other_attempt["attemptId"] = "attempt:other"
-    _rebind_transition(other_attempt)
+    _rebind_transition(lifecycle_factory, other_attempt)
     with pytest.raises(ControlledCoordinationError) as mismatch:
         _transition(lifecycle_factory, other_attempt)
     assert mismatch.value.code == "LEASE_ATTEMPT_MISMATCH"
@@ -321,7 +605,7 @@ def test_transition_requires_current_snapshot_and_authority_record(lifecycle_fac
     lease = _acquire(lifecycle_factory)
     wrong_snapshot = _transition_command(lifecycle_factory, lease, "ACTIVE")
     wrong_snapshot["authoritySnapshotFingerprint"] = "sha256:" + "f" * 64
-    _rebind_transition(wrong_snapshot)
+    _rebind_transition(lifecycle_factory, wrong_snapshot)
     with pytest.raises(ControlledCoordinationError) as fingerprint:
         _transition(lifecycle_factory, wrong_snapshot)
     assert fingerprint.value.code == "LIVE_AUTHORITY_SNAPSHOT_MISMATCH"
@@ -330,11 +614,133 @@ def test_transition_requires_current_snapshot_and_authority_record(lifecycle_fac
     wrong_authority["lifecycleAuthorityProof"]["authorityDigest"] = (
         "sha256:" + "e" * 64
     )
-    _rebind_transition(wrong_authority)
+    _rebind_transition(lifecycle_factory, wrong_authority)
     with pytest.raises(ControlledCoordinationError) as authority:
         _transition(lifecycle_factory, wrong_authority)
     assert authority.value.code == "LIFECYCLE_AUTHORITY_NOT_CURRENT"
     assert lifecycle_factory.journal()["journalVersion"] == 1
+
+
+def test_lifecycle_signature_rejects_caller_rehashed_payload(lifecycle_factory):
+    lease = _acquire(lifecycle_factory)
+    forged = _transition_command(lifecycle_factory, lease, "ACTIVE")
+    forged["nextState"] = "BLOCKED"
+    _rebind_transition(lifecycle_factory, forged, resign=False)
+
+    with pytest.raises(ControlledCoordinationError) as rejected:
+        _transition(lifecycle_factory, forged)
+
+    assert rejected.value.code == "LIFECYCLE_SIGNATURE_INVALID"
+    assert lifecycle_factory.journal()["journalVersion"] == 1
+
+
+def test_lifecycle_signature_rejects_wrong_authority_key(lifecycle_factory):
+    lease = _acquire(lifecycle_factory)
+    forged = _transition_command(lifecycle_factory, lease, "ACTIVE")
+    original_key = lifecycle_factory.lifecycle_private_key
+    lifecycle_factory.lifecycle_private_key = lifecycle_factory.reviewer_private_key
+    try:
+        _rebind_transition(lifecycle_factory, forged)
+    finally:
+        lifecycle_factory.lifecycle_private_key = original_key
+
+    with pytest.raises(ControlledCoordinationError) as rejected:
+        _transition(lifecycle_factory, forged)
+
+    assert rejected.value.code == "LIFECYCLE_SIGNATURE_INVALID"
+    assert lifecycle_factory.journal()["journalVersion"] == 1
+
+
+def test_lifecycle_signature_rejects_authority_role_substitution(lifecycle_factory):
+    lease = _acquire(lifecycle_factory)
+    forged = _transition_command(lifecycle_factory, lease, "ACTIVE")
+    _, authorities = _current_authorities(lifecycle_factory)
+    reviewer = authorities["deep-reviewer"]
+    proof = forged["lifecycleAuthorityProof"]
+    proof["authorityId"] = reviewer["id"]
+    proof["authorityReference"] = reviewer["path"]
+    proof["authorityDigest"] = "sha256:" + reviewer["sha256"]
+    original_key = lifecycle_factory.lifecycle_private_key
+    lifecycle_factory.lifecycle_private_key = lifecycle_factory.reviewer_private_key
+    try:
+        _rebind_transition(lifecycle_factory, forged)
+    finally:
+        lifecycle_factory.lifecycle_private_key = original_key
+
+    with pytest.raises(ControlledCoordinationError) as rejected:
+        _transition(lifecycle_factory, forged)
+
+    assert rejected.value.code == "LIFECYCLE_AUTHORITY_NOT_CURRENT"
+
+
+def test_review_signature_and_required_role_are_fail_closed(lifecycle_factory):
+    lease = _advance(lifecycle_factory, _acquire(lifecycle_factory), "ACTIVE")
+    fixed = _transition(
+        lifecycle_factory,
+        _transition_command(lifecycle_factory, lease, "FIXED_CANDIDATE"),
+    )
+    wrong_role = _transition_command(lifecycle_factory, fixed, "REVIEW_GO")
+    wrong_role["reviewEvidence"]["reviewerRole"] = "ordinary-reviewer"
+    _rebind_transition(lifecycle_factory, wrong_role)
+
+    with pytest.raises(ControlledCoordinationError) as role_rejected:
+        _transition(lifecycle_factory, wrong_role)
+
+    assert role_rejected.value.code == "REVIEWER_POLICY_MISMATCH"
+
+
+def test_review_signature_rejects_wrong_authority_key(lifecycle_factory):
+    lease = _advance(lifecycle_factory, _acquire(lifecycle_factory), "ACTIVE")
+    fixed = _transition(
+        lifecycle_factory,
+        _transition_command(lifecycle_factory, lease, "FIXED_CANDIDATE"),
+    )
+    forged = _transition_command(lifecycle_factory, fixed, "REVIEW_GO")
+    original_key = lifecycle_factory.reviewer_private_key
+    lifecycle_factory.reviewer_private_key = lifecycle_factory.lifecycle_private_key
+    try:
+        _rebind_transition(lifecycle_factory, forged)
+    finally:
+        lifecycle_factory.reviewer_private_key = original_key
+
+    with pytest.raises(ControlledCoordinationError) as rejected:
+        _transition(lifecycle_factory, forged)
+
+    assert rejected.value.code == "REVIEW_SIGNATURE_INVALID"
+
+
+def test_signature_verification_fails_closed_without_openssl(
+    lifecycle_factory, monkeypatch
+):
+    lease = _acquire(lifecycle_factory)
+    command = _transition_command(lifecycle_factory, lease, "ACTIVE")
+    monkeypatch.setattr(coordinator.shutil, "which", lambda _name: None)
+
+    with pytest.raises(ControlledCoordinationError) as rejected:
+        _transition(lifecycle_factory, command)
+
+    assert rejected.value.code == "OPENSSL_UNAVAILABLE"
+
+
+def test_review_tampering_and_nonzero_findings_are_fail_closed(lifecycle_factory):
+    lease = _advance(lifecycle_factory, _acquire(lifecycle_factory), "ACTIVE")
+    fixed = _transition(
+        lifecycle_factory,
+        _transition_command(lifecycle_factory, lease, "FIXED_CANDIDATE"),
+    )
+    tampered_candidate = _transition_command(lifecycle_factory, fixed, "REVIEW_GO")
+    tampered_candidate["candidateIdentity"]["tree"] = "7" * 40
+    _rebind_transition(lifecycle_factory, tampered_candidate, resign=False)
+    with pytest.raises(ControlledCoordinationError) as tampered:
+        _transition(lifecycle_factory, tampered_candidate)
+    assert tampered.value.code == "LIFECYCLE_SIGNATURE_INVALID"
+
+    nonzero = _transition_command(lifecycle_factory, fixed, "REVIEW_GO")
+    nonzero["reviewEvidence"]["findingCounts"]["p1"] = 1
+    _rebind_transition(lifecycle_factory, nonzero)
+    with pytest.raises(ControlledCoordinationError) as findings:
+        _transition(lifecycle_factory, nonzero)
+    assert findings.value.code == "COORDINATOR_COMMAND_INVALID"
 
 
 def test_authority_drift_only_allows_explicit_stale_revocation(lifecycle_factory):
@@ -381,9 +787,9 @@ def test_fixed_candidate_and_review_are_immutable_and_current(lifecycle_factory)
         lifecycle_factory,
         _transition_command(lifecycle_factory, lease, "FIXED_CANDIDATE"),
     )
-    assert fixed["candidateIdentity"] == _CANDIDATE
+    assert fixed["candidateIdentity"] is not None
 
-    changed_candidate = copy.deepcopy(_CANDIDATE)
+    changed_candidate = copy.deepcopy(fixed["candidateIdentity"])
     changed_candidate["parent"] = "7" * 40
     wrong_candidate = _transition_command(
         lifecycle_factory,
@@ -397,53 +803,136 @@ def test_fixed_candidate_and_review_are_immutable_and_current(lifecycle_factory)
 
     wrong_reviewer = _transition_command(lifecycle_factory, fixed, "REVIEW_GO")
     wrong_reviewer["reviewEvidence"]["reviewerId"] = "reviewer:unregistered"
-    _rebind_transition(wrong_reviewer)
+    _rebind_transition(lifecycle_factory, wrong_reviewer)
     with pytest.raises(ControlledCoordinationError) as reviewer:
         _transition(lifecycle_factory, wrong_reviewer)
-    assert reviewer.value.code == "REVIEWER_AUTHORITY_NOT_CURRENT"
+    assert reviewer.value.code == "REVIEWER_POLICY_MISMATCH"
 
     review_go = _transition(
         lifecycle_factory,
         _transition_command(lifecycle_factory, fixed, "REVIEW_GO"),
     )
-    assert review_go["candidateIdentity"] == _CANDIDATE
+    assert review_go["candidateIdentity"] == fixed["candidateIdentity"]
 
 
-def test_cancel_requires_current_authority_and_real_quiescence(lifecycle_factory):
+@pytest.mark.parametrize("field", ["commit", "parent", "tree"])
+def test_fixed_candidate_requires_exact_live_git_identity(lifecycle_factory, field):
+    lease = _advance(lifecycle_factory, _acquire(lifecycle_factory), "ACTIVE")
+    command = _transition_command(lifecycle_factory, lease, "FIXED_CANDIDATE")
+    command["candidateIdentity"][field] = "7" * 40
+    _rebind_transition(lifecycle_factory, command)
+
+    with pytest.raises(ControlledCoordinationError) as rejected:
+        _transition(lifecycle_factory, command)
+
+    assert rejected.value.code == "LANE_CANDIDATE_INVALID"
+
+
+def test_candidate_bound_transition_rejects_live_head_advance(lifecycle_factory):
+    lease = _advance(lifecycle_factory, _acquire(lifecycle_factory), "ACTIVE")
+    fixed = _transition(
+        lifecycle_factory,
+        _transition_command(lifecycle_factory, lease, "FIXED_CANDIDATE"),
+    )
+    _commit_lane_file(fixed)
+
+    with pytest.raises(ControlledCoordinationError) as rejected:
+        _transition(
+            lifecycle_factory,
+            _transition_command(lifecycle_factory, fixed, "REVIEW_GO"),
+        )
+
+    assert rejected.value.code == "LANE_CANDIDATE_INVALID"
+
+
+def test_exact_candidate_replay_revalidates_live_git(lifecycle_factory):
+    lease = _advance(lifecycle_factory, _acquire(lifecycle_factory), "ACTIVE")
+    command = _transition_command(lifecycle_factory, lease, "FIXED_CANDIDATE")
+    fixed = _transition(lifecycle_factory, command)
+    _commit_lane_file(fixed, "after-replay.txt")
+
+    with pytest.raises(ControlledCoordinationError) as rejected:
+        _transition(lifecycle_factory, copy.deepcopy(command))
+
+    assert rejected.value.code == "LANE_CANDIDATE_INVALID"
+
+
+@pytest.mark.parametrize("replacement_kind", ["directory", "symlink"])
+def test_fixed_candidate_rejects_lane_physical_drift(
+    lifecycle_factory, replacement_kind
+):
+    lease = _advance(lifecycle_factory, _acquire(lifecycle_factory), "ACTIVE")
+    command = _transition_command(lifecycle_factory, lease, "FIXED_CANDIDATE")
+    lane = Path(lease["laneRoot"])
+    moved = lane.with_name(lane.name + "-moved")
+    lane.rename(moved)
+    if replacement_kind == "directory":
+        lane.mkdir()
+    else:
+        lane.symlink_to(moved, target_is_directory=True)
+
+    with pytest.raises(ControlledCoordinationError) as rejected:
+        _transition(lifecycle_factory, command)
+
+    assert rejected.value.code == "LANE_ROOT_IDENTITY_CHANGED"
+
+
+def test_cancel_requires_current_authority(lifecycle_factory):
     lease = _acquire(lifecycle_factory)
     missing_authority = _transition_command(lifecycle_factory, lease, "CANCELLED")
     missing_authority["lifecycleAuthorityProof"]["authorityReference"] = (
         "authority/missing.yaml"
     )
-    _rebind_transition(missing_authority)
+    _rebind_transition(lifecycle_factory, missing_authority)
     with pytest.raises(ControlledCoordinationError) as authority:
         _transition(lifecycle_factory, missing_authority)
     assert authority.value.code == "LIFECYCLE_AUTHORITY_NOT_CURRENT"
 
-    live_process = _transition_command(lifecycle_factory, lease, "CANCELLED")
-    live_process["processQuiescence"]["processIds"] = [12345]
-    _rebind_transition(live_process)
-    with pytest.raises(ControlledCoordinationError) as quiescence:
-        _transition(lifecycle_factory, live_process)
-    assert quiescence.value.code == "PROCESS_NOT_QUIESCENT"
 
-    cancelled_command = _transition_command(lifecycle_factory, lease, "CANCELLED")
-    cancelled = _transition(lifecycle_factory, cancelled_command)
+@pytest.mark.parametrize("process_mode", ["empty", "live"])
+def test_cancel_retains_capacity_until_recovery(lifecycle_factory, process_mode):
+    lease = _acquire(lifecycle_factory, max_parallel_lanes=1)
+    live_process = None
+    command = _transition_command(lifecycle_factory, lease, "CANCELLED")
+    if process_mode == "live":
+        live_process = subprocess.Popen(
+            [sys.executable, "-c", "import time; time.sleep(30)"]
+        )
+        command["processQuiescence"]["processIds"] = [live_process.pid]
+        _rebind_transition(lifecycle_factory, command)
+    try:
+        cancelled = _transition(lifecycle_factory, command)
+    finally:
+        if live_process is not None:
+            live_process.terminate()
+            live_process.wait(timeout=10)
+
+    journal = lifecycle_factory.journal()
     assert cancelled["state"] == "CANCELLED"
-    assert cancelled["released"] is True
-    assert cancelled["leaseRetained"] is False
+    assert cancelled["released"] is False
+    assert cancelled["leaseRetained"] is True
+    assert journal["nextFencingToken"] > lease["fencingToken"]
 
-    next_lease = coordinator.acquire_lane_lease(
-        lifecycle_factory.repository_root,
-        lifecycle_factory.source_root,
-        lifecycle_factory.acquire(
-            slice_id="slice:neutral-b",
-            attempt_id="attempt:neutral-b",
-            owner="owner:neutral-b",
-            exact_write_set="services/neutral-b",
-        ),
+    with pytest.raises(ControlledCoordinationError) as capacity:
+        coordinator.acquire_lane_lease(
+            lifecycle_factory.repository_root,
+            lifecycle_factory.source_root,
+            lifecycle_factory.acquire(
+                slice_id="slice:neutral-b",
+                attempt_id="attempt:neutral-b",
+                owner="owner:neutral-b",
+                exact_write_set="services/neutral-b",
+                max_parallel_lanes=1,
+            ),
+        )
+    assert capacity.value.code == "PROJECT_CAPACITY_LIMIT"
+
+    changed = _transition_command(
+        lifecycle_factory, cancelled, "ACTIVE", expected_state="CANCELLED"
     )
-    assert next_lease["fencingToken"] > lease["fencingToken"]
+    with pytest.raises(ControlledCoordinationError) as terminal:
+        _transition(lifecycle_factory, changed)
+    assert terminal.value.code == "INVALID_STATE_TRANSITION"
 
 
 def test_transition_replay_is_immutable_and_revalidates_live_authority(
@@ -459,7 +948,7 @@ def test_transition_replay_is_immutable_and_revalidates_live_authority(
 
     changed = copy.deepcopy(command)
     changed["processQuiescence"]["observedAt"] = "2026-08-13T12:30:01Z"
-    _rebind_transition(changed)
+    _rebind_transition(lifecycle_factory, changed)
     with pytest.raises(ControlledCoordinationError) as conflict:
         _transition(lifecycle_factory, changed)
     assert conflict.value.code == "TRANSITION_IDEMPOTENCY_CONFLICT"

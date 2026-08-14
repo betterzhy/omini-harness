@@ -4,6 +4,7 @@
   "$defs": {
     "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._:-]*$"},
     "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "signature": {"type": "string", "pattern": "^[A-Za-z0-9+/]{86}==$"},
     "gitObject": {"type": "string", "pattern": "^[0-9a-f]{40}([0-9a-f]{24})?$"},
     "state": {"enum": ["PROPOSED", "READY", "ADMITTED", "ACTIVE", "FIXED_CANDIDATE", "REVIEW_GO", "QUEUED_FOR_INTEGRATION", "INTEGRATING", "CLOSED", "BLOCKED", "NO_GO", "STALE", "CANCELLED"]},
     "candidateIdentity": {
@@ -28,8 +29,9 @@
     },
     "lifecycleAuthorityProof": {
       "type": "object",
-      "required": ["authorityReference", "authorityDigest", "attemptId", "expectedState", "nextState", "candidateIdentity", "reviewBindingDigest", "reviewEvidenceDigest", "reviewerId", "reviewerAuthorityReference", "reviewerAuthorityDigest", "assertedAt", "proofDigest"],
+      "required": ["authorityId", "authorityReference", "authorityDigest", "attemptId", "expectedState", "nextState", "candidateIdentity", "reviewBindingDigest", "reviewEvidenceDigest", "reviewerId", "reviewerAuthorityReference", "reviewerAuthorityDigest", "assertedAt", "signatureAlgorithm", "signature", "proofDigest"],
       "properties": {
+        "authorityId": {"$ref": "#/$defs/id"},
         "authorityReference": {"type": "string", "minLength": 1},
         "authorityDigest": {"$ref": "#/$defs/digest"},
         "attemptId": {"$ref": "#/$defs/id"},
@@ -42,16 +44,24 @@
         "reviewerAuthorityReference": {"anyOf": [{"type": "null"}, {"type": "string", "minLength": 1}]},
         "reviewerAuthorityDigest": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/digest"}]},
         "assertedAt": {"type": "string", "minLength": 1},
+        "signatureAlgorithm": {"const": "ED25519"},
+        "signature": {"$ref": "#/$defs/signature"},
         "proofDigest": {"$ref": "#/$defs/digest"}
       },
       "additionalProperties": false
     },
     "reviewEvidence": {
       "type": "object",
-      "required": ["candidateIdentity", "reviewerId", "reviewerAuthorityReference", "reviewerAuthorityDigest", "verdict", "findingCounts", "reviewedAt", "reviewBindingDigest", "evidenceDigest"],
+      "required": ["candidateIdentity", "reviewerId", "reviewerRole", "projectExecutionKey", "leaseId", "attemptId", "fencingToken", "authoritySnapshotFingerprint", "reviewerAuthorityReference", "reviewerAuthorityDigest", "verdict", "findingCounts", "reviewedAt", "signatureAlgorithm", "signature", "reviewBindingDigest", "evidenceDigest"],
       "properties": {
         "candidateIdentity": {"$ref": "#/$defs/candidateIdentity"},
         "reviewerId": {"$ref": "#/$defs/id"},
+        "reviewerRole": {"$ref": "#/$defs/id"},
+        "projectExecutionKey": {"type": "string", "pattern": "^project-execution:[0-9a-f]{64}$"},
+        "leaseId": {"type": "string", "pattern": "^lease:[0-9a-f]{24}$"},
+        "attemptId": {"$ref": "#/$defs/id"},
+        "fencingToken": {"type": "integer", "minimum": 1},
+        "authoritySnapshotFingerprint": {"$ref": "#/$defs/digest"},
         "reviewerAuthorityReference": {"type": "string", "minLength": 1},
         "reviewerAuthorityDigest": {"$ref": "#/$defs/digest"},
         "verdict": {"const": "GO_ZERO_FINDINGS"},
@@ -62,6 +72,8 @@
           "additionalProperties": false
         },
         "reviewedAt": {"type": "string", "minLength": 1},
+        "signatureAlgorithm": {"const": "ED25519"},
+        "signature": {"$ref": "#/$defs/signature"},
         "reviewBindingDigest": {"$ref": "#/$defs/digest"},
         "evidenceDigest": {"$ref": "#/$defs/digest"}
       },

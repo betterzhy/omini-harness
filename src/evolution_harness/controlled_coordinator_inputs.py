@@ -650,9 +650,13 @@ def _validate_review_evidence(command: dict[str, Any]) -> None:
     expected_binding_digest = _sha256(
         {
             "candidateIdentity": command["candidateIdentity"],
-            "authoritySnapshotFingerprint": command["authoritySnapshotFingerprint"],
+            "projectExecutionKey": command["projectExecutionKey"],
+            "leaseId": command["leaseId"],
             "attemptId": command["attemptId"],
+            "fencingToken": command["fencingToken"],
+            "authoritySnapshotFingerprint": command["authoritySnapshotFingerprint"],
             "reviewerId": evidence["reviewerId"],
+            "reviewerRole": evidence["reviewerRole"],
             "reviewerAuthorityReference": evidence["reviewerAuthorityReference"],
             "reviewerAuthorityDigest": evidence["reviewerAuthorityDigest"],
         }
@@ -662,6 +666,12 @@ def _validate_review_evidence(command: dict[str, Any]) -> None:
     )
     if (
         evidence["candidateIdentity"] != command["candidateIdentity"]
+        or evidence["projectExecutionKey"] != command["projectExecutionKey"]
+        or evidence["leaseId"] != command["leaseId"]
+        or evidence["attemptId"] != command["attemptId"]
+        or evidence["fencingToken"] != command["fencingToken"]
+        or evidence["authoritySnapshotFingerprint"]
+        != command["authoritySnapshotFingerprint"]
         or evidence["reviewBindingDigest"] != expected_binding_digest
         or evidence["evidenceDigest"] != expected_evidence_digest
         or proof["reviewBindingDigest"] != evidence["reviewBindingDigest"]

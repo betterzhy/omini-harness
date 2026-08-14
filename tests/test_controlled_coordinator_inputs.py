@@ -258,21 +258,33 @@ class CoordinatorFactory:
             if value["nextState"] == "REVIEW_GO":
                 review = {
                     "candidateIdentity": copy.deepcopy(value["candidateIdentity"]),
-                    "reviewerId": "reviewer:neutral",
-                    "reviewerAuthorityReference": "authority/reviewers/neutral.yaml",
+                    "reviewerId": "deep-reviewer",
+                    "reviewerRole": "deep-reviewer",
+                    "projectExecutionKey": value["projectExecutionKey"],
+                    "leaseId": value["leaseId"],
+                    "attemptId": value["attemptId"],
+                    "fencingToken": value["fencingToken"],
+                    "authoritySnapshotFingerprint": value[
+                        "authoritySnapshotFingerprint"
+                    ],
+                    "reviewerAuthorityReference": "deep-reviewer-public.pem",
                     "reviewerAuthorityDigest": "sha256:" + "b" * 64,
                     "verdict": "GO_ZERO_FINDINGS",
                     "findingCounts": {"p0": 0, "p1": 0, "p2": 0},
                     "reviewedAt": "2026-08-13T12:29:30Z",
+                    "signatureAlgorithm": "ED25519",
+                    "signature": "A" * 86 + "==",
                 }
                 review["reviewBindingDigest"] = _sha256(
                     {
                         "candidateIdentity": value["candidateIdentity"],
-                        "authoritySnapshotFingerprint": value[
-                            "authoritySnapshotFingerprint"
-                        ],
+                        "projectExecutionKey": value["projectExecutionKey"],
+                        "leaseId": value["leaseId"],
                         "attemptId": value["attemptId"],
+                        "fencingToken": value["fencingToken"],
+                        "authoritySnapshotFingerprint": value["authoritySnapshotFingerprint"],
                         "reviewerId": review["reviewerId"],
+                        "reviewerRole": review["reviewerRole"],
                         "reviewerAuthorityReference": review[
                             "reviewerAuthorityReference"
                         ],
@@ -285,7 +297,8 @@ class CoordinatorFactory:
                 value["reviewEvidence"] = review
         review = value["reviewEvidence"]
         authority_proof = value.get("lifecycleAuthorityProof") or {
-            "authorityReference": "authority/lifecycle.yaml",
+            "authorityId": "lifecycle-controller",
+            "authorityReference": "lifecycle-authority-public.pem",
             "authorityDigest": "sha256:" + "a" * 64,
             "attemptId": value["attemptId"],
             "expectedState": value["expectedState"],
@@ -305,6 +318,8 @@ class CoordinatorFactory:
                 review["reviewerAuthorityDigest"] if review is not None else None
             ),
             "assertedAt": "2026-08-13T12:29:00Z",
+            "signatureAlgorithm": "ED25519",
+            "signature": "B" * 86 + "==",
         }
         authority_proof["proofDigest"] = _sha256(
             {
@@ -1128,6 +1143,25 @@ def test_transition_requires_digest_bound_lifecycle_authority(
         normalize_transition_command(repository_root, command)
 
     assert caught.value.code == "COORDINATOR_COMMAND_INVALID"
+
+
+def test_transition_accepts_closed_ed25519_evidence_shape(
+    repository_root, coordinator_factory
+):
+    command = coordinator_factory.transition(
+        expectedState="FIXED_CANDIDATE", nextState="REVIEW_GO"
+    )
+
+    normalized = normalize_transition_command(repository_root, command)
+
+    assert normalized["lifecycleAuthorityProof"]["authorityId"] == (
+        "lifecycle-controller"
+    )
+    assert normalized["lifecycleAuthorityProof"]["signatureAlgorithm"] == "ED25519"
+    assert normalized["reviewEvidence"]["reviewerRole"] == "deep-reviewer"
+    assert normalized["reviewEvidence"]["projectExecutionKey"] == (
+        normalized["projectExecutionKey"]
+    )
 
 
 def test_review_go_requires_candidate_bound_zero_finding_review_evidence(

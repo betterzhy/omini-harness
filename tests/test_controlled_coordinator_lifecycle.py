@@ -1153,11 +1153,14 @@ def test_fixed_candidate_does_not_consume_transient_foreign_git_admin(
 
     foreign_admin = foreign / ".git"
     original_run = write_guard.subprocess.run
+    hook_calls = 0
 
     def substitute_admin_only_during_git(*args, **kwargs):
+        nonlocal hook_calls
         argv = args[0] if args else kwargs.get("args")
         if not argv or argv[0] != "/usr/bin/git":
             return original_run(*args, **kwargs)
+        hook_calls += 1
         lane_admin.rename(held_lane_admin)
         foreign_admin.rename(lane_admin)
         try:
@@ -1172,6 +1175,87 @@ def test_fixed_candidate_does_not_consume_transient_foreign_git_admin(
         _transition(lifecycle_factory, command)
 
     assert rejected.value.code == "LANE_CANDIDATE_INVALID"
+    assert hook_calls > 0
+
+
+def test_fixed_candidate_admin_config_substitution_cannot_change_parent_or_tree(
+    lifecycle_factory, tmp_path, monkeypatch
+):
+    lease = _advance(lifecycle_factory, _acquire(lifecycle_factory), "ACTIVE")
+    command = _transition_command(lifecycle_factory, lease, "FIXED_CANDIDATE")
+    expected_candidate = copy.deepcopy(command["candidateIdentity"])
+    lane = Path(lease["laneRoot"])
+    lane_admin = lane / ".git"
+    held_lane_admin = tmp_path / "held-lane-admin"
+
+    foreign = tmp_path / "foreign-bootstrap"
+    foreign.mkdir()
+    subprocess.run(["/usr/bin/git", "-C", str(foreign), "init", "-q"], check=True)
+    subprocess.run(
+        ["/usr/bin/git", "-C", str(foreign), "config", "user.name", "Foreign"],
+        check=True,
+    )
+    subprocess.run(
+        [
+            "/usr/bin/git",
+            "-C",
+            str(foreign),
+            "config",
+            "user.email",
+            "foreign@example.test",
+        ],
+        check=True,
+    )
+    subprocess.run(
+        ["/usr/bin/git", "-C", str(foreign), "config", "core.abbrev", "4"],
+        check=True,
+    )
+    (foreign / "foreign.txt").write_text("foreign\n", encoding="utf-8")
+    subprocess.run(
+        ["/usr/bin/git", "-C", str(foreign), "add", "foreign.txt"], check=True
+    )
+    subprocess.run(
+        ["/usr/bin/git", "-C", str(foreign), "commit", "-qm", "foreign"],
+        check=True,
+    )
+    foreign_head = subprocess.run(
+        ["/usr/bin/git", "-C", str(foreign), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    replacement_ref = (
+        foreign / ".git" / "refs" / "replace" / expected_candidate["commit"]
+    )
+    replacement_ref.parent.mkdir(parents=True)
+    replacement_ref.write_text(foreign_head + "\n", encoding="ascii")
+
+    foreign_admin = foreign / ".git"
+    original_run = write_guard.subprocess.run
+    hook_calls = 0
+
+    def substitute_admin_config_only_during_git(*args, **kwargs):
+        nonlocal hook_calls
+        argv = args[0] if args else kwargs.get("args")
+        if not argv or argv[0] != "/usr/bin/git":
+            return original_run(*args, **kwargs)
+        hook_calls += 1
+        lane_admin.rename(held_lane_admin)
+        foreign_admin.rename(lane_admin)
+        try:
+            return original_run(*args, **kwargs)
+        finally:
+            lane_admin.rename(foreign_admin)
+            held_lane_admin.rename(lane_admin)
+
+    monkeypatch.setattr(
+        write_guard.subprocess, "run", substitute_admin_config_only_during_git
+    )
+
+    fixed = _transition(lifecycle_factory, command)
+
+    assert hook_calls > 0
+    assert fixed["candidateIdentity"] == expected_candidate
 
 
 def test_fixed_candidate_reads_held_objects_during_transient_path_substitution(

@@ -1274,8 +1274,9 @@ def test_registered_source_path_swap_during_descriptor_read_fails_closed(
     assert caught.value.code == "SOURCE_HEAD_UNAVAILABLE"
 
 
-def test_linked_source_head_does_not_consume_swapped_admin_path(
-    tmp_path, monkeypatch
+@pytest.mark.parametrize("packed_refs", [False, True], ids=["loose-ref", "packed-ref"])
+def test_linked_source_head_reads_held_admin_during_path_substitution(
+    tmp_path, monkeypatch, packed_refs
 ):
     source = tmp_path / "source"
     linked_source = tmp_path / "linked-source"
@@ -1292,8 +1293,11 @@ def test_linked_source_head_does_not_consume_swapped_admin_path(
     _git(source, "worktree", "add", "-q", str(linked_source))
     source_head = _git(linked_source, "rev-parse", "HEAD")
     linked_ref = _git(linked_source, "symbolic-ref", "HEAD")
-    _git(source, "pack-refs", "--all")
-    assert not (source / ".git" / linked_ref).exists()
+    if packed_refs:
+        _git(source, "pack-refs", "--all")
+        assert not (source / ".git" / linked_ref).exists()
+    else:
+        assert (source / ".git" / linked_ref).is_file()
     foreign_head = _git(foreign, "rev-parse", "HEAD")
     assert source_head != foreign_head
 
@@ -1301,27 +1305,32 @@ def test_linked_source_head_does_not_consume_swapped_admin_path(
     admin_root = Path(dot_git.removeprefix("gitdir: ").removesuffix("\n"))
     held_admin = admin_root.with_name(admin_root.name + "-held")
     foreign_admin = foreign / ".git"
-    original_run = controlled_write_guard.subprocess.run
+    original_read = controlled_write_guard._read_bounded_regular_file
+    read_paths = []
 
-    def swap_admin_only_while_git_reads(*args, **kwargs):
+    def substitute_admin_only_during_descriptor_read(*args, **kwargs):
+        read_paths.append(args[1])
         admin_root.rename(held_admin)
         foreign_admin.rename(admin_root)
         try:
-            return original_run(*args, **kwargs)
+            return original_read(*args, **kwargs)
         finally:
             admin_root.rename(foreign_admin)
             held_admin.rename(admin_root)
 
     monkeypatch.setattr(
-        controlled_write_guard.subprocess,
-        "run",
-        swap_admin_only_while_git_reads,
+        controlled_write_guard,
+        "_read_bounded_regular_file",
+        substitute_admin_only_during_descriptor_read,
     )
 
     assert controlled_coordinator._git_identity(linked_source) == (
         linked_source,
         source_head,
     )
+    assert "HEAD" in read_paths
+    assert linked_ref in read_paths
+    assert ("packed-refs" in read_paths) is packed_refs
 
 
 @pytest.mark.parametrize("mutation", ["changed", "missing", "symlink"])

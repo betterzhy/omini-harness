@@ -489,7 +489,7 @@ def test_git_inventory_does_not_consume_transient_foreign_admin(
     assert caught.value.observedPaths == ["tracked.txt"]
 
 
-def test_linked_worktree_inventory_fails_before_target_process(
+def test_linked_worktree_inventory_fails_before_target_or_git_subprocess(
     tmp_path, monkeypatch, coordinator_state_factory
 ):
     monkeypatch.setenv(
@@ -514,14 +514,21 @@ def test_linked_worktree_inventory_fails_before_target_process(
         [".guard-cache"],
     )
     target_started = False
+    subprocess_started = False
 
     def unexpected_target(*args, **kwargs):
         nonlocal target_started
         target_started = True
         return subprocess.CompletedProcess(args[0], 0, b"", b"")
 
+    def unexpected_subprocess(*args, **kwargs):
+        nonlocal subprocess_started
+        subprocess_started = True
+        raise AssertionError("linked inventory must reject before subprocess launch")
+
     monkeypatch.setattr(guard, "_validate_sandbox_exec", lambda: None)
     monkeypatch.setattr(guard, "_run_sandboxed", unexpected_target)
+    monkeypatch.setattr(guard.subprocess, "run", unexpected_subprocess)
 
     with pytest.raises(ControlledCoordinationError) as caught:
         guard.run_guarded_command(
@@ -534,6 +541,7 @@ def test_linked_worktree_inventory_fails_before_target_process(
 
     assert caught.value.code == "LANE_INVENTORY_UNAVAILABLE"
     assert target_started is False
+    assert subprocess_started is False
 
 
 def test_physical_inventory_reports_new_undeclared_empty_directory(

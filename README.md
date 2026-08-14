@@ -160,6 +160,11 @@ harness registry build
 harness catalog build
 harness resolve --explain
 harness planning plan --request <file>
+harness coordination status --source <registered-project>
+harness coordination acquire --source <registered-project> --request <command-file>
+harness coordination transition --source <registered-project> --request <command-file>
+harness coordination observe --source <registered-project> --request <command-file>
+harness coordination recover --source <registered-project> --request <command-file>
 harness project bind
 harness project lock
 harness experience capture
@@ -193,6 +198,16 @@ eng doctor --ci --json
 eng context resolve --json
 eng test --json
 ```
+
+### Phase 1B coordination safety boundary
+
+The five `coordination` commands are JSON-only. `status` requires an explicit registered `--source`; every mutating operation also requires an explicit `--request` containing the complete authority-bound coordinator command. Durable state is Harness-owned and defaults to `~/.codex/state/agent-evolution-harness/coordinator/v1`. Tests and isolated Harness environments may set `AGENT_EVOLUTION_COORDINATOR_ROOT` to a fresh owner-only state directory.
+
+Phase 1B records and inspects project-scoped safety leases only. It does **not** launch work or agents, create worktrees, write registered project files, mutate project authority or lifecycle files, integrate candidates, update Git refs, merge or push, release or deploy, enter Landing or a Wave, or authorize Pay-Nexus development. A lease is a fencing and admission-safety record, not project implementation authority.
+
+A persistent WriteSet breach places the entire project coordinator into explicit recovery. Recovery never deletes project evidence: a current project recovery authority must submit a signed `coordination recover` command that exactly binds the pending journal version, complete observed WriteSet, affected leases, and quiescence proofs. Recovery releases retained capacity only after that receipt is durable, and all revoked batch and attempt identities remain retired; later admission needs a fresh authorized plan.
+
+Protected actions remain denied even when a request claims permission: formal database writes, migration application, destructive operations, production or secret access, Landing, Wave entry, push, release, and deployment.
 
 ## Local acceptance sequence
 

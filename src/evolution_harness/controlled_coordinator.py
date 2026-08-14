@@ -160,6 +160,63 @@ def resolve_project_execution_identity(
     }
 
 
+def inspect_project_coordinator(
+    repository_root: Path,
+    source_root: Path,
+) -> dict[str, object]:
+    """Read one project's durable coordinator safety status under its lock."""
+    identity = resolve_project_execution_identity(repository_root, source_root)
+    with CoordinatorStateStore.open(identity) as store:
+        with store.exclusive_project_lock():
+            journal = store.read_journal()
+            if journal is not None:
+                leases = [
+                    {
+                        "leaseId": lease["leaseId"],
+                        "batchPlanId": lease["batchPlanId"],
+                        "sliceId": lease["sliceId"],
+                        "attemptId": lease["attemptId"],
+                        "fencingToken": lease["fencingToken"],
+                        "state": lease["state"],
+                        "released": lease["released"],
+                        "retained": not lease["released"],
+                        "recoveryStatus": lease["recoveryStatus"],
+                    }
+                    for lease in journal["leases"]
+                ]
+                latest_receipt = journal["receipts"][-1]
+                return {
+                    "schemaVersion": "controlled-coordinator-status/v1",
+                    "projectExecutionKey": identity["projectExecutionKey"],
+                    "initialized": True,
+                    "journalVersion": journal["journalVersion"],
+                    "nextFencingToken": journal["nextFencingToken"],
+                    "recoveryState": journal["recoveryState"],
+                    "latestReceiptId": latest_receipt["receiptId"],
+                    "journalDigest": latest_receipt["journalDigest"],
+                    "retainedLeaseIds": [
+                        lease["leaseId"] for lease in leases if lease["retained"]
+                    ],
+                    "releasedLeaseIds": [
+                        lease["leaseId"] for lease in leases if lease["released"]
+                    ],
+                    "leases": leases,
+                }
+            return {
+                "schemaVersion": "controlled-coordinator-status/v1",
+                "projectExecutionKey": identity["projectExecutionKey"],
+                "initialized": False,
+                "journalVersion": 0,
+                "nextFencingToken": 1,
+                "recoveryState": "CLEAR",
+                "latestReceiptId": None,
+                "journalDigest": None,
+                "retainedLeaseIds": [],
+                "releasedLeaseIds": [],
+                "leases": [],
+            }
+
+
 def _git_identity(source_root: Path) -> tuple[Path, str]:
     try:
         top_level = Path(

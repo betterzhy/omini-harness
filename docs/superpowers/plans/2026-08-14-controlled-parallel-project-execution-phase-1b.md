@@ -149,6 +149,8 @@ Task 6 Review Fix Round 1 Authority migration (fixed base/parent `bff525c8e1c153
 
 Task 6 Review Fix Round 1 persisted-signature migration: the closed recovery command additionally carries `recoveryAuthorityPublicKey`, exactly the complete canonical one-line current `recovery-controller` OpenSSH Ed25519 public-key file including its terminating newline. The field is covered by the SSHSIG payload and `commandDigest`. Initial recovery exact-compares those bytes with the live no-follow authority file and its current digest. On every journal read, the store deterministically recomputes recovery receipt identities, anchors recovery authority id/reference/digest/public-key bytes to the immutable Acquire Authority Snapshot of the corresponding revoked leases, and reuses the pinned Task 4 SSHSIG verifier to verify each persisted recovery command. Recomputed command, receipt, and journal digests cannot replace that keyed verification. The authorized twelve-path Task 6 WriteSet is unchanged.
 
+Task 7 public-inspection migration (fixed base/parent `ae46bdb5ec9286d8a4bd27389ff6d262d45d7d17`): the locked Phase 1B interface already requires `inspect_project_coordinator`, but the fixed parent contains no implementation. The CLI must not create a second status projection, so the authorized Task 7 WriteSet expands to exactly `src/evolution_harness/controlled_coordinator.py`, `tests/test_controlled_coordinator_acquire.py`, `src/evolution_harness/cli.py`, `tests/test_controlled_coordinator_cli.py`, `README.md`, and this formal plan. The public inspection API resolves the registered physical project identity, acquires the existing non-blocking project lock, and reads the durable journal through `CoordinatorStateStore`; an uninitialized project returns a structured, read-only safety status without creating a journal. Corrupt or unsafe state and lock contention fail closed through the existing coordinator error codes. The CLI consumes only that public status API and the four existing mutation APIs.
+
 Coordinator-projection migration (2026-08-14): `ACTIVE_LEASE_CONFLICT` is a locked closed-enum projection reason and `PROJECT_CAPACITY_LIMIT` remains the distinct project-wide capacity reason. The optional planner input is a closed `controlled-coordinator-snapshot/v1` object that binds project, project execution key, base provisional plan, journal version/digest/recovery state, envelope, conflict policy, source base, and the complete journal. When absent, the returned bundle and provisional execution-plan bytes are unchanged. When present, `bundle.executionPlan` is still that original provisional plan and the read-only result is added separately as `bundle.coordinatorProjection` with schema `controlled-coordinator-projection/v1`. A projection is not an Acquire `executionPlan`, never mutates coordinator state, and never removes `requiresCoordinatorRecheck=true`.
 
 ### Journal invariants
@@ -562,9 +564,12 @@ git commit -m "feat: quarantine controlled project write breaches"
 
 **Files:**
 
+- Modify: `src/evolution_harness/controlled_coordinator.py`
+- Modify: `tests/test_controlled_coordinator_acquire.py`
 - Modify: `src/evolution_harness/cli.py`
 - Create: `tests/test_controlled_coordinator_cli.py`
 - Modify: `README.md`
+- Modify: `docs/superpowers/plans/2026-08-14-controlled-parallel-project-execution-phase-1b.md`
 
 **Interfaces:**
 
@@ -607,7 +612,12 @@ Expected: PASS with Phase 1A CLI compatibility preserved.
 - [ ] **Step 6: Commit Task 7**
 
 ```bash
-git add src/evolution_harness/cli.py tests/test_controlled_coordinator_cli.py README.md
+git add src/evolution_harness/controlled_coordinator.py \
+  tests/test_controlled_coordinator_acquire.py \
+  src/evolution_harness/cli.py \
+  tests/test_controlled_coordinator_cli.py \
+  README.md \
+  docs/superpowers/plans/2026-08-14-controlled-parallel-project-execution-phase-1b.md
 git commit -m "feat: expose controlled coordination safety"
 ```
 

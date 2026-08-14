@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 import yaml
 
+from evolution_harness import controlled_coordinator
 from evolution_harness.authority import build_authority_snapshot
 from evolution_harness.controlled_coordinator import (
     acquire_lane_lease,
@@ -437,6 +438,140 @@ def test_project_identity_collapses_path_aliases_and_separates_inodes(
     assert direct["sourceDevice"] == os.lstat(factory.source_root).st_dev
     assert direct["sourceInode"] == os.lstat(factory.source_root).st_ino
     assert direct["sourceType"] == "DIRECTORY"
+
+
+def test_inspect_uninitialized_project_returns_safe_status_without_journal(
+    acquisition_factory,
+):
+    inspect = getattr(controlled_coordinator, "inspect_project_coordinator", None)
+    assert callable(inspect), "locked inspect_project_coordinator API is absent"
+
+    status = inspect(
+        acquisition_factory.repository_root,
+        acquisition_factory.source_root,
+    )
+    identity = resolve_project_execution_identity(
+        acquisition_factory.repository_root,
+        acquisition_factory.source_root,
+    )
+    with CoordinatorStateStore.open(identity) as store:
+        journal = store.read_journal()
+
+    assert status == {
+        "schemaVersion": "controlled-coordinator-status/v1",
+        "projectExecutionKey": identity["projectExecutionKey"],
+        "initialized": False,
+        "journalVersion": 0,
+        "nextFencingToken": 1,
+        "recoveryState": "CLEAR",
+        "latestReceiptId": None,
+        "journalDigest": None,
+        "retainedLeaseIds": [],
+        "releasedLeaseIds": [],
+        "leases": [],
+    }
+    assert journal is None
+
+
+def test_inspect_initialized_project_projects_durable_receipt_and_lease_status(
+    acquisition_factory,
+):
+    lease = acquire_lane_lease(
+        acquisition_factory.repository_root,
+        acquisition_factory.source_root,
+        acquisition_factory.acquire(),
+    )
+    journal = acquisition_factory.journal()
+    state_root = Path(os.environ["AGENT_EVOLUTION_COORDINATOR_ROOT"])
+    state_before = {
+        path.name: path.read_bytes() for path in state_root.iterdir() if path.is_file()
+    }
+
+    status = controlled_coordinator.inspect_project_coordinator(
+        acquisition_factory.repository_root,
+        acquisition_factory.source_root,
+    )
+
+    assert status == {
+        "schemaVersion": "controlled-coordinator-status/v1",
+        "projectExecutionKey": lease["projectExecutionKey"],
+        "initialized": True,
+        "journalVersion": 1,
+        "nextFencingToken": 2,
+        "recoveryState": "CLEAR",
+        "latestReceiptId": journal["receipts"][0]["receiptId"],
+        "journalDigest": journal["receipts"][0]["journalDigest"],
+        "retainedLeaseIds": [lease["leaseId"]],
+        "releasedLeaseIds": [],
+        "leases": [
+            {
+                "leaseId": lease["leaseId"],
+                "batchPlanId": lease["batchPlanId"],
+                "sliceId": lease["sliceId"],
+                "attemptId": lease["attemptId"],
+                "fencingToken": 1,
+                "state": "ADMITTED",
+                "released": False,
+                "retained": True,
+                "recoveryStatus": "CLEAR",
+            }
+        ],
+    }
+    assert state_before == {
+        path.name: path.read_bytes() for path in state_root.iterdir() if path.is_file()
+    }
+
+
+def test_inspect_fails_closed_on_corrupt_journal(acquisition_factory):
+    acquire_lane_lease(
+        acquisition_factory.repository_root,
+        acquisition_factory.source_root,
+        acquisition_factory.acquire(),
+    )
+    journal = acquisition_factory.journal()
+    journal["nextFencingToken"] = 1
+    _persist_tampered_journal(acquisition_factory, journal)
+
+    with pytest.raises(ControlledCoordinationError) as corrupt:
+        controlled_coordinator.inspect_project_coordinator(
+            acquisition_factory.repository_root,
+            acquisition_factory.source_root,
+        )
+    assert corrupt.value.code == "COORDINATOR_STATE_CORRUPT"
+
+
+def test_inspect_fails_closed_on_unsafe_journal(acquisition_factory):
+    acquire_lane_lease(
+        acquisition_factory.repository_root,
+        acquisition_factory.source_root,
+        acquisition_factory.acquire(),
+    )
+    journal_path = next(
+        Path(os.environ["AGENT_EVOLUTION_COORDINATOR_ROOT"]).glob("*.journal.json")
+    )
+    journal_path.chmod(0o666)
+    with pytest.raises(ControlledCoordinationError) as unsafe:
+        controlled_coordinator.inspect_project_coordinator(
+            acquisition_factory.repository_root,
+            acquisition_factory.source_root,
+        )
+    assert unsafe.value.code == "UNSAFE_COORDINATOR_STATE_FILE"
+
+
+def test_inspect_fails_closed_when_project_lock_is_contended(acquisition_factory):
+    identity = resolve_project_execution_identity(
+        acquisition_factory.repository_root,
+        acquisition_factory.source_root,
+    )
+    with CoordinatorStateStore.open(identity) as store:
+        with store.exclusive_project_lock():
+            with pytest.raises(ControlledCoordinationError) as caught:
+                controlled_coordinator.inspect_project_coordinator(
+                    acquisition_factory.repository_root,
+                    acquisition_factory.source_root,
+                )
+
+    assert caught.value.code == "COORDINATOR_LOCK_BUSY"
 
 
 def test_acquire_persists_fenced_lease_and_same_command_replays(

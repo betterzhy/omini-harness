@@ -9,8 +9,14 @@ import yaml
 
 from .assurance import structural_validate
 from .catalog import build_all_catalogs
+from .controlled_coordinator import (
+    acquire_lane_lease,
+    inspect_project_coordinator,
+    transition_lane_lease,
+)
 from .controlled_inputs import load_planning_request
 from .controlled_planner import build_provisional_execution_plan
+from .controlled_recovery import observe_lane_writes, record_project_recovery
 from .discussion import materialize_discussion_contract, route_next_topics
 from .evals import record_eval_result
 from .feedback import capture_feedback_as_experience
@@ -73,6 +79,21 @@ def _add_integration_resolution_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--reopen-signal")
 
 
+def _add_coordination_mutation_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--source", required=True)
+    parser.add_argument("--request", required=True)
+
+
+def _emit_coordination(
+    data: dict[str, Any], *, message: str, command: str
+) -> int:
+    return _emit(
+        {"code": "OK", "message": message, "data": data},
+        fmt="json",
+        command=command,
+    )
+
+
 def _resolve(root: Path, args) -> dict[str, Any]:
     return resolve_design_context(
         root, Path(args.project), intent=args.intent, topic=args.topic, requested_output=args.output,
@@ -105,6 +126,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("planning"); s = p.add_subparsers(dest="action", required=True)
     q = s.add_parser("plan"); q.add_argument("--request", required=True); _add_format(q)
+
+    p = sub.add_parser("coordination"); s = p.add_subparsers(dest="action", required=True)
+    q = s.add_parser("status"); q.add_argument("--source", required=True)
+    for action in ("acquire", "transition", "observe", "recover"):
+        _add_coordination_mutation_args(s.add_parser(action))
 
     p = sub.add_parser("project"); s = p.add_subparsers(dest="action", required=True)
     q = s.add_parser("lock"); q.add_argument("--project", required=True); q.add_argument("--check", action="store_true"); _add_format(q)
@@ -147,6 +173,8 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
     root = Path(args.repository_root)
     fmt = getattr(args, "format", "text")
+    if args.command == "coordination":
+        fmt = "json"
     command = args.command if not hasattr(args, "action") or args.action is None else f"{args.command} {args.action}"
     try:
         if args.command == "validate":
@@ -189,6 +217,39 @@ def main(argv=None) -> int:
             request = load_planning_request(root, Path(args.request))
             return _emit(
                 build_provisional_execution_plan(root, request), fmt=fmt, command=command
+            )
+        if args.command == "coordination":
+            source = Path(args.source)
+            if args.action == "status":
+                return _emit_coordination(
+                    inspect_project_coordinator(root, source),
+                    message="coordinator safety status inspected",
+                    command=command,
+                )
+            request = _load_yaml(args.request)
+            operations = {
+                "acquire": (
+                    acquire_lane_lease,
+                    "coordinator lane lease acquired",
+                ),
+                "transition": (
+                    transition_lane_lease,
+                    "coordinator lane lease transitioned",
+                ),
+                "observe": (
+                    observe_lane_writes,
+                    "coordinator writes observed",
+                ),
+                "recover": (
+                    record_project_recovery,
+                    "coordinator recovery recorded",
+                ),
+            }
+            operation, message = operations[args.action]
+            return _emit_coordination(
+                operation(root, source, request),
+                message=message,
+                command=command,
             )
         if args.command == "project" and args.action == "lock":
             expected = build_capability_lock(root, Path(args.project), write=not args.check)
@@ -311,7 +372,10 @@ def main(argv=None) -> int:
             return _emit(check_revalidation(root, as_of=args.as_of, triggers=args.trigger), fmt=fmt, command=command)
     except Exception as exc:
         code = getattr(exc, "code", "INTERNAL_ERROR")
-        return _emit({"code": code, "message": str(exc)}, fmt=fmt, ok=False, command=command)
+        error = {"code": code, "message": str(exc)}
+        if args.command == "coordination":
+            error["data"] = {}
+        return _emit(error, fmt=fmt, ok=False, command=command)
     return 2
 
 

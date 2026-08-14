@@ -7,6 +7,7 @@ from dataclasses import dataclass
 import pytest
 
 from evolution_harness.controlled_coordinator_inputs import (
+    PROTECTED_ACTION_CLASSES,
     ControlledCoordinationError,
     normalize_acquire_command,
     normalize_recovery_command,
@@ -141,6 +142,105 @@ def _forge_acquire_descriptor(command, **changes):
         )
 
 
+def _review_binding_digest(command, evidence):
+    return _sha256(
+        {
+            "candidateIdentity": command["candidateIdentity"],
+            "projectExecutionKey": command["projectExecutionKey"],
+            "leaseId": command["leaseId"],
+            "attemptId": command["attemptId"],
+            "fencingToken": command["fencingToken"],
+            "authoritySnapshotFingerprint": command[
+                "authoritySnapshotFingerprint"
+            ],
+            "reviewerId": evidence["reviewerId"],
+            "reviewerRole": evidence["reviewerRole"],
+            "reviewerAuthorityReference": evidence[
+                "reviewerAuthorityReference"
+            ],
+            "reviewerAuthorityDigest": evidence["reviewerAuthorityDigest"],
+        }
+    )
+
+
+def _review_evidence_digest(evidence):
+    return _sha256(
+        {
+            key: value
+            for key, value in evidence.items()
+            if key not in {"signature", "evidenceDigest"}
+        }
+    )
+
+
+def _reviewer_authority_binding(evidence):
+    return {
+        "reviewerRole": evidence["reviewerRole"],
+        "reviewerId": evidence["reviewerId"],
+        "reviewerAuthorityReference": evidence["reviewerAuthorityReference"],
+        "reviewerAuthorityDigest": evidence["reviewerAuthorityDigest"],
+        "reviewBindingDigest": evidence["reviewBindingDigest"],
+    }
+
+
+def _refresh_transition_review_aggregates(command, *, canonicalize=True):
+    evidence_set = command["reviewEvidenceSet"]
+    for evidence in evidence_set:
+        evidence["reviewBindingDigest"] = _review_binding_digest(command, evidence)
+        evidence["evidenceDigest"] = _review_evidence_digest(evidence)
+    canonical_evidence_set = sorted(
+        evidence_set, key=lambda evidence: evidence["reviewerRole"]
+    )
+    if canonicalize:
+        command["reviewEvidenceSet"] = canonical_evidence_set
+    bindings = [
+        _reviewer_authority_binding(evidence)
+        for evidence in canonical_evidence_set
+    ]
+    proof = command["lifecycleAuthorityProof"]
+    proof["reviewerAuthorityBindings"] = bindings
+    proof["reviewBindingDigest"] = (
+        _sha256([binding["reviewBindingDigest"] for binding in bindings])
+        if bindings
+        else None
+    )
+    proof["reviewEvidenceDigest"] = (
+        _sha256(canonical_evidence_set) if canonical_evidence_set else None
+    )
+    proof["proofDigest"] = _sha256(
+        {key: value for key, value in proof.items() if key != "proofDigest"}
+    )
+    normalized_for_digest = copy.deepcopy(command)
+    normalized_for_digest["reviewEvidenceSet"] = canonical_evidence_set
+    normalized_for_digest["commandDigest"] = _sha256(
+        {
+            key: value
+            for key, value in normalized_for_digest.items()
+            if key != "commandDigest"
+        }
+    )
+    command["commandDigest"] = normalized_for_digest["commandDigest"]
+
+
+def _multi_review_transition(coordinator_factory):
+    command = coordinator_factory.transition(
+        expectedState="FIXED_CANDIDATE", nextState="REVIEW_GO"
+    )
+    additional = copy.deepcopy(command["reviewEvidenceSet"][0])
+    additional.update(
+        {
+            "reviewerId": "security-reviewer",
+            "reviewerRole": "security-reviewer",
+            "reviewerAuthorityReference": "security-reviewer-public.pem",
+            "reviewerAuthorityDigest": "sha256:" + "c" * 64,
+            "reviewedAt": "2026-08-13T12:29:40Z",
+        }
+    )
+    command["reviewEvidenceSet"].append(additional)
+    _refresh_transition_review_aggregates(command)
+    return command
+
+
 @dataclass
 class CoordinatorFactory:
     repository_root: object
@@ -263,8 +363,8 @@ class CoordinatorFactory:
             },
         }
         value.update(copy.deepcopy(changes))
-        if "reviewEvidence" not in value:
-            value["reviewEvidence"] = None
+        if "reviewEvidenceSet" not in value:
+            value["reviewEvidenceSet"] = []
             if value["nextState"] == "REVIEW_GO":
                 review = {
                     "candidateIdentity": copy.deepcopy(value["candidateIdentity"]),
@@ -304,9 +404,15 @@ class CoordinatorFactory:
                         ],
                     }
                 )
-                review["evidenceDigest"] = _sha256(review)
-                value["reviewEvidence"] = review
-        review = value["reviewEvidence"]
+                review["evidenceDigest"] = _review_evidence_digest(review)
+                value["reviewEvidenceSet"] = [review]
+        review_set = sorted(
+            value["reviewEvidenceSet"], key=lambda review: review["reviewerRole"]
+        )
+        value["reviewEvidenceSet"] = review_set
+        reviewer_authority_bindings = [
+            _reviewer_authority_binding(review) for review in review_set
+        ]
         authority_proof = value.get("lifecycleAuthorityProof") or {
             "authorityId": "lifecycle-controller",
             "authorityReference": "lifecycle-authority-public.pem",
@@ -316,18 +422,19 @@ class CoordinatorFactory:
             "nextState": value["nextState"],
             "candidateIdentity": copy.deepcopy(value["candidateIdentity"]),
             "reviewBindingDigest": (
-                review["reviewBindingDigest"] if review is not None else None
+                _sha256(
+                    [
+                        binding["reviewBindingDigest"]
+                        for binding in reviewer_authority_bindings
+                    ]
+                )
+                if reviewer_authority_bindings
+                else None
             ),
             "reviewEvidenceDigest": (
-                review["evidenceDigest"] if review is not None else None
+                _sha256(review_set) if review_set else None
             ),
-            "reviewerId": review["reviewerId"] if review is not None else None,
-            "reviewerAuthorityReference": (
-                review["reviewerAuthorityReference"] if review is not None else None
-            ),
-            "reviewerAuthorityDigest": (
-                review["reviewerAuthorityDigest"] if review is not None else None
-            ),
+            "reviewerAuthorityBindings": reviewer_authority_bindings,
             "assertedAt": "2026-08-13T12:29:00Z",
             "signatureAlgorithm": "ED25519",
             "signatureFormat": "OPENSSH_SSHSIG_V1",
@@ -789,7 +896,7 @@ def test_acquire_rejects_self_consistent_unbound_admission_identity(
         "candidateIdentity",
         "processQuiescence",
         "lifecycleAuthorityProof",
-        "reviewEvidence",
+        "reviewEvidenceSet",
     ],
 )
 def test_transition_digest_binds_every_authority_field(
@@ -807,7 +914,7 @@ def test_transition_digest_binds_every_authority_field(
     )
     review_source = coordinator_factory.transition(
         expectedState="FIXED_CANDIDATE", nextState="REVIEW_GO"
-    )["reviewEvidence"]
+    )["reviewEvidenceSet"]
     mutations = {
         "projectExecutionKey": "project-execution:" + "a" * 64,
         "leaseId": "lease:" + "b" * 24,
@@ -825,7 +932,7 @@ def test_transition_digest_binds_every_authority_field(
             "observedAt": "2026-08-13T12:30:01Z",
         },
         "lifecycleAuthorityProof": changed_authority,
-        "reviewEvidence": review_source,
+        "reviewEvidenceSet": review_source,
     }
     command[field] = mutations[field]
 
@@ -1117,17 +1224,7 @@ def test_commands_reject_noncanonical_timestamps(
 
 @pytest.mark.parametrize(
     "action_class",
-    [
-        "action:database-write",
-        "action:migration-apply",
-        "action:destructive",
-        "action:production-access",
-        "action:landing",
-        "action:wave-entry",
-        "action:push",
-        "action:release",
-        "action:deploy",
-    ],
+    sorted(PROTECTED_ACTION_CLASSES),
 )
 def test_acquire_rejects_protected_action_even_when_envelope_permits_it(
     repository_root, coordinator_factory, action_class
@@ -1139,6 +1236,24 @@ def test_acquire_rejects_protected_action_even_when_envelope_permits_it(
         normalize_acquire_command(repository_root, command)
 
     assert caught.value.code == "PROTECTED_ACTION_DENIED"
+
+
+def test_protected_action_vocabulary_is_complete_and_authoritative():
+    assert PROTECTED_ACTION_CLASSES == frozenset(
+        {
+            "action:database-write",
+            "action:migration-apply",
+            "action:destructive",
+            "action:production-access",
+            "action:landing",
+            "action:wave-entry",
+            "action:push",
+            "action:release",
+            "action:deploy",
+            "action:secret-access",
+            "action:credential-access",
+        }
+    )
 
 
 def test_acquire_does_not_misclassify_an_unproposed_ordinary_slice_as_protected(
@@ -1196,10 +1311,215 @@ def test_transition_accepts_closed_ed25519_evidence_shape(
     assert normalized["lifecycleAuthorityProof"]["signatureFormat"] == (
         "OPENSSH_SSHSIG_V1"
     )
-    assert normalized["reviewEvidence"]["reviewerRole"] == "deep-reviewer"
-    assert normalized["reviewEvidence"]["projectExecutionKey"] == (
+    assert normalized["reviewEvidenceSet"][0]["reviewerRole"] == "deep-reviewer"
+    assert normalized["reviewEvidenceSet"][0]["projectExecutionKey"] == (
         normalized["projectExecutionKey"]
     )
+
+
+def test_review_go_canonicalizes_complete_multi_role_evidence_without_mutating_input(
+    repository_root, coordinator_factory
+):
+    command = _multi_review_transition(coordinator_factory)
+    expected = copy.deepcopy(command)
+    command["reviewEvidenceSet"].reverse()
+    command["lifecycleAuthorityProof"]["reviewerAuthorityBindings"].reverse()
+    original = copy.deepcopy(command)
+
+    normalized = normalize_transition_command(repository_root, command)
+
+    assert command == original
+    assert normalized == expected
+    assert [
+        evidence["reviewerRole"] for evidence in normalized["reviewEvidenceSet"]
+    ] == ["deep-reviewer", "security-reviewer"]
+    assert [
+        binding["reviewerRole"]
+        for binding in normalized["lifecycleAuthorityProof"][
+            "reviewerAuthorityBindings"
+        ]
+    ] == ["deep-reviewer", "security-reviewer"]
+
+
+@pytest.mark.parametrize("duplicate_field", ["reviewerRole", "reviewerId"])
+def test_review_go_rejects_duplicate_reviewer_roles_and_ids(
+    repository_root, coordinator_factory, duplicate_field
+):
+    command = _multi_review_transition(coordinator_factory)
+    command["reviewEvidenceSet"][1][duplicate_field] = command[
+        "reviewEvidenceSet"
+    ][0][duplicate_field]
+    command = _with_command_digest(command)
+
+    with pytest.raises(ControlledCoordinationError) as caught:
+        normalize_transition_command(repository_root, command)
+
+    assert caught.value.code == "COORDINATOR_COMMAND_INVALID"
+
+
+def test_review_go_rejects_reviewer_authority_path_alias(
+    repository_root, coordinator_factory
+):
+    command = coordinator_factory.transition(
+        expectedState="FIXED_CANDIDATE", nextState="REVIEW_GO"
+    )
+    evidence = command["reviewEvidenceSet"][0]
+    binding = command["lifecycleAuthorityProof"]["reviewerAuthorityBindings"][0]
+    evidence["reviewerAuthorityReference"] = "reviewers//deep-reviewer.pem"
+    binding["reviewerAuthorityReference"] = "reviewers//deep-reviewer.pem"
+    command = _with_command_digest(command)
+
+    with pytest.raises(ControlledCoordinationError) as caught:
+        normalize_transition_command(repository_root, command)
+
+    assert caught.value.code == "UNSAFE_COORDINATOR_PATH"
+
+
+def test_per_item_evidence_digest_excludes_signature_but_aggregate_covers_it(
+    repository_root, coordinator_factory
+):
+    command = coordinator_factory.transition(
+        expectedState="FIXED_CANDIDATE", nextState="REVIEW_GO"
+    )
+    evidence = command["reviewEvidenceSet"][0]
+    original_evidence_digest = evidence["evidenceDigest"]
+    evidence["signature"] = evidence["signature"].replace(
+        "U1NIU0lHAAAAAQ==", "U1NIU0lHAAAAAg=="
+    )
+    _refresh_transition_review_aggregates(command)
+
+    normalized = normalize_transition_command(repository_root, command)
+
+    assert normalized["reviewEvidenceSet"][0]["evidenceDigest"] == (
+        original_evidence_digest
+    )
+    assert normalized["lifecycleAuthorityProof"]["reviewEvidenceDigest"] == (
+        _sha256(normalized["reviewEvidenceSet"])
+    )
+
+
+def test_review_go_rejects_stale_aggregate_after_signed_evidence_changes(
+    repository_root, coordinator_factory
+):
+    command = coordinator_factory.transition(
+        expectedState="FIXED_CANDIDATE", nextState="REVIEW_GO"
+    )
+    evidence = command["reviewEvidenceSet"][0]
+    evidence["signature"] = evidence["signature"].replace(
+        "U1NIU0lHAAAAAQ==", "U1NIU0lHAAAAAg=="
+    )
+    proof = command["lifecycleAuthorityProof"]
+    proof["proofDigest"] = _sha256(
+        {key: value for key, value in proof.items() if key != "proofDigest"}
+    )
+    command = _with_command_digest(command)
+
+    with pytest.raises(ControlledCoordinationError) as caught:
+        normalize_transition_command(repository_root, command)
+
+    assert caught.value.code == "REVIEW_EVIDENCE_BINDING_MISMATCH"
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("reviewerId", "reviewer:forged"),
+        ("reviewerAuthorityReference", "forged-reviewer-public.pem"),
+        ("reviewerAuthorityDigest", "sha256:" + "f" * 64),
+        ("reviewBindingDigest", "sha256:" + "e" * 64),
+    ],
+)
+def test_review_go_requires_exact_reviewer_authority_bindings(
+    repository_root, coordinator_factory, field, value
+):
+    command = coordinator_factory.transition(
+        expectedState="FIXED_CANDIDATE", nextState="REVIEW_GO"
+    )
+    proof = command["lifecycleAuthorityProof"]
+    proof["reviewerAuthorityBindings"][0][field] = value
+    proof["proofDigest"] = _sha256(
+        {key: item for key, item in proof.items() if key != "proofDigest"}
+    )
+    command = _with_command_digest(command)
+
+    with pytest.raises(ControlledCoordinationError) as caught:
+        normalize_transition_command(repository_root, command)
+
+    assert caught.value.code == "REVIEW_EVIDENCE_BINDING_MISMATCH"
+
+
+@pytest.mark.parametrize("digest_field", ["reviewBindingDigest", "evidenceDigest"])
+def test_review_go_rejects_self_consistent_aggregate_over_invalid_item_digest(
+    repository_root, coordinator_factory, digest_field
+):
+    command = coordinator_factory.transition(
+        expectedState="FIXED_CANDIDATE", nextState="REVIEW_GO"
+    )
+    evidence = command["reviewEvidenceSet"][0]
+    evidence[digest_field] = "sha256:" + "f" * 64
+    proof = command["lifecycleAuthorityProof"]
+    if digest_field == "reviewBindingDigest":
+        evidence["evidenceDigest"] = _review_evidence_digest(evidence)
+        proof["reviewerAuthorityBindings"][0]["reviewBindingDigest"] = evidence[
+            "reviewBindingDigest"
+        ]
+        proof["reviewBindingDigest"] = _sha256(
+            [evidence["reviewBindingDigest"]]
+        )
+    proof["reviewEvidenceDigest"] = _sha256(command["reviewEvidenceSet"])
+    proof["proofDigest"] = _sha256(
+        {key: item for key, item in proof.items() if key != "proofDigest"}
+    )
+    command = _with_command_digest(command)
+
+    with pytest.raises(ControlledCoordinationError) as caught:
+        normalize_transition_command(repository_root, command)
+
+    assert caught.value.code == "REVIEW_EVIDENCE_BINDING_MISMATCH"
+
+
+@pytest.mark.parametrize(
+    ("target", "field", "value"),
+    [
+        ("evidence", "signature", "not-an-sshsig"),
+        ("evidence", "evidenceDigest", "sha256:not-a-digest"),
+        ("evidence", "surprise", True),
+        ("binding", "surprise", True),
+    ],
+)
+def test_review_evidence_items_and_authority_bindings_are_closed_and_structural(
+    repository_root, coordinator_factory, target, field, value
+):
+    command = coordinator_factory.transition(
+        expectedState="FIXED_CANDIDATE", nextState="REVIEW_GO"
+    )
+    if target == "evidence":
+        command["reviewEvidenceSet"][0][field] = value
+    else:
+        command["lifecycleAuthorityProof"]["reviewerAuthorityBindings"][0][
+            field
+        ] = value
+    command = _with_command_digest(command)
+
+    with pytest.raises(ControlledCoordinationError) as caught:
+        normalize_transition_command(repository_root, command)
+
+    assert caught.value.code == "COORDINATOR_COMMAND_INVALID"
+
+
+def test_transition_rejects_legacy_single_review_evidence_alias(
+    repository_root, coordinator_factory
+):
+    command = coordinator_factory.transition(
+        expectedState="FIXED_CANDIDATE", nextState="REVIEW_GO"
+    )
+    command["reviewEvidence"] = command.pop("reviewEvidenceSet")[0]
+    command = _with_command_digest(command)
+
+    with pytest.raises(ControlledCoordinationError) as caught:
+        normalize_transition_command(repository_root, command)
+
+    assert caught.value.code == "COORDINATOR_COMMAND_INVALID"
 
 
 def test_review_go_requires_candidate_bound_zero_finding_review_evidence(
@@ -1208,13 +1528,29 @@ def test_review_go_requires_candidate_bound_zero_finding_review_evidence(
     command = coordinator_factory.transition(
         expectedState="FIXED_CANDIDATE",
         nextState="REVIEW_GO",
-        reviewEvidence=None,
+        reviewEvidenceSet=[],
     )
 
     with pytest.raises(ControlledCoordinationError) as caught:
         normalize_transition_command(repository_root, command)
 
     assert caught.value.code == "REVIEW_EVIDENCE_REQUIRED"
+
+
+def test_non_review_transition_requires_empty_review_evidence_set(
+    repository_root, coordinator_factory
+):
+    review_command = coordinator_factory.transition(
+        expectedState="FIXED_CANDIDATE", nextState="REVIEW_GO"
+    )
+    command = coordinator_factory.transition(
+        reviewEvidenceSet=copy.deepcopy(review_command["reviewEvidenceSet"])
+    )
+
+    with pytest.raises(ControlledCoordinationError) as caught:
+        normalize_transition_command(repository_root, command)
+
+    assert caught.value.code == "REVIEW_EVIDENCE_UNEXPECTED"
 
 
 def test_transition_rejects_lifecycle_authority_proof_for_another_transition(
@@ -1243,14 +1579,9 @@ def test_review_go_rejects_review_evidence_for_another_candidate(
     command = coordinator_factory.transition(
         expectedState="FIXED_CANDIDATE", nextState="REVIEW_GO"
     )
-    command["reviewEvidence"]["candidateIdentity"]["commit"] = "d" * 40
-    command["reviewEvidence"]["evidenceDigest"] = _sha256(
-        {
-            key: value
-            for key, value in command["reviewEvidence"].items()
-            if key != "evidenceDigest"
-        }
-    )
+    evidence = command["reviewEvidenceSet"][0]
+    evidence["candidateIdentity"]["commit"] = "d" * 40
+    evidence["evidenceDigest"] = _review_evidence_digest(evidence)
     command = _with_command_digest(command)
 
     with pytest.raises(ControlledCoordinationError) as caught:
@@ -1271,7 +1602,7 @@ def test_review_go_rejects_coordinated_candidate_and_reviewer_replacement(
         "tree": "f" * 40,
     }
     command["candidateIdentity"] = forged_candidate
-    evidence = command["reviewEvidence"]
+    evidence = command["reviewEvidenceSet"][0]
     evidence["candidateIdentity"] = copy.deepcopy(forged_candidate)
     evidence["reviewerId"] = "reviewer:forged"
     evidence["reviewBindingDigest"] = _sha256(
@@ -1300,14 +1631,9 @@ def test_review_go_rejects_nonzero_finding_counts(
     command = coordinator_factory.transition(
         expectedState="FIXED_CANDIDATE", nextState="REVIEW_GO"
     )
-    command["reviewEvidence"]["findingCounts"]["p1"] = 1
-    command["reviewEvidence"]["evidenceDigest"] = _sha256(
-        {
-            key: value
-            for key, value in command["reviewEvidence"].items()
-            if key != "evidenceDigest"
-        }
-    )
+    evidence = command["reviewEvidenceSet"][0]
+    evidence["findingCounts"]["p1"] = 1
+    evidence["evidenceDigest"] = _review_evidence_digest(evidence)
     command = _with_command_digest(command)
 
     with pytest.raises(ControlledCoordinationError) as caught:

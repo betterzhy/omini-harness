@@ -17,7 +17,10 @@ from .controlled_inputs import (
     normalize_planning_request,
     parse_rfc3339,
 )
-from .controlled_coordinator_inputs import ControlledCoordinationError
+from .controlled_coordinator_inputs import (
+    PROTECTED_ACTION_CLASSES,
+    ControlledCoordinationError,
+)
 from .coordinator_state import _validate_journal_integrity
 from .hashing import canonical_json_bytes, sha256_bytes
 from .schema import SchemaStore
@@ -28,19 +31,6 @@ _REPORT_SCHEMA = "core/schemas/controlled-conflict-report.schema.json"
 _PLAN_SCHEMA = "core/schemas/controlled-execution-plan.schema.json"
 _COORDINATOR_SNAPSHOT_SCHEMA = "core/schemas/controlled-coordinator-snapshot.schema.json"
 _COORDINATOR_PROJECTION_SCHEMA = "core/schemas/controlled-coordinator-projection.schema.json"
-_PROTECTED_ACTION_CLASSES = frozenset(
-    {
-        "action:database-write",
-        "action:migration-apply",
-        "action:destructive",
-        "action:production-access",
-        "action:landing",
-        "action:wave-entry",
-        "action:push",
-        "action:release",
-        "action:deploy",
-    }
-)
 
 
 def _stable_id(prefix: str, payload: Any) -> str:
@@ -70,7 +60,7 @@ def _authorization_reasons(
     if descriptor["authorizationClass"] not in envelope["permittedActionClasses"]:
         reasons.append("ACTION_CLASS_NOT_PERMITTED")
     if (
-        descriptor["authorizationClass"] in _PROTECTED_ACTION_CLASSES
+        descriptor["authorizationClass"] in PROTECTED_ACTION_CLASSES
         or descriptor["authorizationClass"] in envelope["deniedActions"]
     ):
         reasons.append("ACTION_EXPLICITLY_DENIED")

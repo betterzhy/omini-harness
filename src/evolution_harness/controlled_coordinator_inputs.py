@@ -57,7 +57,7 @@ _CANDIDATE_STATES = frozenset(
         "CLOSED",
     }
 )
-_PROTECTED_ACTION_CLASSES = frozenset(
+PROTECTED_ACTION_CLASSES = frozenset(
     {
         "action:database-write",
         "action:migration-apply",
@@ -68,6 +68,8 @@ _PROTECTED_ACTION_CLASSES = frozenset(
         "action:push",
         "action:release",
         "action:deploy",
+        "action:secret-access",
+        "action:credential-access",
     }
 )
 
@@ -450,7 +452,7 @@ def _validate_plan_binding(repository_root: Path, command: dict[str, Any]) -> No
         )
 
     action_class = command["sliceDescriptor"]["authorizationClass"]
-    if action_class in _PROTECTED_ACTION_CLASSES:
+    if action_class in PROTECTED_ACTION_CLASSES:
         raise ControlledCoordinationError(
             "PROTECTED_ACTION_DENIED",
             f"protected action cannot be acquired: {action_class}",
@@ -591,16 +593,53 @@ def _normalize_process_quiescence(value: dict[str, Any]) -> dict[str, Any]:
     return normalized
 
 
+def _canonical_reviewer_set(
+    values: list[dict[str, Any]], *, label: str
+) -> list[dict[str, Any]]:
+    normalized = copy.deepcopy(values)
+    roles = [item["reviewerRole"] for item in normalized]
+    reviewer_ids = [item["reviewerId"] for item in normalized]
+    if len(roles) != len(set(roles)) or len(reviewer_ids) != len(
+        set(reviewer_ids)
+    ):
+        raise ControlledCoordinationError(
+            "COORDINATOR_COMMAND_INVALID",
+            f"{label} must have unique reviewerRole and reviewerId values",
+        )
+    for item in normalized:
+        item["reviewerAuthorityReference"] = _canonical_relative_path(
+            item["reviewerAuthorityReference"],
+            f"{label}.reviewerAuthorityReference",
+        )
+    return sorted(normalized, key=lambda item: item["reviewerRole"])
+
+
+def _normalize_lifecycle_authority_proof(
+    value: dict[str, Any]
+) -> dict[str, Any]:
+    normalized = copy.deepcopy(value)
+    normalized["authorityReference"] = _canonical_relative_path(
+        normalized["authorityReference"],
+        "lifecycleAuthorityProof.authorityReference",
+    )
+    normalized["reviewerAuthorityBindings"] = _canonical_reviewer_set(
+        normalized["reviewerAuthorityBindings"],
+        label="lifecycleAuthorityProof.reviewerAuthorityBindings",
+    )
+    return normalized
+
+
+def _normalize_review_evidence_set(
+    values: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    normalized = _canonical_reviewer_set(values, label="reviewEvidenceSet")
+    for evidence in normalized:
+        _validate_timestamp(evidence["reviewedAt"])
+    return normalized
+
+
 def _validate_lifecycle_authority(command: dict[str, Any]) -> None:
     proof = command["lifecycleAuthorityProof"]
-    proof["authorityReference"] = _canonical_relative_path(
-        proof["authorityReference"], "lifecycleAuthorityProof.authorityReference"
-    )
-    if proof["reviewerAuthorityReference"] is not None:
-        proof["reviewerAuthorityReference"] = _canonical_relative_path(
-            proof["reviewerAuthorityReference"],
-            "lifecycleAuthorityProof.reviewerAuthorityReference",
-        )
     _validate_timestamp(proof["assertedAt"])
     expected_digest = _sha256(
         {key: value for key, value in proof.items() if key != "proofDigest"}
@@ -619,71 +658,94 @@ def _validate_lifecycle_authority(command: dict[str, Any]) -> None:
 
 
 def _validate_review_evidence(command: dict[str, Any]) -> None:
-    evidence = command["reviewEvidence"]
+    evidence_set = command["reviewEvidenceSet"]
     proof = command["lifecycleAuthorityProof"]
     if command["nextState"] != "REVIEW_GO":
-        if evidence is not None or any(
-            proof[field] is not None
-            for field in (
-                "reviewBindingDigest",
-                "reviewEvidenceDigest",
-                "reviewerId",
-                "reviewerAuthorityReference",
-                "reviewerAuthorityDigest",
-            )
+        if (
+            evidence_set
+            or proof["reviewerAuthorityBindings"]
+            or proof["reviewBindingDigest"] is not None
+            or proof["reviewEvidenceDigest"] is not None
         ):
             raise ControlledCoordinationError(
                 "REVIEW_EVIDENCE_UNEXPECTED",
                 "review evidence is accepted only for REVIEW_GO",
             )
         return
-    if evidence is None:
+    if not evidence_set:
         raise ControlledCoordinationError(
             "REVIEW_EVIDENCE_REQUIRED",
             "REVIEW_GO requires candidate-bound zero-finding review evidence",
         )
-    evidence["reviewerAuthorityReference"] = _canonical_relative_path(
-        evidence["reviewerAuthorityReference"],
-        "reviewEvidence.reviewerAuthorityReference",
-    )
-    _validate_timestamp(evidence["reviewedAt"])
+    expected_authority_bindings = []
+    for evidence in evidence_set:
+        expected_binding_digest = _sha256(
+            {
+                "candidateIdentity": command["candidateIdentity"],
+                "projectExecutionKey": command["projectExecutionKey"],
+                "leaseId": command["leaseId"],
+                "attemptId": command["attemptId"],
+                "fencingToken": command["fencingToken"],
+                "authoritySnapshotFingerprint": command[
+                    "authoritySnapshotFingerprint"
+                ],
+                "reviewerId": evidence["reviewerId"],
+                "reviewerRole": evidence["reviewerRole"],
+                "reviewerAuthorityReference": evidence[
+                    "reviewerAuthorityReference"
+                ],
+                "reviewerAuthorityDigest": evidence["reviewerAuthorityDigest"],
+            }
+        )
+        expected_evidence_digest = _sha256(
+            {
+                key: value
+                for key, value in evidence.items()
+                if key not in {"signature", "evidenceDigest"}
+            }
+        )
+        if (
+            evidence["candidateIdentity"] != command["candidateIdentity"]
+            or evidence["projectExecutionKey"] != command["projectExecutionKey"]
+            or evidence["leaseId"] != command["leaseId"]
+            or evidence["attemptId"] != command["attemptId"]
+            or evidence["fencingToken"] != command["fencingToken"]
+            or evidence["authoritySnapshotFingerprint"]
+            != command["authoritySnapshotFingerprint"]
+            or evidence["reviewBindingDigest"] != expected_binding_digest
+            or evidence["evidenceDigest"] != expected_evidence_digest
+        ):
+            raise ControlledCoordinationError(
+                "REVIEW_EVIDENCE_BINDING_MISMATCH",
+                "review evidence does not bind the transition candidate",
+            )
+        expected_authority_bindings.append(
+            {
+                "reviewerRole": evidence["reviewerRole"],
+                "reviewerId": evidence["reviewerId"],
+                "reviewerAuthorityReference": evidence[
+                    "reviewerAuthorityReference"
+                ],
+                "reviewerAuthorityDigest": evidence["reviewerAuthorityDigest"],
+                "reviewBindingDigest": evidence["reviewBindingDigest"],
+            }
+        )
+
     expected_binding_digest = _sha256(
-        {
-            "candidateIdentity": command["candidateIdentity"],
-            "projectExecutionKey": command["projectExecutionKey"],
-            "leaseId": command["leaseId"],
-            "attemptId": command["attemptId"],
-            "fencingToken": command["fencingToken"],
-            "authoritySnapshotFingerprint": command["authoritySnapshotFingerprint"],
-            "reviewerId": evidence["reviewerId"],
-            "reviewerRole": evidence["reviewerRole"],
-            "reviewerAuthorityReference": evidence["reviewerAuthorityReference"],
-            "reviewerAuthorityDigest": evidence["reviewerAuthorityDigest"],
-        }
+        [
+            binding["reviewBindingDigest"]
+            for binding in expected_authority_bindings
+        ]
     )
-    expected_evidence_digest = _sha256(
-        {key: value for key, value in evidence.items() if key != "evidenceDigest"}
-    )
+    expected_evidence_digest = _sha256(evidence_set)
     if (
-        evidence["candidateIdentity"] != command["candidateIdentity"]
-        or evidence["projectExecutionKey"] != command["projectExecutionKey"]
-        or evidence["leaseId"] != command["leaseId"]
-        or evidence["attemptId"] != command["attemptId"]
-        or evidence["fencingToken"] != command["fencingToken"]
-        or evidence["authoritySnapshotFingerprint"]
-        != command["authoritySnapshotFingerprint"]
-        or evidence["reviewBindingDigest"] != expected_binding_digest
-        or evidence["evidenceDigest"] != expected_evidence_digest
-        or proof["reviewBindingDigest"] != evidence["reviewBindingDigest"]
-        or proof["reviewEvidenceDigest"] != evidence["evidenceDigest"]
-        or proof["reviewerId"] != evidence["reviewerId"]
-        or proof["reviewerAuthorityReference"]
-        != evidence["reviewerAuthorityReference"]
-        or proof["reviewerAuthorityDigest"] != evidence["reviewerAuthorityDigest"]
+        proof["reviewerAuthorityBindings"] != expected_authority_bindings
+        or proof["reviewBindingDigest"] != expected_binding_digest
+        or proof["reviewEvidenceDigest"] != expected_evidence_digest
     ):
         raise ControlledCoordinationError(
             "REVIEW_EVIDENCE_BINDING_MISMATCH",
-            "review evidence does not bind the transition candidate",
+            "review evidence set does not bind every reviewer authority",
         )
 
 
@@ -696,10 +758,12 @@ def normalize_transition_command(
     normalized["processQuiescence"] = _normalize_process_quiescence(
         normalized["processQuiescence"]
     )
-    normalized["lifecycleAuthorityProof"] = copy.deepcopy(
+    normalized["lifecycleAuthorityProof"] = _normalize_lifecycle_authority_proof(
         normalized["lifecycleAuthorityProof"]
     )
-    normalized["reviewEvidence"] = copy.deepcopy(normalized["reviewEvidence"])
+    normalized["reviewEvidenceSet"] = _normalize_review_evidence_set(
+        normalized["reviewEvidenceSet"]
+    )
     _validate_schema(store, _TRANSITION_SCHEMA, normalized)
     _verify_command_digest(normalized)
     _validate_timestamp(normalized["processQuiescence"]["observedAt"])

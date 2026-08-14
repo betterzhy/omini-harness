@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 from evolution_harness import controlled_coordinator as coordinator
+from evolution_harness import controlled_write_guard as write_guard
 from evolution_harness.authority import build_authority_snapshot
 from evolution_harness.controlled_coordinator_inputs import ControlledCoordinationError
 from evolution_harness.hashing import canonical_json_bytes, sha256_bytes
@@ -146,8 +147,7 @@ def _lifecycle_signature_payload(command):
     }
 
 
-def _review_signature_payload(command):
-    review = command["reviewEvidence"]
+def _review_signature_payload(command, review, required_reviewers, minimum_verdict):
     return {
         "schemaVersion": "controlled-review-signature-payload/v1",
         "projectExecutionKey": command["projectExecutionKey"],
@@ -161,9 +161,44 @@ def _review_signature_payload(command):
         "verdict": review["verdict"],
         "findingCounts": review["findingCounts"],
         "reviewedAt": review["reviewedAt"],
-        "requiredReviewerPolicy": ["deep-reviewer"],
-        "minimumReviewVerdict": "GO_ZERO_FINDINGS",
+        "requiredReviewerPolicy": required_reviewers,
+        "minimumReviewVerdict": minimum_verdict,
     }
+
+
+def _acquired_review_policy(factory, lease_or_command):
+    lease_id = lease_or_command["leaseId"]
+    journal = factory.journal()
+    acquire = next(
+        receipt["evidence"]["command"]
+        for receipt in journal["receipts"]
+        if receipt["receiptType"] == "ACQUIRE"
+        and any(
+            item["leaseId"] == lease_id
+            and item["batchPlanId"]
+            == receipt["evidence"]["command"]["batchPlanId"]
+            and item["sliceId"] == receipt["evidence"]["command"]["sliceId"]
+            and item["attemptId"] == receipt["evidence"]["command"]["attemptId"]
+            for item in journal["leases"]
+        )
+    )
+    requirements = acquire["executionPlan"]["executionRequirements"]
+    assert any(
+        item["sliceId"] == acquire["sliceId"]
+        for item in requirements["sliceRequirements"]
+    )
+    return (
+        list(requirements["requiredReviewers"]),
+        requirements["minimumReviewVerdict"],
+    )
+
+
+def _reviewer_private_key(factory, role):
+    return (
+        factory.lifecycle_private_key
+        if role == "lifecycle-controller"
+        else factory.reviewer_private_key
+    )
 
 
 def _transition_command(
@@ -182,9 +217,6 @@ def _transition_command(
         "lifecycle-controller",
         "lifecycle-authority-public.pem",
     )
-    reviewer_authority = _authority_or_file(
-        factory, authorities, "deep-reviewer", "deep-reviewer-public.pem"
-    )
     expected = expected_state or lease["state"]
     if candidate_identity is None:
         if next_state == "FIXED_CANDIDATE":
@@ -192,61 +224,85 @@ def _transition_command(
         else:
             candidate_identity = copy.deepcopy(lease["candidateIdentity"])
 
-    review = None
+    review_set = []
     if next_state == "REVIEW_GO":
-        review = {
-            "candidateIdentity": copy.deepcopy(candidate_identity),
-            "reviewerId": reviewer_authority["id"],
-            "reviewerRole": "deep-reviewer",
-            "projectExecutionKey": lease["projectExecutionKey"],
-            "leaseId": lease["leaseId"],
-            "attemptId": lease["attemptId"],
-            "fencingToken": lease["fencingToken"],
-            "authoritySnapshotFingerprint": snapshot["snapshotFingerprint"],
-            "reviewerAuthorityReference": reviewer_authority["path"],
-            "reviewerAuthorityDigest": "sha256:" + reviewer_authority["sha256"],
-            "verdict": "GO_ZERO_FINDINGS",
-            "findingCounts": {"p0": 0, "p1": 0, "p2": 0},
-            "reviewedAt": "2026-08-13T12:29:30Z",
-            "signatureAlgorithm": "ED25519",
-            "signatureFormat": "OPENSSH_SSHSIG_V1",
-        }
-        review["reviewBindingDigest"] = _sha256(
-            {
-                "candidateIdentity": candidate_identity,
+        required_reviewers, minimum_verdict = _acquired_review_policy(factory, lease)
+        for role in required_reviewers:
+            reviewer_authority = authorities[role]
+            review = {
+                "candidateIdentity": copy.deepcopy(candidate_identity),
+                "reviewerId": reviewer_authority["id"],
+                "reviewerRole": role,
                 "projectExecutionKey": lease["projectExecutionKey"],
                 "leaseId": lease["leaseId"],
                 "attemptId": lease["attemptId"],
                 "fencingToken": lease["fencingToken"],
                 "authoritySnapshotFingerprint": snapshot["snapshotFingerprint"],
-                "reviewerId": review["reviewerId"],
-                "reviewerRole": review["reviewerRole"],
-                "reviewerAuthorityReference": review["reviewerAuthorityReference"],
-                "reviewerAuthorityDigest": review["reviewerAuthorityDigest"],
+                "reviewerAuthorityReference": reviewer_authority["path"],
+                "reviewerAuthorityDigest": "sha256:" + reviewer_authority["sha256"],
+                "verdict": minimum_verdict,
+                "findingCounts": {"p0": 0, "p1": 0, "p2": 0},
+                "reviewedAt": "2026-08-13T12:29:30Z",
+                "signatureAlgorithm": "ED25519",
+                "signatureFormat": "OPENSSH_SSHSIG_V1",
             }
-        )
-        review["signature"] = _sign(
-            factory.reviewer_private_key,
-            {
-                "schemaVersion": "controlled-review-signature-payload/v1",
-                "projectExecutionKey": lease["projectExecutionKey"],
-                "leaseId": lease["leaseId"],
-                "attemptId": lease["attemptId"],
-                "fencingToken": lease["fencingToken"],
-                "authoritySnapshotFingerprint": snapshot["snapshotFingerprint"],
-                "candidateIdentity": candidate_identity,
-                "reviewerId": review["reviewerId"],
-                "reviewerRole": review["reviewerRole"],
-                "verdict": review["verdict"],
-                "findingCounts": review["findingCounts"],
-                "reviewedAt": review["reviewedAt"],
-                "requiredReviewerPolicy": ["deep-reviewer"],
-                "minimumReviewVerdict": "GO_ZERO_FINDINGS",
-            },
-            _REVIEW_NAMESPACE,
-        )
-        review["evidenceDigest"] = _sha256(review)
+            review["reviewBindingDigest"] = _sha256(
+                {
+                    "candidateIdentity": candidate_identity,
+                    "projectExecutionKey": lease["projectExecutionKey"],
+                    "leaseId": lease["leaseId"],
+                    "attemptId": lease["attemptId"],
+                    "fencingToken": lease["fencingToken"],
+                    "authoritySnapshotFingerprint": snapshot["snapshotFingerprint"],
+                    "reviewerId": review["reviewerId"],
+                    "reviewerRole": review["reviewerRole"],
+                    "reviewerAuthorityReference": review["reviewerAuthorityReference"],
+                    "reviewerAuthorityDigest": review["reviewerAuthorityDigest"],
+                }
+            )
+            review["signature"] = _sign(
+                _reviewer_private_key(factory, role),
+                _review_signature_payload(
+                    {
+                        **{
+                            key: lease[key]
+                            for key in (
+                                "projectExecutionKey",
+                                "leaseId",
+                                "attemptId",
+                                "fencingToken",
+                            )
+                        },
+                        "authoritySnapshotFingerprint": snapshot[
+                            "snapshotFingerprint"
+                        ],
+                        "candidateIdentity": candidate_identity,
+                    },
+                    review,
+                    required_reviewers,
+                    minimum_verdict,
+                ),
+                _REVIEW_NAMESPACE,
+            )
+            review["evidenceDigest"] = _sha256(
+                {
+                    key: value
+                    for key, value in review.items()
+                    if key not in {"signature", "evidenceDigest"}
+                }
+            )
+            review_set.append(review)
 
+    reviewer_bindings = [
+        {
+            "reviewerRole": review["reviewerRole"],
+            "reviewerId": review["reviewerId"],
+            "reviewerAuthorityReference": review["reviewerAuthorityReference"],
+            "reviewerAuthorityDigest": review["reviewerAuthorityDigest"],
+            "reviewBindingDigest": review["reviewBindingDigest"],
+        }
+        for review in review_set
+    ]
     proof = {
         "authorityId": lifecycle_authority["id"],
         "authorityReference": lifecycle_authority["path"],
@@ -255,20 +311,12 @@ def _transition_command(
         "expectedState": expected,
         "nextState": next_state,
         "candidateIdentity": copy.deepcopy(candidate_identity),
-        "reviewBindingDigest": (
-            None if review is None else review["reviewBindingDigest"]
-        ),
-        "reviewEvidenceDigest": (
-            None if review is None else review["evidenceDigest"]
-        ),
-        "reviewerId": None if review is None else review["reviewerId"],
-        "reviewerAuthorityReference": (
-            None if review is None else review["reviewerAuthorityReference"]
-        ),
-        "reviewerAuthorityDigest": (
-            None if review is None else review["reviewerAuthorityDigest"]
-        ),
-        "assertedAt": "2026-08-13T12:29:00Z",
+        "reviewBindingDigest": None
+        if not review_set
+        else _sha256([item["reviewBindingDigest"] for item in review_set]),
+        "reviewEvidenceDigest": None if not review_set else _sha256(review_set),
+        "reviewerAuthorityBindings": reviewer_bindings,
+        "assertedAt": "2026-08-13T12:29:59Z",
         "signatureAlgorithm": "ED25519",
         "signatureFormat": "OPENSSH_SSHSIG_V1",
     }
@@ -311,14 +359,15 @@ def _transition_command(
                 "processIds": [],
             },
             "lifecycleAuthorityProof": proof,
-            "reviewEvidence": review,
+            "reviewEvidenceSet": review_set,
         }
     )
 
 
 def _rebind_transition(factory, command, *, resign=True):
-    review = command["reviewEvidence"]
-    if review is not None:
+    review_set = command["reviewEvidenceSet"]
+    required_reviewers, minimum_verdict = _acquired_review_policy(factory, command)
+    for review in review_set:
         review["candidateIdentity"] = copy.deepcopy(command["candidateIdentity"])
         review["reviewBindingDigest"] = _sha256(
             {
@@ -350,30 +399,29 @@ def _rebind_transition(factory, command, *, resign=True):
         )
         if resign:
             review["signature"] = _sign(
-                factory.reviewer_private_key,
-                {
-                    "schemaVersion": "controlled-review-signature-payload/v1",
-                    "projectExecutionKey": command["projectExecutionKey"],
-                    "leaseId": command["leaseId"],
-                    "attemptId": command["attemptId"],
-                    "fencingToken": command["fencingToken"],
-                    "authoritySnapshotFingerprint": command[
-                        "authoritySnapshotFingerprint"
-                    ],
-                    "candidateIdentity": command["candidateIdentity"],
-                    "reviewerId": review["reviewerId"],
-                    "reviewerRole": review["reviewerRole"],
-                    "verdict": review["verdict"],
-                    "findingCounts": review["findingCounts"],
-                    "reviewedAt": review["reviewedAt"],
-                    "requiredReviewerPolicy": ["deep-reviewer"],
-                    "minimumReviewVerdict": "GO_ZERO_FINDINGS",
-                },
+                _reviewer_private_key(factory, review["reviewerRole"]),
+                _review_signature_payload(
+                    command, review, required_reviewers, minimum_verdict
+                ),
                 _REVIEW_NAMESPACE,
             )
         review["evidenceDigest"] = _sha256(
-            {key: value for key, value in review.items() if key != "evidenceDigest"}
+            {
+                key: value
+                for key, value in review.items()
+                if key not in {"signature", "evidenceDigest"}
+            }
         )
+    reviewer_bindings = [
+        {
+            "reviewerRole": review["reviewerRole"],
+            "reviewerId": review["reviewerId"],
+            "reviewerAuthorityReference": review["reviewerAuthorityReference"],
+            "reviewerAuthorityDigest": review["reviewerAuthorityDigest"],
+            "reviewBindingDigest": review["reviewBindingDigest"],
+        }
+        for review in sorted(review_set, key=lambda item: item["reviewerRole"])
+    ]
     proof = command["lifecycleAuthorityProof"]
     proof.update(
         {
@@ -381,19 +429,15 @@ def _rebind_transition(factory, command, *, resign=True):
             "expectedState": command["expectedState"],
             "nextState": command["nextState"],
             "candidateIdentity": copy.deepcopy(command["candidateIdentity"]),
-            "reviewBindingDigest": (
-                None if review is None else review["reviewBindingDigest"]
+            "reviewBindingDigest": None
+            if not review_set
+            else _sha256(
+                [item["reviewBindingDigest"] for item in reviewer_bindings]
             ),
-            "reviewEvidenceDigest": (
-                None if review is None else review["evidenceDigest"]
-            ),
-            "reviewerId": None if review is None else review["reviewerId"],
-            "reviewerAuthorityReference": (
-                None if review is None else review["reviewerAuthorityReference"]
-            ),
-            "reviewerAuthorityDigest": (
-                None if review is None else review["reviewerAuthorityDigest"]
-            ),
+            "reviewEvidenceDigest": None
+            if not review_set
+            else _sha256(sorted(review_set, key=lambda item: item["reviewerRole"])),
+            "reviewerAuthorityBindings": reviewer_bindings,
         }
     )
     if resign:
@@ -418,6 +462,24 @@ def _rebind_transition(factory, command, *, resign=True):
             },
             _LIFECYCLE_NAMESPACE,
         )
+    proof["proofDigest"] = _sha256(
+        {key: value for key, value in proof.items() if key != "proofDigest"}
+    )
+    return _command_digest(command)
+
+
+def _resign_lifecycle_only(factory, command):
+    proof = command["lifecycleAuthorityProof"]
+    proof["reviewEvidenceDigest"] = (
+        None
+        if not command["reviewEvidenceSet"]
+        else _sha256(command["reviewEvidenceSet"])
+    )
+    proof["signature"] = _sign(
+        factory.lifecycle_private_key,
+        _lifecycle_signature_payload(command),
+        _LIFECYCLE_NAMESPACE,
+    )
     proof["proofDigest"] = _sha256(
         {key: value for key, value in proof.items() if key != "proofDigest"}
     )
@@ -698,7 +760,7 @@ def test_review_signature_and_required_role_are_fail_closed(lifecycle_factory):
         _transition_command(lifecycle_factory, lease, "FIXED_CANDIDATE"),
     )
     wrong_role = _transition_command(lifecycle_factory, fixed, "REVIEW_GO")
-    wrong_role["reviewEvidence"]["reviewerRole"] = "ordinary-reviewer"
+    wrong_role["reviewEvidenceSet"][0]["reviewerRole"] = "ordinary-reviewer"
     _rebind_transition(lifecycle_factory, wrong_role)
 
     with pytest.raises(ControlledCoordinationError) as role_rejected:
@@ -725,6 +787,129 @@ def test_review_signature_rejects_wrong_authority_key(lifecycle_factory):
         _transition(lifecycle_factory, forged)
 
     assert rejected.value.code == "REVIEW_SIGNATURE_INVALID"
+
+
+def _multi_reviewer_fixed_lease(lifecycle_factory):
+    lease = _advance(
+        lifecycle_factory,
+        _acquire(
+            lifecycle_factory,
+            descriptor_changes={
+                "reviewPolicy": {
+                    "reviewerRole": "lifecycle-controller",
+                    "minimumVerdict": "GO_ZERO_FINDINGS",
+                }
+            },
+        ),
+        "ACTIVE",
+    )
+    return _transition(
+        lifecycle_factory,
+        _transition_command(lifecycle_factory, lease, "FIXED_CANDIDATE"),
+    )
+
+
+def test_review_go_verifies_complete_envelope_and_slice_reviewer_set(
+    lifecycle_factory,
+):
+    fixed = _multi_reviewer_fixed_lease(lifecycle_factory)
+    command = _transition_command(lifecycle_factory, fixed, "REVIEW_GO")
+
+    result = _transition(lifecycle_factory, command)
+
+    assert [
+        item["reviewerRole"] for item in command["reviewEvidenceSet"]
+    ] == ["deep-reviewer", "lifecycle-controller"]
+    assert result["state"] == "REVIEW_GO"
+
+
+@pytest.mark.parametrize("mutation", ["empty", "missing", "duplicate"])
+def test_review_go_rejects_incomplete_or_duplicate_reviewer_set(
+    lifecycle_factory, mutation
+):
+    fixed = _multi_reviewer_fixed_lease(lifecycle_factory)
+    command = _transition_command(lifecycle_factory, fixed, "REVIEW_GO")
+    if mutation == "empty":
+        command["reviewEvidenceSet"] = []
+        expected = "REVIEW_EVIDENCE_REQUIRED"
+    elif mutation == "missing":
+        command["reviewEvidenceSet"].pop()
+        expected = "REVIEWER_POLICY_MISMATCH"
+    else:
+        command["reviewEvidenceSet"].append(
+            copy.deepcopy(command["reviewEvidenceSet"][0])
+        )
+        expected = "COORDINATOR_COMMAND_INVALID"
+    _rebind_transition(lifecycle_factory, command)
+
+    with pytest.raises(ControlledCoordinationError) as rejected:
+        _transition(lifecycle_factory, command)
+
+    assert rejected.value.code == expected
+
+
+@pytest.mark.parametrize("role", ["deep-reviewer", "lifecycle-controller"])
+def test_each_required_reviewer_signature_is_independently_verified(
+    lifecycle_factory, role
+):
+    fixed = _multi_reviewer_fixed_lease(lifecycle_factory)
+    command = _transition_command(lifecycle_factory, fixed, "REVIEW_GO")
+    required_reviewers, minimum_verdict = _acquired_review_policy(
+        lifecycle_factory, command
+    )
+    review = next(
+        item for item in command["reviewEvidenceSet"] if item["reviewerRole"] == role
+    )
+    wrong_key = (
+        lifecycle_factory.reviewer_private_key
+        if role == "lifecycle-controller"
+        else lifecycle_factory.lifecycle_private_key
+    )
+    review["signature"] = _sign(
+        wrong_key,
+        _review_signature_payload(
+            command, review, required_reviewers, minimum_verdict
+        ),
+        _REVIEW_NAMESPACE,
+    )
+    _resign_lifecycle_only(lifecycle_factory, command)
+
+    with pytest.raises(ControlledCoordinationError) as rejected:
+        _transition(lifecycle_factory, command)
+
+    assert rejected.value.code == "REVIEW_SIGNATURE_INVALID"
+
+
+def test_review_go_rejects_noncurrent_reviewer_authority_binding(
+    lifecycle_factory,
+):
+    fixed = _multi_reviewer_fixed_lease(lifecycle_factory)
+    command = _transition_command(lifecycle_factory, fixed, "REVIEW_GO")
+    _, authorities = _current_authorities(lifecycle_factory)
+    review = command["reviewEvidenceSet"][0]
+    lifecycle_authority = authorities["lifecycle-controller"]
+    review["reviewerAuthorityReference"] = lifecycle_authority["path"]
+    review["reviewerAuthorityDigest"] = "sha256:" + lifecycle_authority["sha256"]
+    _rebind_transition(lifecycle_factory, command)
+
+    with pytest.raises(ControlledCoordinationError) as rejected:
+        _transition(lifecycle_factory, command)
+
+    assert rejected.value.code == "REVIEWER_AUTHORITY_NOT_CURRENT"
+
+
+def test_review_go_rejects_review_time_after_lifecycle_assertion(
+    lifecycle_factory,
+):
+    fixed = _multi_reviewer_fixed_lease(lifecycle_factory)
+    command = _transition_command(lifecycle_factory, fixed, "REVIEW_GO")
+    command["reviewEvidenceSet"][0]["reviewedAt"] = "2026-08-13T12:30:00Z"
+    _rebind_transition(lifecycle_factory, command)
+
+    with pytest.raises(ControlledCoordinationError) as rejected:
+        _transition(lifecycle_factory, command)
+
+    assert rejected.value.code == "REVIEWER_POLICY_MISMATCH"
 
 
 @pytest.mark.parametrize("drift", ["digest", "owner", "mode"])
@@ -821,7 +1006,7 @@ def test_review_tampering_and_nonzero_findings_are_fail_closed(lifecycle_factory
     assert tampered.value.code == "LIFECYCLE_SIGNATURE_INVALID"
 
     nonzero = _transition_command(lifecycle_factory, fixed, "REVIEW_GO")
-    nonzero["reviewEvidence"]["findingCounts"]["p1"] = 1
+    nonzero["reviewEvidenceSet"][0]["findingCounts"]["p1"] = 1
     _rebind_transition(lifecycle_factory, nonzero)
     with pytest.raises(ControlledCoordinationError) as findings:
         _transition(lifecycle_factory, nonzero)
@@ -887,7 +1072,7 @@ def test_fixed_candidate_and_review_are_immutable_and_current(lifecycle_factory)
     assert candidate.value.code == "CANDIDATE_IDENTITY_MISMATCH"
 
     wrong_reviewer = _transition_command(lifecycle_factory, fixed, "REVIEW_GO")
-    wrong_reviewer["reviewEvidence"]["reviewerId"] = "reviewer:unregistered"
+    wrong_reviewer["reviewEvidenceSet"][0]["reviewerId"] = "reviewer:unregistered"
     _rebind_transition(lifecycle_factory, wrong_reviewer)
     with pytest.raises(ControlledCoordinationError) as reviewer:
         _transition(lifecycle_factory, wrong_reviewer)
@@ -906,6 +1091,73 @@ def test_fixed_candidate_requires_exact_live_git_identity(lifecycle_factory, fie
     command = _transition_command(lifecycle_factory, lease, "FIXED_CANDIDATE")
     command["candidateIdentity"][field] = "7" * 40
     _rebind_transition(lifecycle_factory, command)
+
+    with pytest.raises(ControlledCoordinationError) as rejected:
+        _transition(lifecycle_factory, command)
+
+    assert rejected.value.code == "LANE_CANDIDATE_INVALID"
+
+
+def test_fixed_candidate_ignores_git_replace_object_view(lifecycle_factory):
+    lease = _advance(lifecycle_factory, _acquire(lifecycle_factory), "ACTIVE")
+    command = _transition_command(lifecycle_factory, lease, "FIXED_CANDIDATE")
+    lane = Path(lease["laneRoot"])
+    candidate = command["candidateIdentity"]
+    replacement = subprocess.run(
+        [
+            "/usr/bin/git",
+            "-C",
+            str(lane),
+            "commit-tree",
+            f"{candidate['parent']}^{{tree}}",
+            "-p",
+            candidate["parent"],
+            "-m",
+            "replacement object view",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    subprocess.run(
+        [
+            "/usr/bin/git",
+            "-C",
+            str(lane),
+            "replace",
+            candidate["commit"],
+            replacement,
+        ],
+        check=True,
+    )
+    command["candidateIdentity"]["tree"] = subprocess.run(
+        [
+            "/usr/bin/git",
+            "-C",
+            str(lane),
+            "rev-parse",
+            f"{candidate['commit']}^{{tree}}",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    _rebind_transition(lifecycle_factory, command)
+
+    with pytest.raises(ControlledCoordinationError) as rejected:
+        _transition(lifecycle_factory, command)
+
+    assert rejected.value.code == "LANE_CANDIDATE_INVALID"
+
+
+def test_fixed_candidate_rejects_git_admin_symlink_no_follow(lifecycle_factory):
+    lease = _advance(lifecycle_factory, _acquire(lifecycle_factory), "ACTIVE")
+    command = _transition_command(lifecycle_factory, lease, "FIXED_CANDIDATE")
+    lane = Path(lease["laneRoot"])
+    git_admin = lane / ".git"
+    moved_admin = lane / ".git-real"
+    git_admin.rename(moved_admin)
+    git_admin.symlink_to(moved_admin, target_is_directory=True)
 
     with pytest.raises(ControlledCoordinationError) as rejected:
         _transition(lifecycle_factory, command)

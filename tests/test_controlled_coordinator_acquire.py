@@ -13,6 +13,7 @@ import pytest
 import yaml
 
 from evolution_harness import controlled_coordinator
+from evolution_harness import controlled_write_guard
 from evolution_harness.authority import build_authority_snapshot
 from evolution_harness.controlled_coordinator import (
     acquire_lane_lease,
@@ -124,6 +125,21 @@ def _populate_controlled_authority(
         _fixture_descriptor(controlled_factory, suffix)
         for suffix in ("a", "b", "c", "active-a", "middle", "target")
     ]
+    descriptor_review_variants = [
+        controlled_factory.descriptor(
+            **{
+                **{
+                    key: value
+                    for key, value in descriptors[0].items()
+                    if key != "descriptorDigest"
+                },
+                "reviewPolicy": {
+                    "reviewerRole": "lifecycle-controller",
+                    "minimumVerdict": "GO_ZERO_FINDINGS",
+                },
+            }
+        )
+    ]
     contract_digest = "sha256:" + "2" * 64
     envelope_digests = []
     for max_lanes in (1, 2, 3):
@@ -188,6 +204,7 @@ def _populate_controlled_authority(
             "authorizationEnvelopeDigest": sorted(set(envelope_digests)),
             "sliceDescriptorDigests": sorted([
                 *[[item["descriptorDigest"]] for item in descriptors],
+                *[[item["descriptorDigest"]] for item in descriptor_review_variants],
                 sorted([descriptors[3]["descriptorDigest"], descriptors[4]["descriptorDigest"]]),
             ]),
             "conflictPolicyVersion": ["controlled-conflict-policy/v1"],
@@ -251,11 +268,16 @@ class AcquisitionFactory:
         snapshot_changes: dict | None = None,
         lane_root: Path | None = None,
         additional_descriptors: list[dict] | None = None,
+        descriptor_changes: dict | None = None,
         create_lane: bool = True,
     ) -> dict:
         suffix = slice_id.removeprefix("slice:neutral-")
         descriptor = _fixture_descriptor(self.controlled_factory, suffix)
-        if descriptor["ownerSet"] != [owner] or descriptor["exactWriteSet"] != [exact_write_set]:
+        if (
+            descriptor["ownerSet"] != [owner]
+            or descriptor["exactWriteSet"] != [exact_write_set]
+            or descriptor_changes
+        ):
             descriptor = self.controlled_factory.descriptor(
                 sliceId=slice_id,
                 ownerSet=[owner],
@@ -263,6 +285,7 @@ class AcquisitionFactory:
                 exactWriteSet=[exact_write_set],
                 ephemeralWriteSet=[f"build/{slice_id.removeprefix('slice:')}"],
                 authorityReferences=["status.md"],
+                **(descriptor_changes or {}),
             )
         request_descriptors = [descriptor, *(additional_descriptors or [])]
         live = build_authority_snapshot(
@@ -1149,6 +1172,104 @@ def test_source_head_drift_rejects_acquisition(acquisition_factory):
         )
 
     assert caught.value.code == "SOURCE_HEAD_CHANGED"
+
+
+def test_source_head_uses_absolute_git_and_ignores_fake_path(
+    acquisition_factory, monkeypatch, tmp_path
+):
+    real_head = _git(acquisition_factory.source_root, "rev-parse", "HEAD")
+
+    fake_bin = tmp_path / "fake-bin"
+    fake_bin.mkdir()
+    fake_git = fake_bin / "git"
+    fake_git.write_text(
+        "#!/bin/sh\n"
+        'case "$*" in\n'
+        f"  *--show-toplevel*) printf '%s\\n' {acquisition_factory.source_root!s} ;;\n"
+        "  *\"rev-parse HEAD\"*) printf '%s\\n' " + "0" * 40 + " ;;\n"
+        "  *) exit 91 ;;\n"
+        "esac\n",
+        encoding="utf-8",
+    )
+    fake_git.chmod(0o755)
+    monkeypatch.setenv("PATH", str(fake_bin))
+
+    assert controlled_coordinator._git_identity(
+        acquisition_factory.source_root
+    ) == (acquisition_factory.source_root, real_head)
+
+
+def test_source_head_ignores_ambient_git_repository_and_object_view(
+    acquisition_factory, monkeypatch, tmp_path
+):
+    shadow = tmp_path / "ambient-shadow"
+    subprocess.run(
+        ["/usr/bin/git", "clone", "-q", str(acquisition_factory.source_root), str(shadow)],
+        check=True,
+    )
+    (acquisition_factory.source_root / "head-drift.txt").write_text(
+        "changed\n", encoding="utf-8"
+    )
+    _git(acquisition_factory.source_root, "add", "head-drift.txt")
+    _git(acquisition_factory.source_root, "commit", "-qm", "head drift")
+    real_head = _git(acquisition_factory.source_root, "rev-parse", "HEAD")
+    monkeypatch.setenv("GIT_DIR", str(shadow / ".git"))
+    monkeypatch.setenv("GIT_WORK_TREE", str(acquisition_factory.source_root))
+    monkeypatch.setenv("GIT_OBJECT_DIRECTORY", str(shadow / ".git" / "objects"))
+    monkeypatch.setenv(
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        str(acquisition_factory.source_root / ".git" / "objects"),
+    )
+
+    assert controlled_coordinator._git_identity(
+        acquisition_factory.source_root
+    ) == (acquisition_factory.source_root, real_head)
+
+
+def test_registered_source_git_admin_symlink_is_rejected_no_follow(
+    acquisition_factory,
+):
+    command = acquisition_factory.acquire()
+    git_admin = acquisition_factory.source_root / ".git"
+    moved_admin = acquisition_factory.source_root / ".git-real"
+    git_admin.rename(moved_admin)
+    git_admin.symlink_to(moved_admin, target_is_directory=True)
+
+    with pytest.raises(ControlledCoordinationError) as caught:
+        acquire_lane_lease(
+            acquisition_factory.repository_root,
+            acquisition_factory.source_root,
+            command,
+        )
+
+    assert caught.value.code == "SOURCE_HEAD_UNAVAILABLE"
+
+
+def test_registered_source_path_swap_during_git_read_fails_closed(
+    acquisition_factory, monkeypatch
+):
+    source = acquisition_factory.source_root
+    moved = source.with_name(source.name + "-moved")
+    original_run = controlled_write_guard.subprocess.run
+    swapped = False
+
+    def swap_after_git(*args, **kwargs):
+        nonlocal swapped
+        result = original_run(*args, **kwargs)
+        if not swapped:
+            source.rename(moved)
+            source.mkdir()
+            swapped = True
+        return result
+
+    monkeypatch.setattr(
+        controlled_write_guard.subprocess, "run", swap_after_git
+    )
+
+    with pytest.raises(ControlledCoordinationError) as caught:
+        controlled_coordinator._git_identity(source)
+
+    assert caught.value.code == "SOURCE_HEAD_UNAVAILABLE"
 
 
 @pytest.mark.parametrize("mutation", ["changed", "missing", "symlink"])

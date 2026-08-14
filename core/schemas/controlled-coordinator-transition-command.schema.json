@@ -29,7 +29,7 @@
     },
     "lifecycleAuthorityProof": {
       "type": "object",
-      "required": ["authorityId", "authorityReference", "authorityDigest", "attemptId", "expectedState", "nextState", "candidateIdentity", "reviewBindingDigest", "reviewEvidenceDigest", "reviewerId", "reviewerAuthorityReference", "reviewerAuthorityDigest", "assertedAt", "signatureAlgorithm", "signatureFormat", "signature", "proofDigest"],
+      "required": ["authorityId", "authorityReference", "authorityDigest", "attemptId", "expectedState", "nextState", "candidateIdentity", "reviewBindingDigest", "reviewEvidenceDigest", "reviewerAuthorityBindings", "assertedAt", "signatureAlgorithm", "signatureFormat", "signature", "proofDigest"],
       "properties": {
         "authorityId": {"$ref": "#/$defs/id"},
         "authorityReference": {"type": "string", "minLength": 1},
@@ -40,14 +40,24 @@
         "candidateIdentity": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/candidateIdentity"}]},
         "reviewBindingDigest": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/digest"}]},
         "reviewEvidenceDigest": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/digest"}]},
-        "reviewerId": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/id"}]},
-        "reviewerAuthorityReference": {"anyOf": [{"type": "null"}, {"type": "string", "minLength": 1}]},
-        "reviewerAuthorityDigest": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/digest"}]},
+        "reviewerAuthorityBindings": {"type": "array", "items": {"$ref": "#/$defs/reviewerAuthorityBinding"}, "uniqueItems": true},
         "assertedAt": {"type": "string", "minLength": 1},
         "signatureAlgorithm": {"const": "ED25519"},
         "signatureFormat": {"const": "OPENSSH_SSHSIG_V1"},
         "signature": {"$ref": "#/$defs/signature"},
         "proofDigest": {"$ref": "#/$defs/digest"}
+      },
+      "additionalProperties": false
+    },
+    "reviewerAuthorityBinding": {
+      "type": "object",
+      "required": ["reviewerRole", "reviewerId", "reviewerAuthorityReference", "reviewerAuthorityDigest", "reviewBindingDigest"],
+      "properties": {
+        "reviewerRole": {"$ref": "#/$defs/id"},
+        "reviewerId": {"$ref": "#/$defs/id"},
+        "reviewerAuthorityReference": {"type": "string", "minLength": 1},
+        "reviewerAuthorityDigest": {"$ref": "#/$defs/digest"},
+        "reviewBindingDigest": {"$ref": "#/$defs/digest"}
       },
       "additionalProperties": false
     },
@@ -87,7 +97,7 @@
     "schemaVersion", "projectExecutionKey", "leaseId", "attemptId",
     "fencingToken", "expectedState", "nextState",
     "authoritySnapshotFingerprint", "candidateIdentity",
-    "processQuiescence", "lifecycleAuthorityProof", "reviewEvidence", "commandDigest"
+    "processQuiescence", "lifecycleAuthorityProof", "reviewEvidenceSet", "commandDigest"
   ],
   "properties": {
     "schemaVersion": {"const": "controlled-coordinator-transition-command/v1"},
@@ -101,7 +111,7 @@
     "candidateIdentity": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/candidateIdentity"}]},
     "processQuiescence": {"$ref": "#/$defs/processQuiescence"},
     "lifecycleAuthorityProof": {"$ref": "#/$defs/lifecycleAuthorityProof"},
-    "reviewEvidence": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/reviewEvidence"}]},
+    "reviewEvidenceSet": {"type": "array", "items": {"$ref": "#/$defs/reviewEvidence"}, "uniqueItems": true},
     "commandDigest": {"$ref": "#/$defs/digest"}
   },
   "additionalProperties": false

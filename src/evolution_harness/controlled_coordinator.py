@@ -6,6 +6,7 @@ import re
 import stat
 import subprocess
 import tempfile
+from datetime import datetime
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any
@@ -23,6 +24,11 @@ from .controlled_coordinator_inputs import (
     normalize_transition_command,
 )
 from .coordinator_state import CoordinatorStateStore
+from .controlled_write_guard import (
+    _close_git_boundary,
+    _open_git_boundary,
+    _run_git,
+)
 from .hashing import canonical_json_bytes, sha256_bytes
 from .registration import ProjectRegistrationError, load_project_registration
 
@@ -220,26 +226,48 @@ def inspect_project_coordinator(
 
 
 def _git_identity(source_root: Path) -> tuple[Path, str]:
+    source_descriptor = -1
+    boundary = None
     try:
+        source_descriptor, observed = _open_absolute_directory_no_follow(source_root)
+        source_identity = (observed.st_dev, observed.st_ino, stat.S_IFMT(observed.st_mode))
+        boundary = _open_git_boundary(
+            source_descriptor,
+            source_root,
+            source_identity,
+            error_code="SOURCE_HEAD_UNAVAILABLE",
+            error_message="registered source Git identity is not physically sealed",
+        )
         top_level = Path(
-            subprocess.run(
-                ["git", "-C", str(source_root), "rev-parse", "--show-toplevel"],
-                check=True,
-                capture_output=True,
-                text=True,
-            ).stdout.strip()
-        ).resolve()
-        head = subprocess.run(
-            ["git", "-C", str(source_root), "rev-parse", "HEAD"],
-            check=True,
-            capture_output=True,
-            text=True,
-        ).stdout.strip()
-    except (OSError, subprocess.CalledProcessError) as exc:
+            _git_output_line(_run_git(boundary, "rev-parse", "--show-toplevel"))
+        )
+        head = _git_output_line(_run_git(boundary, "rev-parse", "HEAD"))
+    except (ControlledCoordinationError, OSError, ValueError) as exc:
+        if isinstance(exc, ControlledCoordinationError) and exc.code == "SOURCE_HEAD_UNAVAILABLE":
+            raise
         raise ControlledCoordinationError(
             "SOURCE_HEAD_UNAVAILABLE", "registered source must be a readable Git repository"
         ) from exc
+    finally:
+        _close_git_boundary(boundary)
+        if source_descriptor >= 0:
+            os.close(source_descriptor)
     return top_level, head
+
+
+def _git_output_line(
+    completed: subprocess.CompletedProcess[bytes], *, allow_empty: bool = False
+) -> str:
+    try:
+        value = completed.stdout.decode("utf-8", "strict")
+    except UnicodeDecodeError as exc:
+        raise ValueError("Git evidence is not UTF-8") from exc
+    if not value.endswith("\n") or value.count("\n") != 1 or "\x00" in value:
+        raise ValueError("Git evidence is not exactly one canonical line")
+    value = value[:-1]
+    if not allow_empty and not value:
+        raise ValueError("Git evidence line is empty")
+    return value
 
 
 _DIRECTORY_FLAGS = (
@@ -831,12 +859,11 @@ def _lifecycle_signature_payload(command: dict[str, Any]) -> dict[str, Any]:
 
 def _review_signature_payload(
     command: dict[str, Any],
+    review: dict[str, Any],
     *,
     required_reviewers: list[str],
     minimum_review_verdict: str,
 ) -> dict[str, Any]:
-    review = command["reviewEvidence"]
-    assert review is not None
     return {
         "schemaVersion": "controlled-review-signature-payload/v1",
         "projectExecutionKey": command["projectExecutionKey"],
@@ -853,6 +880,165 @@ def _review_signature_payload(
         "requiredReviewerPolicy": required_reviewers,
         "minimumReviewVerdict": minimum_review_verdict,
     }
+
+
+def _acquired_review_policy(
+    acquire_command: dict[str, Any], lease: dict[str, Any]
+) -> tuple[list[str], str]:
+    plan = acquire_command["executionPlan"]
+    requirements = plan["executionRequirements"]
+    slice_requirements = [
+        item
+        for item in requirements["sliceRequirements"]
+        if item["sliceId"] == lease["sliceId"]
+    ]
+    required_reviewers = requirements["requiredReviewers"]
+    minimum_verdict = requirements["minimumReviewVerdict"]
+    if (
+        len(slice_requirements) != 1
+        or required_reviewers != sorted(set(required_reviewers))
+        or not required_reviewers
+        or slice_requirements[0]["reviewPolicy"]["reviewerRole"]
+        not in required_reviewers
+        or slice_requirements[0]["reviewPolicy"]["minimumVerdict"]
+        != minimum_verdict
+    ):
+        raise ControlledCoordinationError(
+            "REVIEWER_POLICY_MISMATCH",
+            "acquired execution plan has no complete reviewer policy for the lane",
+        )
+    return list(required_reviewers), minimum_verdict
+
+
+def _review_binding_digest(
+    command: dict[str, Any], review: dict[str, Any]
+) -> str:
+    return _sha256(
+        {
+            "candidateIdentity": command["candidateIdentity"],
+            "projectExecutionKey": command["projectExecutionKey"],
+            "leaseId": command["leaseId"],
+            "attemptId": command["attemptId"],
+            "fencingToken": command["fencingToken"],
+            "authoritySnapshotFingerprint": command[
+                "authoritySnapshotFingerprint"
+            ],
+            "reviewerId": review["reviewerId"],
+            "reviewerRole": review["reviewerRole"],
+            "reviewerAuthorityReference": review["reviewerAuthorityReference"],
+            "reviewerAuthorityDigest": review["reviewerAuthorityDigest"],
+        }
+    )
+
+
+def _validate_and_verify_review_set(
+    source_root: Path,
+    live_snapshot: dict[str, Any],
+    acquire_command: dict[str, Any],
+    lease: dict[str, Any],
+    command: dict[str, Any],
+) -> None:
+    reviews = command["reviewEvidenceSet"]
+    proof = command["lifecycleAuthorityProof"]
+    required_reviewers, minimum_verdict = _acquired_review_policy(
+        acquire_command, lease
+    )
+    roles = [review["reviewerRole"] for review in reviews]
+    reviewer_ids = [review["reviewerId"] for review in reviews]
+    if (
+        roles != required_reviewers
+        or len(roles) != len(set(roles))
+        or len(reviewer_ids) != len(set(reviewer_ids))
+    ):
+        raise ControlledCoordinationError(
+            "REVIEWER_POLICY_MISMATCH",
+            "review evidence roles do not exactly match the acquired execution plan",
+        )
+
+    expected_bindings: list[dict[str, Any]] = []
+    for review in reviews:
+        binding_digest = _review_binding_digest(command, review)
+        expected_evidence_digest = _sha256(
+            {
+                key: value
+                for key, value in review.items()
+                if key not in {"signature", "evidenceDigest"}
+            }
+        )
+        try:
+            reviewed_at = datetime.fromisoformat(
+                review["reviewedAt"].replace("Z", "+00:00")
+            )
+            asserted_at = datetime.fromisoformat(
+                proof["assertedAt"].replace("Z", "+00:00")
+            )
+        except ValueError as exc:
+            raise ControlledCoordinationError(
+                "REVIEWER_POLICY_MISMATCH",
+                "review evidence time is not valid for lifecycle verification",
+            ) from exc
+        if (
+            review["reviewerId"] != review["reviewerRole"]
+            or review["candidateIdentity"] != command["candidateIdentity"]
+            or review["candidateIdentity"] != lease["candidateIdentity"]
+            or review["projectExecutionKey"] != lease["projectExecutionKey"]
+            or review["leaseId"] != lease["leaseId"]
+            or review["attemptId"] != lease["attemptId"]
+            or review["fencingToken"] != lease["fencingToken"]
+            or review["authoritySnapshotFingerprint"]
+            != live_snapshot["snapshotFingerprint"]
+            or review["verdict"] != minimum_verdict
+            or review["findingCounts"] != {"p0": 0, "p1": 0, "p2": 0}
+            or reviewed_at > asserted_at
+            or review["reviewBindingDigest"] != binding_digest
+            or review["evidenceDigest"] != expected_evidence_digest
+        ):
+            raise ControlledCoordinationError(
+                "REVIEWER_POLICY_MISMATCH",
+                "review evidence does not satisfy the acquired candidate policy",
+            )
+        binding = {
+            "reviewerRole": review["reviewerRole"],
+            "reviewerId": review["reviewerId"],
+            "reviewerAuthorityReference": review["reviewerAuthorityReference"],
+            "reviewerAuthorityDigest": review["reviewerAuthorityDigest"],
+            "reviewBindingDigest": binding_digest,
+        }
+        expected_bindings.append(binding)
+        reviewer_authority = _current_authority_record(
+            live_snapshot,
+            reference=review["reviewerAuthorityReference"],
+            digest=review["reviewerAuthorityDigest"],
+            authority_id=review["reviewerId"],
+            code="REVIEWER_AUTHORITY_NOT_CURRENT",
+        )
+        reviewer_public_key = _read_current_authority_bytes(
+            source_root, reviewer_authority
+        )
+        _verify_sshsig_signature(
+            reviewer_public_key,
+            review["signature"],
+            _review_signature_payload(
+                command,
+                review,
+                required_reviewers=required_reviewers,
+                minimum_review_verdict=minimum_verdict,
+            ),
+            identity=review["reviewerId"],
+            namespace=_REVIEW_SIGNATURE_NAMESPACE,
+            invalid_code="REVIEW_SIGNATURE_INVALID",
+        )
+
+    if (
+        proof["reviewerAuthorityBindings"] != expected_bindings
+        or proof["reviewBindingDigest"]
+        != _sha256([binding["reviewBindingDigest"] for binding in expected_bindings])
+        or proof["reviewEvidenceDigest"] != _sha256(reviews)
+    ):
+        raise ControlledCoordinationError(
+            "REVIEWER_POLICY_MISMATCH",
+            "lifecycle proof does not aggregate the complete review evidence set",
+        )
 
 
 def _validate_lane_physical_identity(lease: dict[str, Any]) -> None:
@@ -886,29 +1072,73 @@ def _validate_live_lane_candidate(
     lease: dict[str, Any], candidate: dict[str, Any]
 ) -> None:
     lane_root = Path(lease["laneRoot"])
-    _validate_lane_physical_identity(lease)
-
-    def git(*arguments: str) -> str:
+    lane_descriptor = -1
+    boundary = None
+    try:
         try:
-            return subprocess.run(
-                ["git", "-C", str(lane_root), *arguments],
-                check=True,
-                capture_output=True,
-                text=True,
-                timeout=10,
-            ).stdout.strip()
-        except (OSError, subprocess.SubprocessError) as exc:
+            lane_descriptor, observed = _open_absolute_directory_no_follow(lane_root)
+        except OSError as exc:
             raise ControlledCoordinationError(
-                "LANE_CANDIDATE_INVALID",
-                "candidate-bound lane Git evidence is not readable",
+                "LANE_ROOT_IDENTITY_CHANGED",
+                "leased lane root is no longer an existing no-follow directory",
             ) from exc
-
-    top_level = git("rev-parse", "--show-toplevel")
-    live_head = git("rev-parse", "HEAD")
-    commit = git("rev-parse", "--verify", f"{candidate['commit']}^{{commit}}")
-    parents = git("show", "-s", "--format=%P", candidate["commit"]).split()
-    tree = git("rev-parse", f"{candidate['commit']}^{{tree}}")
-    _validate_lane_physical_identity(lease)
+        durable = lease["lanePhysicalIdentity"]
+        lane_identity = (observed.st_dev, observed.st_ino, stat.S_IFMT(observed.st_mode))
+        if lane_identity != (
+            durable["device"],
+            durable["inode"],
+            stat.S_IFDIR,
+        ) or durable["type"] != "DIRECTORY":
+            raise ControlledCoordinationError(
+                "LANE_ROOT_IDENTITY_CHANGED",
+                "leased lane root no longer has its durable physical identity",
+            )
+        boundary = _open_git_boundary(
+            lane_descriptor,
+            lane_root,
+            lane_identity,
+            error_code="LANE_CANDIDATE_INVALID",
+            error_message="candidate-bound lane Git identity is not physically sealed",
+        )
+        top_level = _git_output_line(
+            _run_git(boundary, "rev-parse", "--show-toplevel")
+        )
+        live_head = _git_output_line(_run_git(boundary, "rev-parse", "HEAD"))
+        commit = _git_output_line(
+            _run_git(
+                boundary,
+                "rev-parse",
+                "--verify",
+                f"{candidate['commit']}^{{commit}}",
+            )
+        )
+        parents = _git_output_line(
+            _run_git(
+                boundary,
+                "show",
+                "-s",
+                "--format=%P",
+                candidate["commit"],
+            ),
+            allow_empty=True,
+        ).split()
+        tree = _git_output_line(
+            _run_git(boundary, "rev-parse", f"{candidate['commit']}^{{tree}}")
+        )
+    except (ControlledCoordinationError, OSError, ValueError) as exc:
+        if isinstance(exc, ControlledCoordinationError) and exc.code in {
+            "LANE_CANDIDATE_INVALID",
+            "LANE_ROOT_IDENTITY_CHANGED",
+        }:
+            raise
+        raise ControlledCoordinationError(
+            "LANE_CANDIDATE_INVALID",
+            "candidate-bound lane Git evidence is not readable",
+        ) from exc
+    finally:
+        _close_git_boundary(boundary)
+        if lane_descriptor >= 0:
+            os.close(lane_descriptor)
     if (
         top_level != str(lane_root)
         or live_head != candidate["commit"]
@@ -1317,44 +1547,17 @@ def transition_lane_lease(
                 invalid_code="LIFECYCLE_SIGNATURE_INVALID",
             )
             if normalized["nextState"] == "REVIEW_GO":
-                review = normalized["reviewEvidence"]
-                assert review is not None
-                required_reviewers = acquire_command["authorizationEnvelope"][
-                    "requiredReviewers"
-                ]
-                minimum_verdict = acquire_command["authorizationEnvelope"][
-                    "minimumReviewVerdict"
-                ]
-                if (
-                    required_reviewers != [review["reviewerRole"]]
-                    or review["reviewerId"] != review["reviewerRole"]
-                    or review["verdict"] != minimum_verdict
-                ):
+                if normalized["candidateIdentity"] != lease["candidateIdentity"]:
                     raise ControlledCoordinationError(
-                        "REVIEWER_POLICY_MISMATCH",
-                        "review evidence does not satisfy the acquired reviewer policy",
+                        "CANDIDATE_IDENTITY_MISMATCH",
+                        "Candidate/Parent/Tree identity changed after fixation",
                     )
-                reviewer_authority = _current_authority_record(
+                _validate_and_verify_review_set(
+                    source,
                     live_snapshot,
-                    reference=review["reviewerAuthorityReference"],
-                    digest=review["reviewerAuthorityDigest"],
-                    authority_id=review["reviewerId"],
-                    code="REVIEWER_AUTHORITY_NOT_CURRENT",
-                )
-                reviewer_public_key = _read_current_authority_bytes(
-                    source, reviewer_authority
-                )
-                _verify_sshsig_signature(
-                    reviewer_public_key,
-                    review["signature"],
-                    _review_signature_payload(
-                        normalized,
-                        required_reviewers=required_reviewers,
-                        minimum_review_verdict=minimum_verdict,
-                    ),
-                    identity=review["reviewerId"],
-                    namespace=_REVIEW_SIGNATURE_NAMESPACE,
-                    invalid_code="REVIEW_SIGNATURE_INVALID",
+                    acquire_command,
+                    lease,
+                    normalized,
                 )
             if exact_replay is not None:
                 replay_candidate = normalized["candidateIdentity"]

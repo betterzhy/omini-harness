@@ -33,6 +33,26 @@ def _git(root: Path, *args: str, check: bool = True) -> subprocess.CompletedProc
     )
 
 
+def _linked_git_boundary(tmp_path):
+    source = tmp_path / "linked-source"
+    lane = tmp_path / "linked-lane"
+    source.mkdir()
+    _git(source, "init", "-q")
+    _git(source, "config", "user.name", "Linked Boundary Test")
+    _git(source, "config", "user.email", "linked@example.test")
+    (source / "tracked.txt").write_text("base\n", encoding="utf-8")
+    _git(source, "add", "tracked.txt")
+    _git(source, "commit", "-qm", "base")
+    _git(source, "worktree", "add", "-q", str(lane))
+    lane_descriptor, observed = guard._open_absolute_directory_no_follow(lane)
+    boundary = guard._open_git_boundary(
+        lane_descriptor,
+        lane,
+        guard._physical_identity(observed),
+    )
+    return source, lane, lane_descriptor, boundary
+
+
 @dataclass(frozen=True)
 class GuardedLane:
     root: Path
@@ -469,6 +489,123 @@ def test_git_admin_symlink_is_rejected_no_follow(guarded_lane):
     finally:
         git_admin.unlink(missing_ok=True)
         moved_admin.rename(git_admin)
+
+    assert caught.value.code == "LANE_INVENTORY_UNAVAILABLE"
+
+
+def test_linked_worktree_uses_sealed_commondir_and_common_object_root(tmp_path):
+    source, lane, lane_descriptor, boundary = _linked_git_boundary(tmp_path)
+    try:
+        result = guard._run_git(boundary, "rev-parse", "--show-toplevel", "HEAD")
+    finally:
+        guard._close_git_boundary(boundary)
+        os.close(lane_descriptor)
+
+    assert result.stdout.decode("utf-8").splitlines() == [
+        str(lane),
+        _git(source, "rev-parse", "HEAD").stdout.strip(),
+    ]
+
+
+@pytest.mark.parametrize(
+    "target",
+    ["lane", "dot-git-file", "admin-root", "commondir-file", "common-objects"],
+)
+def test_linked_worktree_git_boundary_rejects_physical_path_swap(
+    tmp_path, target
+):
+    _source, lane, lane_descriptor, boundary = _linked_git_boundary(tmp_path)
+    targets = {
+        "lane": lane,
+        "dot-git-file": lane / ".git",
+        "admin-root": boundary.admin_root,
+        "commondir-file": boundary.admin_root / "commondir",
+        "common-objects": boundary.common_admin_root / "objects",
+    }
+    selected = targets[target]
+    moved = selected.with_name(selected.name + "-moved")
+    selected.rename(moved)
+    if moved.is_dir():
+        selected.symlink_to(moved, target_is_directory=True)
+    else:
+        selected.symlink_to(moved)
+    try:
+        with pytest.raises(ControlledCoordinationError) as caught:
+            guard._run_git(boundary, "rev-parse", "HEAD")
+    finally:
+        guard._close_git_boundary(boundary)
+        os.close(lane_descriptor)
+
+    assert caught.value.code == "LANE_INVENTORY_UNAVAILABLE"
+
+
+@pytest.mark.parametrize("target", ["lane", "admin-root", "common-objects"])
+def test_linked_worktree_git_boundary_rechecks_paths_after_git(
+    tmp_path, monkeypatch, target
+):
+    _source, lane, lane_descriptor, boundary = _linked_git_boundary(tmp_path)
+    original_run = guard.subprocess.run
+    selected = {
+        "lane": lane,
+        "admin-root": boundary.admin_root,
+        "common-objects": boundary.common_admin_root / "objects",
+    }[target]
+    moved = selected.with_name(selected.name + "-moved")
+
+    def swap_after_git(*args, **kwargs):
+        result = original_run(*args, **kwargs)
+        selected.rename(moved)
+        selected.mkdir()
+        return result
+
+    monkeypatch.setattr(guard.subprocess, "run", swap_after_git)
+    try:
+        with pytest.raises(ControlledCoordinationError) as caught:
+            guard._run_git(boundary, "rev-parse", "HEAD")
+    finally:
+        guard._close_git_boundary(boundary)
+        os.close(lane_descriptor)
+
+    assert caught.value.code == "LANE_INVENTORY_UNAVAILABLE"
+
+
+def test_git_boundary_rejects_on_disk_object_alternates(tmp_path):
+    source = tmp_path / "alternate-source"
+    source.mkdir()
+    _git(source, "init", "-q")
+    alternate = source / ".git" / "objects" / "info" / "alternates"
+    alternate.parent.mkdir(exist_ok=True)
+    alternate.write_text(str(tmp_path / "foreign-objects") + "\n", encoding="utf-8")
+    descriptor, observed = guard._open_absolute_directory_no_follow(source)
+    try:
+        with pytest.raises(ControlledCoordinationError) as caught:
+            guard._open_git_boundary(
+                descriptor,
+                source,
+                guard._physical_identity(observed),
+            )
+    finally:
+        os.close(descriptor)
+
+    assert caught.value.code == "LANE_INVENTORY_UNAVAILABLE"
+
+
+def test_git_boundary_rejects_non_system_git_executable(
+    guarded_lane, monkeypatch, tmp_path
+):
+    fake_git = tmp_path / "git"
+    fake_git.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    fake_git.chmod(0o755)
+    monkeypatch.setattr(guard, "_GIT_PATH", str(fake_git))
+
+    with pytest.raises(ControlledCoordinationError) as caught:
+        guard.run_guarded_command(
+            guarded_lane.lease,
+            guarded_lane.root,
+            ["/usr/bin/true"],
+            cwd=guarded_lane.root,
+            environment=guarded_lane.environment,
+        )
 
     assert caught.value.code == "LANE_INVENTORY_UNAVAILABLE"
 

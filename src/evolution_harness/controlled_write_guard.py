@@ -31,6 +31,8 @@ _SEALED_GIT_ENVIRONMENT = {
     "GIT_CONFIG_GLOBAL": "/dev/null",
     "GIT_CONFIG_NOSYSTEM": "1",
     "GIT_OPTIONAL_LOCKS": "0",
+    "GIT_NO_LAZY_FETCH": "1",
+    "GIT_NO_REPLACE_OBJECTS": "1",
     "GIT_TERMINAL_PROMPT": "0",
     "HOME": "/var/empty",
     "LANG": "C",
@@ -110,6 +112,18 @@ class _GitBoundary:
     admin_root: Path
     admin_descriptor: int
     admin_identity: tuple[int, int, int]
+    commondir_descriptor: int
+    commondir_identity: tuple[int, int, int] | None
+    commondir_contents: bytes | None
+    common_admin_root: Path
+    common_admin_descriptor: int
+    common_admin_identity: tuple[int, int, int]
+    objects_descriptor: int
+    objects_identity: tuple[int, int, int]
+    git_descriptor: int
+    git_identity: tuple[int, int, int]
+    error_code: str
+    error_message: str
 
 
 def _error(
@@ -337,12 +351,56 @@ def _read_small_descriptor(descriptor: int) -> bytes:
     return contents
 
 
+def _verify_no_git_object_alternates(objects_descriptor: int) -> None:
+    info_descriptor = -1
+    try:
+        try:
+            info_descriptor = os.open(
+                "info", _DIRECTORY_FLAGS, dir_fd=objects_descriptor
+            )
+        except FileNotFoundError:
+            return
+        try:
+            os.stat(
+                "alternates", dir_fd=info_descriptor, follow_symlinks=False
+            )
+        except FileNotFoundError:
+            return
+        raise OSError("Git object alternates are not a sealed object view")
+    finally:
+        if info_descriptor >= 0:
+            os.close(info_descriptor)
+
+
 def _open_git_boundary(
-    lane_descriptor: int, lane_root: Path, lane_identity: tuple[int, int, int]
+    lane_descriptor: int,
+    lane_root: Path,
+    lane_identity: tuple[int, int, int],
+    *,
+    error_code: str = "LANE_INVENTORY_UNAVAILABLE",
+    error_message: str = "Git administration path is not physically anchored",
 ) -> _GitBoundary:
     dot_git_descriptor = -1
     admin_descriptor = -1
+    commondir_descriptor = -1
+    common_admin_descriptor = -1
+    objects_descriptor = -1
+    git_descriptor = -1
     try:
+        if _GIT_PATH != "/usr/bin/git":
+            raise OSError("Git executable path is not the fixed system path")
+        named_git = os.stat(_GIT_PATH, follow_symlinks=False)
+        git_descriptor = os.open(_GIT_PATH, _READ_FLAGS)
+        opened_git = os.fstat(git_descriptor)
+        if (
+            not stat.S_ISREG(opened_git.st_mode)
+            or opened_git.st_uid != 0
+            or opened_git.st_gid != 0
+            or not stat.S_IMODE(opened_git.st_mode) & 0o111
+            or stat.S_IMODE(opened_git.st_mode) & (stat.S_IWGRP | stat.S_IWOTH)
+            or _physical_identity(named_git) != _physical_identity(opened_git)
+        ):
+            raise OSError("Git executable identity or ownership is unsafe")
         named = os.stat(".git", dir_fd=lane_descriptor, follow_symlinks=False)
         if stat.S_ISLNK(named.st_mode):
             raise OSError("Git administration path is a symlink")
@@ -372,6 +430,58 @@ def _open_git_boundary(
         else:
             raise OSError("Git administration path has an unsafe type")
 
+        try:
+            commondir_named = os.stat(
+                "commondir", dir_fd=admin_descriptor, follow_symlinks=False
+            )
+        except FileNotFoundError:
+            commondir_named = None
+        if commondir_named is None:
+            commondir_identity = None
+            commondir_contents = None
+            common_admin_root = admin_root
+            common_admin_descriptor = os.dup(admin_descriptor)
+        else:
+            if not stat.S_ISREG(commondir_named.st_mode):
+                raise OSError("Git commondir control path is not a regular file")
+            commondir_descriptor = os.open(
+                "commondir", _READ_FLAGS, dir_fd=admin_descriptor
+            )
+            opened_commondir = os.fstat(commondir_descriptor)
+            if _physical_identity(commondir_named) != _physical_identity(
+                opened_commondir
+            ):
+                raise OSError("Git commondir identity changed while opening")
+            commondir_identity = _physical_identity(opened_commondir)
+            commondir_contents = _read_small_descriptor(commondir_descriptor)
+            try:
+                commondir_link = commondir_contents.decode("utf-8", "strict")
+            except UnicodeDecodeError as exc:
+                raise OSError("Git commondir is not UTF-8") from exc
+            if (
+                not commondir_link.endswith("\n")
+                or commondir_link.count("\n") != 1
+                or "\x00" in commondir_link
+            ):
+                raise OSError("Git commondir is malformed")
+            raw_common = commondir_link.removesuffix("\n")
+            if not raw_common:
+                raise OSError("Git commondir is empty")
+            common_admin_root = _canonical_absolute(
+                Path(os.path.normpath(os.path.join(admin_root, raw_common))),
+                "Git common administration root",
+            )
+            common_admin_descriptor, _ = _open_absolute_directory_no_follow(
+                common_admin_root
+            )
+
+        opened_common_admin = os.fstat(common_admin_descriptor)
+        objects_descriptor = os.open(
+            "objects", _DIRECTORY_FLAGS, dir_fd=common_admin_descriptor
+        )
+        opened_objects = os.fstat(objects_descriptor)
+        _verify_no_git_object_alternates(objects_descriptor)
+
         opened_dot_git = os.fstat(dot_git_descriptor)
         opened_admin = os.fstat(admin_descriptor)
         if _physical_identity(named) != _physical_identity(opened_dot_git):
@@ -387,21 +497,35 @@ def _open_git_boundary(
             admin_root=admin_root,
             admin_descriptor=admin_descriptor,
             admin_identity=_physical_identity(opened_admin),
+            commondir_descriptor=commondir_descriptor,
+            commondir_identity=commondir_identity,
+            commondir_contents=commondir_contents,
+            common_admin_root=common_admin_root,
+            common_admin_descriptor=common_admin_descriptor,
+            common_admin_identity=_physical_identity(opened_common_admin),
+            objects_descriptor=objects_descriptor,
+            objects_identity=_physical_identity(opened_objects),
+            git_descriptor=git_descriptor,
+            git_identity=_physical_identity(opened_git),
+            error_code=error_code,
+            error_message=error_message,
         )
     except (ControlledCoordinationError, OSError, ValueError) as exc:
+        if objects_descriptor >= 0:
+            os.close(objects_descriptor)
+        if common_admin_descriptor >= 0:
+            os.close(common_admin_descriptor)
+        if commondir_descriptor >= 0:
+            os.close(commondir_descriptor)
+        if git_descriptor >= 0:
+            os.close(git_descriptor)
         if admin_descriptor >= 0:
             os.close(admin_descriptor)
         if dot_git_descriptor >= 0:
             os.close(dot_git_descriptor)
         if isinstance(exc, ControlledCoordinationError):
-            raise _error(
-                "LANE_INVENTORY_UNAVAILABLE",
-                "Git administration path is not physically anchored",
-            ) from exc
-        raise _error(
-            "LANE_INVENTORY_UNAVAILABLE",
-            "Git administration path is not physically anchored",
-        ) from exc
+            raise _error(error_code, error_message) from exc
+        raise _error(error_code, error_message) from exc
 
 
 def _close_git_boundary(boundary: _GitBoundary | None) -> None:
@@ -410,16 +534,38 @@ def _close_git_boundary(boundary: _GitBoundary | None) -> None:
     if boundary.admin_descriptor >= 0:
         os.close(boundary.admin_descriptor)
         boundary.admin_descriptor = -1
+    if boundary.objects_descriptor >= 0:
+        os.close(boundary.objects_descriptor)
+        boundary.objects_descriptor = -1
+    if boundary.common_admin_descriptor >= 0:
+        os.close(boundary.common_admin_descriptor)
+        boundary.common_admin_descriptor = -1
+    if boundary.commondir_descriptor >= 0:
+        os.close(boundary.commondir_descriptor)
+        boundary.commondir_descriptor = -1
     if boundary.dot_git_descriptor >= 0:
         os.close(boundary.dot_git_descriptor)
         boundary.dot_git_descriptor = -1
+    if boundary.git_descriptor >= 0:
+        os.close(boundary.git_descriptor)
+        boundary.git_descriptor = -1
 
 
 def _verify_git_boundary(boundary: _GitBoundary) -> None:
     named_lane_descriptor = -1
     named_dot_git_descriptor = -1
     named_admin_descriptor = -1
+    named_commondir_descriptor = -1
+    named_common_admin_descriptor = -1
+    named_objects_descriptor = -1
     try:
+        named_git = os.stat(_GIT_PATH, follow_symlinks=False)
+        if (
+            _physical_identity(os.fstat(boundary.git_descriptor))
+            != boundary.git_identity
+            or _physical_identity(named_git) != boundary.git_identity
+        ):
+            raise OSError("fixed Git executable identity changed")
         if _physical_identity(os.fstat(boundary.lane_descriptor)) != boundary.lane_identity:
             raise OSError("held lane identity changed")
         named_lane_descriptor, named_lane = _open_absolute_directory_no_follow(
@@ -463,14 +609,74 @@ def _verify_git_boundary(boundary: _GitBoundary) -> None:
             or _physical_identity(named_admin) != boundary.admin_identity
         ):
             raise OSError("Git administration root identity changed")
+        if boundary.commondir_descriptor >= 0:
+            named_commondir = os.stat(
+                "commondir",
+                dir_fd=boundary.admin_descriptor,
+                follow_symlinks=False,
+            )
+            named_commondir_descriptor = os.open(
+                "commondir", _READ_FLAGS, dir_fd=boundary.admin_descriptor
+            )
+            if (
+                boundary.commondir_identity is None
+                or _physical_identity(os.fstat(boundary.commondir_descriptor))
+                != boundary.commondir_identity
+                or _physical_identity(named_commondir)
+                != boundary.commondir_identity
+                or _physical_identity(os.fstat(named_commondir_descriptor))
+                != boundary.commondir_identity
+                or _read_small_descriptor(boundary.commondir_descriptor)
+                != boundary.commondir_contents
+            ):
+                raise OSError("Git commondir identity or contents changed")
+        else:
+            try:
+                os.stat(
+                    "commondir",
+                    dir_fd=boundary.admin_descriptor,
+                    follow_symlinks=False,
+                )
+            except FileNotFoundError:
+                pass
+            else:
+                raise OSError("Git commondir appeared during the sealed read")
+
+        named_common_admin_descriptor, named_common_admin = (
+            _open_absolute_directory_no_follow(boundary.common_admin_root)
+        )
+        if (
+            _physical_identity(os.fstat(boundary.common_admin_descriptor))
+            != boundary.common_admin_identity
+            or _physical_identity(named_common_admin)
+            != boundary.common_admin_identity
+        ):
+            raise OSError("Git common administration root identity changed")
+        named_objects = os.stat(
+            "objects",
+            dir_fd=boundary.common_admin_descriptor,
+            follow_symlinks=False,
+        )
+        named_objects_descriptor = os.open(
+            "objects", _DIRECTORY_FLAGS, dir_fd=boundary.common_admin_descriptor
+        )
+        if (
+            _physical_identity(os.fstat(boundary.objects_descriptor))
+            != boundary.objects_identity
+            or _physical_identity(named_objects) != boundary.objects_identity
+            or _physical_identity(os.fstat(named_objects_descriptor))
+            != boundary.objects_identity
+        ):
+            raise OSError("Git common object root identity changed")
+        _verify_no_git_object_alternates(boundary.objects_descriptor)
     except OSError as exc:
-        raise _error(
-            "LANE_INVENTORY_UNAVAILABLE",
-            "Git worktree or administration identity changed",
-        ) from exc
+        raise _error(boundary.error_code, boundary.error_message) from exc
     finally:
         for descriptor in (
             named_admin_descriptor,
+            named_objects_descriptor,
+            named_common_admin_descriptor,
+            named_commondir_descriptor,
             named_dot_git_descriptor,
             named_lane_descriptor,
         ):
@@ -495,6 +701,7 @@ def _run_git(
             env=_SEALED_GIT_ENVIRONMENT,
             check=False,
             capture_output=True,
+            timeout=10,
         )
         _verify_git_boundary(boundary)
         if check and completed.returncode != 0:
@@ -505,7 +712,7 @@ def _run_git(
                 stderr=completed.stderr,
             )
         return completed
-    except (OSError, subprocess.CalledProcessError) as exc:
+    except (OSError, subprocess.SubprocessError) as exc:
         raise _error("LANE_INVENTORY_UNAVAILABLE", "Git lane inventory failed") from exc
 
 

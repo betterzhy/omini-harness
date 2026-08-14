@@ -4,6 +4,7 @@ import copy
 
 import pytest
 
+from evolution_harness.controlled_coordinator_inputs import PROTECTED_ACTION_CLASSES
 from evolution_harness.controlled_inputs import ControlledPlanningError
 from evolution_harness.controlled_planner import (
     build_authorization_decision,
@@ -226,17 +227,7 @@ def test_1100_node_dependency_cycle_fails_closed_without_recursion_error(
 
 @pytest.mark.parametrize(
     "action_class",
-    [
-        "action:database-write",
-        "action:migration-apply",
-        "action:destructive",
-        "action:production-access",
-        "action:landing",
-        "action:wave-entry",
-        "action:push",
-        "action:release",
-        "action:deploy",
-    ],
+    sorted(PROTECTED_ACTION_CLASSES),
 )
 def test_protected_actions_are_hard_denied_even_when_the_envelope_permits_them(
     repository_root, controlled_factory, action_class

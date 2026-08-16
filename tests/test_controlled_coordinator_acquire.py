@@ -90,6 +90,59 @@ def _git(path: Path, *argv: str) -> str:
     ).stdout.strip()
 
 
+def _replace_head_with_worktree_tree(source: Path, *paths: str) -> str:
+    """Install a replace ref whose tree contains the selected working files."""
+    head = _git(source, "rev-parse", "HEAD")
+    _git(source, "add", *paths)
+    tree = _git(source, "write-tree")
+    replacement = subprocess.run(
+        [
+            "/usr/bin/git",
+            "-C",
+            str(source),
+            "-c",
+            "user.name=Authority View Test",
+            "-c",
+            "user.email=authority-view@example.invalid",
+            "commit-tree",
+            tree,
+            "-p",
+            head,
+        ],
+        check=True,
+        capture_output=True,
+        input="replacement authority view\n",
+        text=True,
+    ).stdout.strip()
+    _git(source, "reset", "-q", "HEAD", "--", *paths)
+    _git(source, "replace", head, replacement)
+    return head
+
+
+def _install_ambient_git_view(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, source: Path
+) -> Path:
+    invocation_log = tmp_path / "ambient-git-invocations"
+    fake_bin = tmp_path / "ambient-bin"
+    fake_bin.mkdir()
+    fake_git = fake_bin / "git"
+    fake_git.write_text(
+        "#!/bin/sh\n"
+        f"printf 'used\\n' >> {invocation_log!s}\n"
+        "exec /usr/bin/git \"$@\"\n",
+        encoding="utf-8",
+    )
+    fake_git.chmod(0o755)
+    alternate_objects = tmp_path / "ambient-alternate-objects"
+    alternate_objects.mkdir()
+    monkeypatch.setenv("PATH", str(fake_bin) + os.pathsep + "/usr/bin:/bin")
+    monkeypatch.setenv("GIT_DIR", str(source / ".git"))
+    monkeypatch.setenv("GIT_WORK_TREE", str(source))
+    monkeypatch.setenv("GIT_OBJECT_DIRECTORY", str(source / ".git" / "objects"))
+    monkeypatch.setenv("GIT_ALTERNATE_OBJECT_DIRECTORIES", str(alternate_objects))
+    return invocation_log
+
+
 def _fixture_descriptor(controlled_factory, suffix: str):
     changes = {}
     if suffix == "middle":
@@ -1409,6 +1462,39 @@ def test_acquire_rejects_real_development_authority_deny(
         "normalizedValue"
     ] == "DENY"
     assert caught.value.code == "DEVELOPMENT_AUTHORITY_DENIED"
+
+
+def test_acquire_rejects_uncommitted_development_authority_under_ambient_git_view(
+    acquisition_factory, monkeypatch, tmp_path
+):
+    status = acquisition_factory.source_root / "status.md"
+    status.write_text(
+        "# External Project Status\n\n"
+        "ProjectStage = DELIVERY\n"
+        "DevelopmentAuthorization = YES_UNCOMMITTED_AMBIENT_VIEW\n",
+        encoding="utf-8",
+    )
+    _replace_head_with_worktree_tree(acquisition_factory.source_root, "status.md")
+    invocation_log = _install_ambient_git_view(
+        monkeypatch, tmp_path, acquisition_factory.source_root
+    )
+
+    with pytest.raises(
+        (ControlledPlanningError, ControlledCoordinationError)
+    ) as caught:
+        command = acquisition_factory.acquire()
+        acquire_lane_lease(
+            acquisition_factory.repository_root,
+            acquisition_factory.source_root,
+            command,
+        )
+
+    assert caught.value.code in {
+        "AUTHORITY_SOURCE_NOT_CLEAN_GIT",
+        "ADMISSION_AUTHORITY_BINDING_MISMATCH",
+        "LIVE_AUTHORITY_SNAPSHOT_MISMATCH",
+    }
+    assert not invocation_log.exists()
 
 
 def test_same_key_changed_payload_and_terminal_replay_fail_closed(

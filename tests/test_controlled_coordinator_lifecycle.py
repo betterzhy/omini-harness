@@ -15,7 +15,12 @@ from evolution_harness import controlled_write_guard as write_guard
 from evolution_harness.authority import build_authority_snapshot
 from evolution_harness.controlled_coordinator_inputs import ControlledCoordinationError
 from evolution_harness.hashing import canonical_json_bytes, sha256_bytes
-from test_controlled_coordinator_acquire import AcquisitionFactory, _committed_source
+from test_controlled_coordinator_acquire import (
+    AcquisitionFactory,
+    _committed_source,
+    _install_ambient_git_view,
+    _replace_head_with_worktree_tree,
+)
 
 
 _SSH_KEYGEN = "/usr/bin/ssh-keygen"
@@ -1049,6 +1054,38 @@ def test_authority_drift_only_allows_explicit_stale_revocation(lifecycle_factory
     assert result["leaseRetained"] is True
     assert result["fencingToken"] == lease["fencingToken"]
     assert journal["nextFencingToken"] > lease["fencingToken"]
+
+
+def test_transition_does_not_admit_uncommitted_lifecycle_key_via_ambient_git_view(
+    lifecycle_factory, monkeypatch, tmp_path
+):
+    lease = _acquire(lifecycle_factory)
+    replacement_public_key = Path(
+        str(lifecycle_factory.reviewer_private_key) + ".pub"
+    ).read_text(encoding="utf-8")
+    key_type, key_body, *_ = replacement_public_key.split()
+    (lifecycle_factory.source_root / "lifecycle-authority-public.pem").write_text(
+        f"{key_type} {key_body}\n", encoding="utf-8"
+    )
+    _replace_head_with_worktree_tree(
+        lifecycle_factory.source_root, "lifecycle-authority-public.pem"
+    )
+    invocation_log = _install_ambient_git_view(
+        monkeypatch, tmp_path, lifecycle_factory.source_root
+    )
+    lifecycle_factory.lifecycle_private_key = lifecycle_factory.reviewer_private_key
+
+    with pytest.raises(Exception) as caught:
+        command = _transition_command(lifecycle_factory, lease, "ACTIVE")
+        _transition(lifecycle_factory, command)
+
+    assert getattr(caught.value, "code", None) in {
+        "AUTHORITY_SOURCE_NOT_CLEAN_GIT",
+        "ADMISSION_AUTHORITY_BINDING_MISMATCH",
+        "AUTHORITY_SNAPSHOT_DRIFT",
+        "LIVE_AUTHORITY_SNAPSHOT_MISMATCH",
+    }
+    assert not invocation_log.exists()
 
 
 def test_fixed_candidate_and_review_are_immutable_and_current(lifecycle_factory):

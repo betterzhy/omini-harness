@@ -109,6 +109,21 @@ def test_snapshot_extracts_owned_facts_and_normalizes_permission(tmp_path: Path)
     assert snapshot["sourceRevision"]["kind"] in {"GIT", "CONTENT"}
 
 
+def test_snapshot_rejects_unanchored_git_administration_path(tmp_path: Path):
+    from evolution_harness.authority import (
+        IntegrationAuthorityError,
+        build_authority_snapshot,
+    )
+
+    root, integration, source = _fixture(tmp_path)
+    repository = tmp_path / "real-repository"
+    subprocess.run(["/usr/bin/git", "init", "-q", str(repository)], check=True)
+    (source / ".git").symlink_to(repository / ".git", target_is_directory=True)
+
+    with pytest.raises(IntegrationAuthorityError):
+        build_authority_snapshot(root, integration, source)
+
+
 def test_snapshot_fingerprint_changes_when_authority_changes(tmp_path: Path):
     from evolution_harness.authority import build_authority_snapshot
 
@@ -212,6 +227,105 @@ def test_git_source_revision_marks_dirty_authority_set(tmp_path: Path):
     assert dirty["sourceRevision"]["authoritySetStatus"] == "DIRTY_AUTHORITY_SET"
     assert dirty["sourceRevision"]["head"] == clean["sourceRevision"]["head"]
     assert dirty["sourceRevision"]["authoritySetDigest"] != clean["sourceRevision"]["authoritySetDigest"]
+
+
+def test_git_source_revision_ignores_replace_and_ambient_git_execution(
+    tmp_path: Path, monkeypatch
+):
+    from evolution_harness.authority import build_authority_snapshot
+
+    root, integration, source = _fixture(tmp_path)
+    subprocess.run(["/usr/bin/git", "init", "-q", str(source)], check=True)
+    subprocess.run(
+        ["/usr/bin/git", "-C", str(source), "add", "status.md", "slice.yaml", "derived.md"],
+        check=True,
+    )
+    subprocess.run(
+        [
+            "/usr/bin/git",
+            "-C",
+            str(source),
+            "-c",
+            "user.name=Harness Test",
+            "-c",
+            "user.email=harness@example.invalid",
+            "commit",
+            "-q",
+            "-m",
+            "baseline",
+        ],
+        check=True,
+    )
+    head = subprocess.run(
+        ["/usr/bin/git", "-C", str(source), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    (source / "status.md").write_text(
+        "CurrentStage = READY\nExecutionAllowed = YES_UNCOMMITTED\n",
+        encoding="utf-8",
+    )
+    subprocess.run(
+        ["/usr/bin/git", "-C", str(source), "add", "status.md"], check=True
+    )
+    replacement_tree = subprocess.run(
+        ["/usr/bin/git", "-C", str(source), "write-tree"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    replacement = subprocess.run(
+        [
+            "/usr/bin/git",
+            "-C",
+            str(source),
+            "-c",
+            "user.name=Harness Test",
+            "-c",
+            "user.email=harness@example.invalid",
+            "commit-tree",
+            replacement_tree,
+            "-p",
+            head,
+        ],
+        check=True,
+        capture_output=True,
+        input="replacement\n",
+        text=True,
+    ).stdout.strip()
+    subprocess.run(
+        ["/usr/bin/git", "-C", str(source), "reset", "-q", "HEAD", "--", "status.md"],
+        check=True,
+    )
+    subprocess.run(
+        ["/usr/bin/git", "-C", str(source), "replace", head, replacement],
+        check=True,
+    )
+    invocation_log = tmp_path / "fake-git-invocations"
+    fake_bin = tmp_path / "fake-bin"
+    fake_bin.mkdir()
+    fake_git = fake_bin / "git"
+    fake_git.write_text(
+        "#!/bin/sh\n"
+        f"printf 'used\\n' >> {invocation_log!s}\n"
+        "exec /usr/bin/git \"$@\"\n",
+        encoding="utf-8",
+    )
+    fake_git.chmod(0o755)
+    alternate_objects = tmp_path / "ambient-alternate-objects"
+    alternate_objects.mkdir()
+    monkeypatch.setenv("PATH", str(fake_bin) + ":/usr/bin:/bin")
+    monkeypatch.setenv("GIT_DIR", str(source / ".git"))
+    monkeypatch.setenv("GIT_WORK_TREE", str(source))
+    monkeypatch.setenv("GIT_OBJECT_DIRECTORY", str(source / ".git" / "objects"))
+    monkeypatch.setenv("GIT_ALTERNATE_OBJECT_DIRECTORIES", str(alternate_objects))
+
+    snapshot = build_authority_snapshot(root, integration, source)
+
+    assert snapshot["sourceRevision"]["head"] == head
+    assert snapshot["sourceRevision"]["authoritySetStatus"] == "DIRTY_AUTHORITY_SET"
+    assert not invocation_log.exists()
 
 
 def test_authority_hash_and_extracted_facts_come_from_one_byte_snapshot(tmp_path: Path, monkeypatch):

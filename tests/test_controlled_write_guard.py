@@ -192,8 +192,12 @@ def test_declared_file_and_anchored_directory_are_writable(guarded_lane):
     assert first.returncode == second.returncode == 0
     assert first.observedPaths == ["allowed.txt"]
     assert second.observedPaths == ["allowed-dir/nested.txt"]
-    assert first.beforeInventory["paths"] == []
-    assert second.afterInventory["paths"] == ["allowed-dir/nested.txt", "allowed.txt"]
+    assert first.beforeInventory["paths"] == ["allowed-dir", "swappable"]
+    assert second.afterInventory["paths"] == [
+        "allowed-dir/nested.txt",
+        "allowed.txt",
+        "swappable",
+    ]
 
 
 def test_observed_paths_detects_rewrite_of_already_dirty_exact_file(guarded_lane):
@@ -202,8 +206,16 @@ def test_observed_paths_detects_rewrite_of_already_dirty_exact_file(guarded_lane
     second = guarded_lane.run("write", str(target), "second payload\n")
 
     assert first.returncode == second.returncode == 0
-    assert second.beforeInventory["paths"] == ["allowed.txt"]
-    assert second.afterInventory["paths"] == ["allowed.txt"]
+    assert second.beforeInventory["paths"] == [
+        "allowed-dir",
+        "allowed.txt",
+        "swappable",
+    ]
+    assert second.afterInventory["paths"] == [
+        "allowed-dir",
+        "allowed.txt",
+        "swappable",
+    ]
     assert second.observedPaths == ["allowed.txt"]
 
 
@@ -296,6 +308,7 @@ def test_missing_leaf_stays_bound_to_every_existing_ancestor(
         [".guard-cache"],
     )
     changed = replace(guarded_lane, lease=lease)
+    (changed.root / "swappable").rmdir()
     ready = changed.root / ".guard-cache" / "ready"
     target = changed.root / "allowed-dir" / "nested.txt"
     original = changed.root / "allowed-dir-original"
@@ -411,6 +424,35 @@ def test_before_inventory_rejects_tracked_and_untracked_breach(
 
     assert caught.value.code == "WRITESET_BREACH"
     assert caught.value.observedPaths == [target.name]
+
+
+def test_before_inventory_rejects_preexisting_undeclared_empty_directory(
+    guarded_lane, monkeypatch
+):
+    target = guarded_lane.root / "undeclared-empty"
+    target.mkdir()
+    process_started = False
+
+    def unexpected_target(*args, **kwargs):
+        nonlocal process_started
+        process_started = True
+        raise AssertionError("pre-existing breach must quarantine before target launch")
+
+    monkeypatch.setattr(guard, "_validate_sandbox_exec", lambda: None)
+    monkeypatch.setattr(guard, "_run_sandboxed", unexpected_target)
+
+    with pytest.raises(ControlledCoordinationError) as caught:
+        guard.run_guarded_command(
+            guarded_lane.lease,
+            guarded_lane.root,
+            ["/usr/bin/true"],
+            cwd=guarded_lane.root,
+            environment=guarded_lane.environment,
+        )
+
+    assert caught.value.code == "WRITESET_BREACH"
+    assert caught.value.observedPaths == ["undeclared-empty"]
+    assert process_started is False
 
 
 def test_git_inventory_uses_sealed_environment(guarded_lane, monkeypatch, tmp_path):
@@ -777,8 +819,10 @@ def test_physical_inventory_preserves_rename_and_copy_paths(
 
     assert guard._physical_snapshot_changes(before_snapshot, after_snapshot) == expected
     assert sorted({*before["paths"], *after["paths"]}) == [
+        "allowed-dir",
         "allowed-dir/result.txt",
         "allowed.txt",
+        "swappable",
     ]
 
 

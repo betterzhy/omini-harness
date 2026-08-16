@@ -330,7 +330,7 @@ def test_observation_exact_replay_precedes_live_empty_revalidation(recovery_fact
         ("untracked", ["breach.txt"]),
         ("ignored", [".ignored"]),
         ("deleted", ["release-control.yaml"]),
-        ("renamed", ["moved-secret.md", "private/secret.md"]),
+        ("renamed", ["moved-secret.md", "private", "private/secret.md"]),
         ("type-changed", ["private/secret.md"]),
     ],
 )
@@ -365,6 +365,23 @@ def test_public_observation_requires_complete_live_persistent_breach_set(
     result, _ = _observe(recovery_factory, lease, expected)
     assert result["recoveryState"] == "PROJECT_WRITESET_RECOVERY"
     assert result["observedWriteSet"] == expected
+
+
+def test_complete_public_observation_includes_preexisting_empty_directory(
+    recovery_factory
+):
+    lease = _acquire(recovery_factory)
+    empty = Path(lease["laneRoot"], "preexisting-empty")
+    empty.mkdir()
+
+    inventory, breaches, remaining_ephemeral = (
+        guard._complete_persistent_breach_inventory(lease)
+    )
+
+    assert inventory["paths"] == ["preexisting-empty"]
+    assert inventory["untrackedPaths"] == ["preexisting-empty"]
+    assert breaches == ["preexisting-empty"]
+    assert remaining_ephemeral == []
 
 
 def test_authority_path_breach_marks_every_affected_lease_stale(recovery_factory):

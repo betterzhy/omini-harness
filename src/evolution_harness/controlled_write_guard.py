@@ -1052,14 +1052,13 @@ def _commit_tree_identity(commit_body: bytes) -> str:
     return tree
 
 
-def _read_committed_entries(
+def _read_tree_entries(
     boundary: _GitBoundary,
+    tree: str,
 ) -> dict[str, tuple[str, str]]:
     try:
-        head = _read_git_head(boundary)
-        tree = _commit_tree_identity(
-            _read_git_object(boundary, head, expected_type="commit")
-        )
+        if _canonical_git_oid(tree.encode("ascii", "strict")) != tree:
+            raise OSError("Git tree identity is not canonical")
         entries: dict[str, tuple[str, str]] = {}
         object_bytes = len(tree) // 2
         expanded_entries = 0
@@ -1126,6 +1125,21 @@ def _read_committed_entries(
 
         walk_tree(tree, None, frozenset(), 0)
         return entries
+    except (ControlledCoordinationError, OSError, ValueError) as exc:
+        if isinstance(exc, ControlledCoordinationError):
+            raise
+        raise _error(boundary.error_code, boundary.error_message) from exc
+
+
+def _read_committed_entries(
+    boundary: _GitBoundary,
+) -> dict[str, tuple[str, str]]:
+    try:
+        head = _read_git_head(boundary)
+        tree = _commit_tree_identity(
+            _read_git_object(boundary, head, expected_type="commit")
+        )
+        return _read_tree_entries(boundary, tree)
     except (ControlledCoordinationError, OSError, ValueError) as exc:
         if isinstance(exc, ControlledCoordinationError):
             raise
@@ -1418,7 +1432,6 @@ def _inventory(
         path
         for path in physical_leaves
         if path not in committed and path not in tracked
-        and nodes[path]["type"] != "DIRECTORY"
     }
     ignored_roots = _literal_ignored_roots(lane_descriptor)
     ignored: set[str] = set()
@@ -1490,7 +1503,10 @@ def _physical_snapshot_changes(
 def _persistent_breaches(paths: list[str], exact: list[str], ephemeral: list[str]) -> list[str]:
     breaches = []
     for path in paths:
-        if any(_path_is_within(path, allowed) for allowed in exact):
+        if any(
+            _path_is_within(path, allowed) or _path_is_within(allowed, path)
+            for allowed in exact
+        ):
             continue
         if any(_path_is_within(path, temporary) for temporary in ephemeral):
             continue

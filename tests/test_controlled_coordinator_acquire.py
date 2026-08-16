@@ -1467,6 +1467,7 @@ def test_acquire_rejects_real_development_authority_deny(
 def test_acquire_rejects_uncommitted_development_authority_under_ambient_git_view(
     acquisition_factory, monkeypatch, tmp_path
 ):
+    command = acquisition_factory.acquire()
     status = acquisition_factory.source_root / "status.md"
     status.write_text(
         "# External Project Status\n\n"
@@ -1478,23 +1479,36 @@ def test_acquire_rejects_uncommitted_development_authority_under_ambient_git_vie
     invocation_log = _install_ambient_git_view(
         monkeypatch, tmp_path, acquisition_factory.source_root
     )
+    live_rebuild_calls = 0
+    original_build = controlled_coordinator.build_authority_snapshot
 
-    with pytest.raises(
-        (ControlledPlanningError, ControlledCoordinationError)
-    ) as caught:
-        command = acquisition_factory.acquire()
+    def observed_live_rebuild(*args, **kwargs):
+        nonlocal live_rebuild_calls
+        live_rebuild_calls += 1
+        return original_build(*args, **kwargs)
+
+    monkeypatch.setattr(
+        controlled_coordinator,
+        "build_authority_snapshot",
+        observed_live_rebuild,
+    )
+
+    with pytest.raises(ControlledCoordinationError) as caught:
         acquire_lane_lease(
             acquisition_factory.repository_root,
             acquisition_factory.source_root,
             command,
         )
 
-    assert caught.value.code in {
-        "AUTHORITY_SOURCE_NOT_CLEAN_GIT",
-        "ADMISSION_AUTHORITY_BINDING_MISMATCH",
-        "LIVE_AUTHORITY_SNAPSHOT_MISMATCH",
-    }
+    assert caught.value.code == "LIVE_AUTHORITY_SNAPSHOT_MISMATCH"
+    assert live_rebuild_calls == 1
     assert not invocation_log.exists()
+    identity = resolve_project_execution_identity(
+        acquisition_factory.repository_root,
+        acquisition_factory.source_root,
+    )
+    with CoordinatorStateStore.open(identity) as store:
+        assert store.read_journal() is None
 
 
 def test_same_key_changed_payload_and_terminal_replay_fail_closed(

@@ -374,14 +374,32 @@ def test_complete_public_observation_includes_preexisting_empty_directory(
     empty = Path(lease["laneRoot"], "preexisting-empty")
     empty.mkdir()
 
-    inventory, breaches, remaining_ephemeral = (
-        guard._complete_persistent_breach_inventory(lease)
+    incomplete = _observation_command(lease, [])
+    with pytest.raises(ControlledCoordinationError) as caught:
+        observe_lane_writes(
+            recovery_factory.repository_root,
+            recovery_factory.source_root,
+            incomplete,
+        )
+    assert caught.value.code == "OBSERVED_WRITESET_MISMATCH"
+
+    result, command = _observe(
+        recovery_factory,
+        lease,
+        ["preexisting-empty"],
     )
 
-    assert inventory["paths"] == ["preexisting-empty"]
-    assert inventory["untrackedPaths"] == ["preexisting-empty"]
-    assert breaches == ["preexisting-empty"]
-    assert remaining_ephemeral == []
+    assert result["recoveryState"] == "PROJECT_WRITESET_RECOVERY"
+    assert result["observedWriteSet"] == ["preexisting-empty"]
+    journal = _journal(recovery_factory)
+    assert journal["recoveryState"] == "PROJECT_WRITESET_RECOVERY"
+    assert journal["recoveryEvidence"]["observedWriteSet"] == [
+        "preexisting-empty"
+    ]
+    receipt = journal["receipts"][-1]
+    assert receipt["receiptType"] == "WRITE_OBSERVATION"
+    assert receipt["evidence"]["observedWriteSet"] == ["preexisting-empty"]
+    assert receipt["evidence"]["command"] == command
 
 
 def test_authority_path_breach_marks_every_affected_lease_stale(recovery_factory):

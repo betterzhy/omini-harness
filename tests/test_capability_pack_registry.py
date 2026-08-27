@@ -1,0 +1,454 @@
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import shutil
+import subprocess
+from pathlib import Path
+from typing import Any
+
+import pytest
+import yaml
+
+from evolution_harness.capability_pack_registry import (
+    build_capability_pack_registry,
+    get_registered_capability_pack,
+)
+
+
+CAPABILITY_ID = "workflow:web-high-fidelity:reference-driven-visual-fidelity"
+REGISTRATION_ID = "pack:web-high-fidelity"
+FIXTURE_CONTENT_DIGEST = "sha256:42e88d096cd91ade629f1bb47474f24a7730c76c43cf250ae0bc549c30654cd7"
+
+
+def _git(repository: Path, *arguments: str) -> str:
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "GIT_CONFIG_GLOBAL": "/dev/null",
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_NO_LAZY_FETCH": "1",
+            "GIT_OPTIONAL_LOCKS": "0",
+            "GIT_TERMINAL_PROMPT": "0",
+        }
+    )
+    completed = subprocess.run(
+        ["git", "-C", str(repository), *arguments],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=environment,
+    )
+    return completed.stdout.strip()
+
+
+def _manifest() -> dict[str, Any]:
+    return {
+        "schemaVersion": "capability-pack/v1",
+        "projectPackName": "web-high-fidelity",
+        "skillName": "web-high-fidelity",
+        "displayName": "Reference-Driven Web Visual Fidelity",
+        "capabilityId": CAPABILITY_ID,
+        "version": "2.0.0",
+        "contentDigestContract": "capability-pack-content/v1",
+        "contentRoots": ["docs", "skills"],
+        "excludedContentRoots": ["docs/history"],
+        "skillPath": "skills/web-high-fidelity/SKILL.md",
+        "validator": {
+            "kind": "FIXED_CANDIDATE_GATE",
+            "path": "scripts/verify-capability-pack",
+            "argumentsContract": "CANDIDATE_COMMIT_TREE",
+        },
+    }
+
+
+def _write_valid_pack(source: Path) -> None:
+    (source / "docs/history").mkdir(parents=True)
+    (source / "skills/web-high-fidelity").mkdir(parents=True)
+    (source / "scripts").mkdir()
+    (source / "capability-pack.yaml").write_text(
+        yaml.safe_dump(_manifest(), sort_keys=False), encoding="utf-8"
+    )
+    (source / "VERSION").write_text("2.0.0\n", encoding="utf-8")
+    (source / "docs/active.txt").write_text("active content\n", encoding="utf-8")
+    (source / "docs/history/ignored.txt").write_text("excluded content\n", encoding="utf-8")
+    (source / "skills/web-high-fidelity/SKILL.md").write_text(
+        "# Test Skill\n", encoding="utf-8"
+    )
+    validator = source / "scripts/verify-capability-pack"
+    validator.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        "[ \"$#\" -eq 2 ]\n"
+        "[ \"$(git -C \"${0%/*}/..\" rev-parse HEAD)\" = \"$1\" ]\n"
+        "[ \"$(git -C \"${0%/*}/..\" rev-parse 'HEAD^{tree}')\" = \"$2\" ]\n"
+        "[ -z \"$(git -C \"${0%/*}/..\" status --porcelain=v1 --untracked-files=all)\" ]\n",
+        encoding="utf-8",
+    )
+    validator.chmod(0o755)
+
+
+def _pack_fixture(tmp_path: Path) -> tuple[Path, str, str]:
+    source = tmp_path / "pack"
+    source.mkdir()
+    _write_valid_pack(source)
+    _git(source, "init", "-q")
+    _git(source, "config", "user.name", "Pack Test")
+    _git(source, "config", "user.email", "pack-test@example.invalid")
+    _git(source, "add", "-A")
+    _git(source, "commit", "-qm", "test: pack fixture")
+    commit = _git(source, "rev-parse", "HEAD")
+    tree = _git(source, "rev-parse", "HEAD^{tree}")
+    return source, commit, tree
+
+
+def _selected_paths(source: Path, manifest: dict[str, Any]) -> list[str]:
+    tracked = _git(source, "ls-files", "-z").split("\0")
+    excluded = tuple(manifest["excludedContentRoots"])
+    selected = {"VERSION", "capability-pack.yaml"}
+    for relative in tracked:
+        if not relative:
+            continue
+        if any(relative == root or relative.startswith(root + "/") for root in excluded):
+            continue
+        if any(
+            relative == root or relative.startswith(root + "/")
+            for root in manifest["contentRoots"]
+        ):
+            selected.add(relative)
+    return sorted(selected, key=lambda value: value.encode("utf-8"))
+
+
+def _expected_content_digest(source: Path, manifest: dict[str, Any]) -> str:
+    digest = hashlib.sha256()
+    for relative in _selected_paths(source, manifest):
+        stage = _git(source, "ls-files", "--stage", "--", relative).split()
+        mode = stage[0].encode("ascii")
+        blob = (source / relative).read_bytes()
+        fields = (
+            relative.encode("utf-8"),
+            mode,
+            str(len(blob)).encode("ascii"),
+            blob,
+        )
+        for field in fields:
+            digest.update(len(field).to_bytes(8, byteorder="big"))
+            digest.update(field)
+    return "sha256:" + digest.hexdigest()
+
+
+def _registration(source: Path, commit: str, tree: str) -> dict[str, Any]:
+    manifest = yaml.safe_load((source / "capability-pack.yaml").read_text(encoding="utf-8"))
+    return {
+        "schemaVersion": "capability-pack-registration/v1",
+        "registrationId": REGISTRATION_ID,
+        "capabilityId": CAPABILITY_ID,
+        "packVersion": "2.0.0",
+        "status": "ACTIVE",
+        "distributionStatus": "LOCAL_ONLY",
+        "source": {
+            "kind": "LOCAL_GIT",
+            "repositoryId": "web-high-fidelity",
+            "repositoryPath": str(source),
+            "commit": commit,
+            "tree": tree,
+        },
+        "resolvedContentDigest": _expected_content_digest(source, manifest),
+        "validator": {
+            "kind": "FIXED_CANDIDATE_GATE",
+            "relativePath": "scripts/verify-capability-pack",
+            "sha256": "sha256:"
+            + hashlib.sha256((source / "scripts/verify-capability-pack").read_bytes()).hexdigest(),
+            "argumentsContract": "CANDIDATE_COMMIT_TREE",
+        },
+    }
+
+
+def _write_test_schemas(root: Path, source: Path) -> None:
+    repository = Path(__file__).parents[1]
+    destination = root / "core/schemas"
+    destination.mkdir(parents=True)
+    for name in [
+        "capability-pack-manifest.schema.json",
+        "capability-pack-registration.schema.json",
+    ]:
+        shutil.copy2(repository / "core/schemas" / name, destination / name)
+    registration_schema_path = destination / "capability-pack-registration.schema.json"
+    registration_schema = json.loads(registration_schema_path.read_text(encoding="utf-8"))
+    registration_schema["properties"]["source"]["properties"]["repositoryPath"]["const"] = str(
+        source
+    )
+    registration_schema_path.write_text(
+        json.dumps(registration_schema, indent=2) + "\n", encoding="utf-8"
+    )
+
+
+def _write_registrations(root: Path, registrations: list[dict[str, Any]]) -> None:
+    path = root / "core/registries/capability-packs.yaml"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(yaml.safe_dump(registrations, sort_keys=False), encoding="utf-8")
+
+
+def _harness_with_pack(tmp_path: Path) -> tuple[Path, Path, str, str]:
+    source, commit, tree = _pack_fixture(tmp_path)
+    root = tmp_path / "harness"
+    _write_test_schemas(root, source)
+    _write_registrations(root, [_registration(source, commit, tree)])
+    return root, source, commit, tree
+
+
+def _replace(path: Path, old: str, new: str) -> None:
+    path.write_text(path.read_text(encoding="utf-8").replace(old, new), encoding="utf-8")
+
+
+def _commit(source: Path, message: str) -> tuple[str, str]:
+    _git(source, "add", "-A")
+    _git(source, "commit", "-qm", message)
+    return _git(source, "rev-parse", "HEAD"), _git(source, "rev-parse", "HEAD^{tree}")
+
+
+def _registered_entry(root: Path) -> dict[str, Any]:
+    return yaml.safe_load(
+        (root / "core/registries/capability-packs.yaml").read_text(encoding="utf-8")
+    )[0]
+
+
+def _refresh_source_identity(
+    root: Path,
+    source: Path,
+    *,
+    content_digest: bool = False,
+    validator_digest: bool = False,
+) -> dict[str, Any]:
+    entry = _registered_entry(root)
+    entry["source"]["commit"] = _git(source, "rev-parse", "HEAD")
+    entry["source"]["tree"] = _git(source, "rev-parse", "HEAD^{tree}")
+    manifest = yaml.safe_load((source / "capability-pack.yaml").read_text(encoding="utf-8"))
+    if content_digest:
+        entry["resolvedContentDigest"] = _expected_content_digest(source, manifest)
+    if validator_digest:
+        entry["validator"]["sha256"] = "sha256:" + hashlib.sha256(
+            (source / entry["validator"]["relativePath"]).read_bytes()
+        ).hexdigest()
+    _write_registrations(root, [entry])
+    return entry
+
+
+def test_registry_entry_binds_immutable_source_and_validator_identity(tmp_path: Path):
+    root, source, commit, tree = _harness_with_pack(tmp_path)
+
+    registry = build_capability_pack_registry(root, write=False)
+
+    entry = registry["entries"][0]
+    assert entry["source"]["commit"] == commit
+    assert entry["source"]["tree"] == tree
+    assert entry["resolvedContentDigest"] == FIXTURE_CONTENT_DIGEST
+    assert entry["validator"]["sha256"].startswith("sha256:")
+    assert not (root / "generated/registries/capability-pack-registry.json").exists()
+
+
+def test_registry_write_materializes_only_the_external_registry_projection(tmp_path: Path):
+    root, _, _, _ = _harness_with_pack(tmp_path)
+
+    expected = build_capability_pack_registry(root, write=True)
+
+    generated = json.loads(
+        (root / "generated/registries/capability-pack-registry.json").read_text(encoding="utf-8")
+    )
+    assert generated == expected
+
+
+def test_registry_rejects_manifest_identity_drift(tmp_path: Path):
+    root, source, _, _ = _harness_with_pack(tmp_path)
+    _replace(source / "capability-pack.yaml", "reference-driven-visual-fidelity", "visual-delivery")
+    _commit(source, "mutate: identity drift")
+    _refresh_source_identity(root, source)
+
+    with pytest.raises(ValueError, match="capability pack manifest identity mismatch"):
+        build_capability_pack_registry(root, write=False)
+
+
+def test_registry_rejects_validator_digest_drift(tmp_path: Path):
+    root, source, _, _ = _harness_with_pack(tmp_path)
+    validator = source / "scripts/verify-capability-pack"
+    validator.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+    validator.chmod(0o755)
+    _commit(source, "mutate: validator drift")
+    _refresh_source_identity(root, source, content_digest=True)
+
+    with pytest.raises(ValueError, match="capability pack validator identity mismatch"):
+        build_capability_pack_registry(root, write=False)
+
+
+def test_registry_rejects_duplicate_active_capability_id(tmp_path: Path):
+    root, _, _, _ = _harness_with_pack(tmp_path)
+    entry = _registered_entry(root)
+    _write_registrations(root, [entry, dict(entry)])
+
+    with pytest.raises(ValueError, match="duplicate active capability pack ID"):
+        build_capability_pack_registry(root, write=False)
+
+
+def test_registry_rejects_wrong_commit_tree_pair(tmp_path: Path):
+    root, source, _, original_tree = _harness_with_pack(tmp_path)
+    (source / "docs/history/ignored.txt").write_text("new excluded bytes\n", encoding="utf-8")
+    commit, _ = _commit(source, "mutate: new tree")
+    entry = _registered_entry(root)
+    entry["source"]["commit"] = commit
+    entry["source"]["tree"] = original_tree
+    _write_registrations(root, [entry])
+
+    with pytest.raises(ValueError, match="capability pack commit/tree mismatch"):
+        build_capability_pack_registry(root, write=False)
+
+
+def test_registry_ignores_git_replacement_objects_for_source_identity(tmp_path: Path):
+    root, source, original_commit, _ = _harness_with_pack(tmp_path)
+    (source / "docs/active.txt").write_text("replacement content\n", encoding="utf-8")
+    replacement_commit, replacement_tree = _commit(source, "mutate: replacement commit")
+    entry = _registration(source, replacement_commit, replacement_tree)
+    entry["source"]["commit"] = original_commit
+    _git(source, "replace", original_commit, replacement_commit)
+    _git(source, "checkout", "-q", "--detach", original_commit)
+    _write_registrations(root, [entry])
+
+    with pytest.raises(ValueError, match="capability pack commit/tree mismatch"):
+        build_capability_pack_registry(root, write=False)
+
+
+def test_registry_rejects_dirty_source(tmp_path: Path):
+    root, source, _, _ = _harness_with_pack(tmp_path)
+    (source / "docs/history/ignored.txt").write_text("dirty excluded bytes\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="capability pack source is not clean"):
+        build_capability_pack_registry(root, write=False)
+
+
+def test_registry_rejects_missing_git_object(tmp_path: Path):
+    root, _, _, _ = _harness_with_pack(tmp_path)
+    entry = _registered_entry(root)
+    entry["source"]["commit"] = "f" * 40
+    _write_registrations(root, [entry])
+
+    with pytest.raises(ValueError, match="capability pack Git object is unavailable"):
+        build_capability_pack_registry(root, write=False)
+
+
+@pytest.mark.parametrize("unsafe_root", ["../outside", "/absolute", "docs//nested"])
+def test_registry_rejects_unsafe_content_roots(tmp_path: Path, unsafe_root: str):
+    root, source, _, _ = _harness_with_pack(tmp_path)
+    manifest = yaml.safe_load((source / "capability-pack.yaml").read_text(encoding="utf-8"))
+    manifest["contentRoots"] = [unsafe_root]
+    (source / "capability-pack.yaml").write_text(
+        yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8"
+    )
+    _commit(source, "mutate: unsafe root")
+    _refresh_source_identity(root, source)
+
+    with pytest.raises(ValueError, match="capability pack manifest schema is invalid"):
+        build_capability_pack_registry(root, write=False)
+
+
+def test_registry_rejects_non_semver_manifest_version(tmp_path: Path):
+    root, source, _, _ = _harness_with_pack(tmp_path)
+    manifest = yaml.safe_load((source / "capability-pack.yaml").read_text(encoding="utf-8"))
+    manifest["version"] = "1.0.0-01"
+    (source / "capability-pack.yaml").write_text(
+        yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8"
+    )
+    _commit(source, "mutate: invalid SemVer")
+    _refresh_source_identity(root, source)
+
+    with pytest.raises(ValueError, match="capability pack manifest schema is invalid"):
+        build_capability_pack_registry(root, write=False)
+
+
+def test_registry_rejects_symlink_in_active_content(tmp_path: Path):
+    root, source, _, _ = _harness_with_pack(tmp_path)
+    (source / "docs/link.txt").symlink_to("active.txt")
+    _commit(source, "mutate: active symlink")
+    _refresh_source_identity(root, source)
+
+    with pytest.raises(ValueError, match="capability pack active content contains symlink"):
+        build_capability_pack_registry(root, write=False)
+
+
+def test_registry_rejects_submodule_in_active_content(tmp_path: Path):
+    root, source, commit, _ = _harness_with_pack(tmp_path)
+    _git(source, "update-index", "--add", "--cacheinfo", f"160000,{commit},docs/vendor")
+    _git(source, "commit", "-qm", "mutate: active gitlink")
+    _refresh_source_identity(root, source)
+
+    with pytest.raises(ValueError, match="capability pack active content contains submodule"):
+        build_capability_pack_registry(root, write=False)
+
+
+def test_registry_rejects_case_fold_collision(tmp_path: Path):
+    root, source, _, _ = _harness_with_pack(tmp_path)
+    _git(source, "config", "core.ignorecase", "false")
+    collision_path = source / "docs/Foo.txt"
+    collision_path.write_text("upper\n", encoding="utf-8")
+    upper_blob = _git(source, "hash-object", "-w", str(collision_path))
+    collision_path.write_text("lower\n", encoding="utf-8")
+    lower_blob = _git(source, "hash-object", "-w", str(collision_path))
+    _git(source, "update-index", "--add", "--cacheinfo", f"100644,{upper_blob},docs/Foo.txt")
+    _git(source, "update-index", "--add", "--cacheinfo", f"100644,{lower_blob},docs/foo.txt")
+    _git(source, "commit", "-qm", "mutate: case-fold collision")
+    _refresh_source_identity(root, source)
+
+    with pytest.raises(ValueError, match="capability pack active content case-fold collision"):
+        build_capability_pack_registry(root, write=False)
+
+
+def test_registry_rejects_untracked_active_content(tmp_path: Path):
+    root, source, _, _ = _harness_with_pack(tmp_path)
+    (source / "docs/untracked.txt").write_text("untracked\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="capability pack has untracked active content"):
+        build_capability_pack_registry(root, write=False)
+
+
+def test_registry_rejects_failed_candidate_gate(tmp_path: Path):
+    root, source, _, _ = _harness_with_pack(tmp_path)
+    validator = source / "scripts/verify-capability-pack"
+    validator.write_text("#!/usr/bin/env bash\nexit 23\n", encoding="utf-8")
+    validator.chmod(0o755)
+    _commit(source, "mutate: failing gate")
+    _refresh_source_identity(root, source, content_digest=True, validator_digest=True)
+
+    with pytest.raises(ValueError, match="capability pack candidate Gate failed"):
+        build_capability_pack_registry(root, write=False)
+
+
+def test_registry_rejects_source_root_symlink(tmp_path: Path):
+    root, source, _, _ = _harness_with_pack(tmp_path)
+    alias = tmp_path / "pack-alias"
+    alias.symlink_to(source, target_is_directory=True)
+    entry = _registered_entry(root)
+    entry["source"]["repositoryPath"] = str(alias)
+    _write_registrations(root, [entry])
+    schema_path = root / "core/schemas/capability-pack-registration.schema.json"
+    schema = json.loads(schema_path.read_text(encoding="utf-8"))
+    schema["properties"]["source"]["properties"]["repositoryPath"]["const"] = str(alias)
+    schema_path.write_text(json.dumps(schema, indent=2) + "\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="capability pack source root must not be a symlink"):
+        build_capability_pack_registry(root, write=False)
+
+
+def test_registered_capability_pack_lookup_rejects_unknown_and_inactive(tmp_path: Path):
+    root, _, _, _ = _harness_with_pack(tmp_path)
+    with pytest.raises(KeyError, match="active capability pack registration not found or ambiguous"):
+        get_registered_capability_pack(root, "workflow:unknown:missing")
+
+    entry = _registered_entry(root)
+    entry["status"] = "INACTIVE"
+    _write_registrations(root, [entry])
+    schema_path = root / "core/schemas/capability-pack-registration.schema.json"
+    schema = json.loads(schema_path.read_text(encoding="utf-8"))
+    schema["properties"]["status"]["const"] = "INACTIVE"
+    schema_path.write_text(json.dumps(schema, indent=2) + "\n", encoding="utf-8")
+
+    with pytest.raises(KeyError, match="active capability pack registration not found or ambiguous"):
+        get_registered_capability_pack(root, CAPABILITY_ID)

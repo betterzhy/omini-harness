@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-evolution.local/core/schemas/capability-pack-registration.schema.json",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "registrationId",
+    "capabilityId",
+    "packVersion",
+    "status",
+    "distributionStatus",
+    "source",
+    "resolvedContentDigest",
+    "validator"
+  ],
+  "properties": {
+    "schemaVersion": {"const": "capability-pack-registration/v1"},
+    "registrationId": {"const": "pack:web-high-fidelity"},
+    "capabilityId": {"const": "workflow:web-high-fidelity:reference-driven-visual-fidelity"},
+    "packVersion": {"const": "2.0.0"},
+    "status": {"const": "ACTIVE"},
+    "distributionStatus": {"const": "LOCAL_ONLY"},
+    "source": {
+      "type": "object",
+      "required": ["kind", "repositoryId", "repositoryPath", "commit", "tree"],
+      "properties": {
+        "kind": {"const": "LOCAL_GIT"},
+        "repositoryId": {"const": "web-high-fidelity"},
+        "repositoryPath": {
+          "const": "/Users/yuzhuangzhuang/Projects/web-high-fidelity/.worktrees/web-high-fidelity-pack-v2-registration"
+        },
+        "commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "tree": {"type": "string", "pattern": "^[0-9a-f]{40}$"}
+      },
+      "additionalProperties": false
+    },
+    "resolvedContentDigest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "validator": {
+      "type": "object",
+      "required": ["kind", "relativePath", "sha256", "argumentsContract"],
+      "properties": {
+        "kind": {"const": "FIXED_CANDIDATE_GATE"},
+        "relativePath": {"const": "scripts/verify-capability-pack"},
+        "sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+        "argumentsContract": {"const": "CANDIDATE_COMMIT_TREE"}
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

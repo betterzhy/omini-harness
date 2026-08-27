@@ -1,0 +1,28 @@
+{
+  "entries": [
+    {
+      "capabilityId": "workflow:web-high-fidelity:reference-driven-visual-fidelity",
+      "distributionStatus": "LOCAL_ONLY",
+      "packVersion": "2.0.0",
+      "registrationId": "pack:web-high-fidelity",
+      "resolvedContentDigest": "sha256:482496a23e0957e51f53402346ef1c5d8832029f05654d0a40e95a2d4478825c",
+      "schemaVersion": "capability-pack-registration/v1",
+      "source": {
+        "commit": "ee8caec40136ea1ad391bcbc8956baa66f08abfe",
+        "kind": "LOCAL_GIT",
+        "repositoryId": "web-high-fidelity",
+        "repositoryPath": "/Users/yuzhuangzhuang/Projects/web-high-fidelity/.worktrees/web-high-fidelity-pack-v2-registration",
+        "tree": "f05cf62df34f72079fec10f5e0d67049cb1aa9c4"
+      },
+      "status": "ACTIVE",
+      "validator": {
+        "argumentsContract": "CANDIDATE_COMMIT_TREE",
+        "kind": "FIXED_CANDIDATE_GATE",
+        "relativePath": "scripts/verify-capability-pack",
+        "sha256": "sha256:9bea4c823ce234297433e671629e269db2028b90bc05a749900bb909566fc30c"
+      }
+    }
+  ],
+  "schemaVersion": "capability-pack-registry/v1",
+  "sourceRevision": "content-sha256:13071f30b91d28d38024d3e6355eb5cf566f303cb7fc7885439da85ae852c77a"
+}

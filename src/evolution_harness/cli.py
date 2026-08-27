@@ -248,7 +248,13 @@ def main(argv=None) -> int:
             expected = build_all_registries(root, write=not args.check)
             ok = True
             if args.check:
-                paths = {"design": root / "generated/registries/design-registry.json", "designLearning": root / "generated/registries/design-learning-registry.json", "engineering": root / "engineering/generated/registry.json"}
+                paths = {
+                    "design": root / "generated/registries/design-registry.json",
+                    "designLearning": root / "generated/registries/design-learning-registry.json",
+                    "engineering": root / "engineering/generated/registry.json",
+                    "capabilityPacks": root
+                    / "generated/registries/capability-pack-registry.json",
+                }
                 ok = all(path.exists() and json.loads(path.read_text(encoding="utf-8")) == expected[key] for key, path in paths.items())
             counts = {key: len(value["entries"]) for key, value in expected.items()}
             return _emit({"check": args.check, "counts": counts}, fmt=fmt, ok=ok, command=command)

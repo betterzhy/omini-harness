@@ -6,6 +6,7 @@ from typing import Any
 
 import yaml
 
+from .capability_pack_registry import build_capability_pack_registry
 from .generated import write_generated_json
 from .hashing import canonical_json_bytes, file_sha256, sha256_bytes
 from .loader import load_capabilities
@@ -174,4 +175,5 @@ def build_all_registries(repository_root: Path, *, write: bool = False) -> dict[
         "design": build_design_registry(repository_root, write=write),
         "designLearning": build_design_learning_registry(repository_root, write=write),
         "engineering": build_engineering_registry(repository_root, write=write),
+        "capabilityPacks": build_capability_pack_registry(repository_root, write=write),
     }

@@ -8,7 +8,16 @@ from pathlib import Path
 def _copy_repo(tmp_path: Path) -> Path:
     source = Path(__file__).parents[1]
     root = tmp_path / "repo"
-    for name in ["core", "design", "engineering", "contracts", "policies", "verification", "skills"]:
+    for name in [
+        "core",
+        "design",
+        "engineering",
+        "contracts",
+        "policies",
+        "verification",
+        "skills",
+        "generated",
+    ]:
         src = source / name
         if src.exists():
             shutil.copytree(src, root / name)
@@ -104,6 +113,18 @@ def test_unified_catalog_is_projection_not_universal_registry(tmp_path: Path):
     assert {e["domain"] for e in unified["entries"]} == {"design", "engineering"}
     assert all("content" not in entry and "body" not in entry for entry in unified["entries"])
     assert (root / "generated/catalogs/unified-active-catalog.json").exists()
+
+
+def test_external_pack_registry_does_not_enter_internal_unified_catalog(tmp_path: Path):
+    from evolution_harness.capability_pack_registry import build_capability_pack_registry
+    from evolution_harness.catalog import build_all_catalogs
+
+    root = _copy_repo(tmp_path)
+    build_capability_pack_registry(root, write=True)
+    unified = build_all_catalogs(root, write=True)["unified"]
+    assert "workflow:web-high-fidelity:reference-driven-visual-fidelity" not in {
+        entry["id"] for entry in unified["entries"]
+    }
 
 
 def test_generated_drift_check_detects_manual_edit_and_delete_rebuild_is_equivalent(tmp_path: Path):

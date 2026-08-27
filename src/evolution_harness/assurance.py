@@ -143,6 +143,11 @@ def structural_validate(
             _check_json_file(root / "generated/registries/design-registry.json", registries["design"], issues)
             _check_json_file(root / "generated/registries/design-learning-registry.json", registries["designLearning"], issues)
             _check_json_file(root / "engineering/generated/registry.json", registries["engineering"], issues)
+            _check_json_file(
+                root / "generated/registries/capability-pack-registry.json",
+                registries["capabilityPacks"],
+                issues,
+            )
             catalogs = build_all_catalogs(root, write=False)
             _check_json_file(root / "generated/catalogs/design-active-catalog.json", catalogs["design"], issues)
             _check_json_file(root / "generated/catalogs/unified-active-catalog.json", catalogs["unified"], issues)

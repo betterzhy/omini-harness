@@ -227,6 +227,10 @@ PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q
 
 `core/governance/bootstrap-baseline.yaml` declares the v0.1.0 seed cutoff. Seed capability ID/version hashes are `BOOTSTRAP_AUTHORIZED`. New canonical capability versions must enter through the normal governed promotion ledger; adding arbitrary canonical files without authority evidence fails repository validation.
 
+External Capability Pack registration is materialized in a separate generated
+registry. It does not add Pack entries to the internal unified catalog and does
+not by itself establish adoption or execution authority in any project.
+
 ## Deliberate MVP limits
 
 Eval execution records manual/fixture results rather than using an automatic model judge. Project conflict detection relies on explicit constraints rather than reading every baseline semantically. Version resolution is exact/highest-current, not a package-manager range solver. Revalidation identifies due/triggered assets but does not perform revalidation. Runtime packs are generated for explicit installation; no ChatGPT project configuration API or Custom GPT rewriting is invoked.

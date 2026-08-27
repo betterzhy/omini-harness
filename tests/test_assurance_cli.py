@@ -11,7 +11,19 @@ from pathlib import Path
 def _copy_repo(tmp_path: Path) -> tuple[Path, Path]:
     source = Path(__file__).parents[1]
     root = tmp_path / "repo"
-    for name in ["core", "design", "engineering", "runtime", "examples", "integrations", "contracts", "policies", "skills", "verification"]:
+    for name in [
+        "core",
+        "design",
+        "engineering",
+        "runtime",
+        "examples",
+        "integrations",
+        "contracts",
+        "policies",
+        "skills",
+        "verification",
+        "generated",
+    ]:
         src = source / name
         if src.exists():
             shutil.copytree(src, root / name)
@@ -53,6 +65,27 @@ def test_structural_validation_detects_generated_registry_drift(tmp_path: Path):
     report = structural_validate(root, project_roots=[project], check_generated=True)
     assert report["structuralGate"] == "FAIL"
     assert any(issue["code"] == "GENERATED_DRIFT" for issue in report["issues"])
+
+
+def test_structural_validation_detects_capability_pack_registry_drift(tmp_path: Path):
+    from evolution_harness.assurance import structural_validate
+    from evolution_harness.capability_pack_registry import build_capability_pack_registry
+    from evolution_harness.catalog import build_all_catalogs
+    from evolution_harness.registry import build_all_registries
+
+    root, _ = _copy_repo(tmp_path)
+    build_all_registries(root, write=True)
+    build_all_catalogs(root, write=True)
+    build_capability_pack_registry(root, write=True)
+    structural_validate(root, check_generated=False)
+    generated = root / "generated/registries/capability-pack-registry.json"
+    generated.write_text("{}\n", encoding="utf-8")
+    result = structural_validate(root, check_generated=True)
+    assert result["structuralGate"] == "FAIL"
+    assert any(
+        "capability-pack-registry.json" in issue.get("path", "")
+        for issue in result["issues"]
+    )
 
 
 def _run_module(root: Path, module: str, *args: str) -> subprocess.CompletedProcess[str]:

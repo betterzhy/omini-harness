@@ -85,6 +85,7 @@ def resolve_design_context(
     state = load_project_state(root, project)
     binding = load_project_binding(root, project)
     lock, locked_entries = verify_capability_lock(root, project)
+    locked_items = {item["capabilityId"]: item for item in lock["capabilities"]}
     state_hash = file_sha256(project / ".agent-evolution/design-state.yaml")
     binding_hash = file_sha256(project / ".agent-evolution/capabilities.yaml")
     stage = explicit_stage or state["currentStage"]
@@ -186,14 +187,27 @@ def resolve_design_context(
     required_self_review: list[str] = []
     for capability_id in sorted(selected_reasons):
         entry = active[capability_id]
-        item = {
-            "id": capability_id,
-            "kind": entry["kind"],
-            "version": entry["version"],
-            "contentHash": entry["contentHash"],
-            "selectedBecause": sorted(selected_reasons[capability_id]),
-        }
+        if entry.get("sourceKind") == "EXTERNAL_CAPABILITY_PACK":
+            item = {
+                "id": entry["capabilityId"],
+                "kind": "WORKFLOW",
+                "version": entry["packVersion"],
+                "contentHash": entry["resolvedContentDigest"].removeprefix("sha256:"),
+                "sourceKind": "EXTERNAL_CAPABILITY_PACK",
+                "sourceRegistrationId": entry["registrationId"],
+                "selectedBecause": sorted(locked_items[capability_id]["resolvedBecause"]),
+            }
+        else:
+            item = {
+                "id": capability_id,
+                "kind": entry["kind"],
+                "version": entry["version"],
+                "contentHash": entry["contentHash"],
+                "selectedBecause": sorted(selected_reasons[capability_id]),
+            }
         selected.append(item)
+        if entry.get("sourceKind") == "EXTERNAL_CAPABILITY_PACK":
+            continue
         asset = _load_asset(root, entry)
         for review in asset.get("skill", {}).get("selfReview", []):
             if review not in required_self_review:

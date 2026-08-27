@@ -113,6 +113,10 @@ def _safe_relative_path(value: str) -> str:
     return normalized
 
 
+def validate_relative_pack_path(value: str) -> str:
+    return _safe_relative_path(value)
+
+
 def _source_root(repository_path: str) -> Path:
     source = Path(repository_path)
     if not source.is_absolute() or source.is_symlink():
@@ -545,3 +549,72 @@ def get_registered_capability_pack(
             f"active capability pack registration not found or ambiguous: {capability_id}"
         )
     return matches[0]
+
+
+def _registration_record(registration: Mapping[str, Any]) -> dict[str, Any]:
+    required = (
+        "schemaVersion",
+        "registrationId",
+        "capabilityId",
+        "packVersion",
+        "status",
+        "distributionStatus",
+        "source",
+        "resolvedContentDigest",
+        "validator",
+    )
+    allowed = set(required) | {"sourceKind", "registrationFingerprint", "manifest"}
+    if set(registration) != allowed:
+        raise ValueError("capability pack registration identity is incomplete")
+    try:
+        return {key: registration[key] for key in required}
+    except KeyError as exc:
+        raise ValueError("capability pack registration identity is incomplete") from exc
+
+
+def read_registered_pack_blob(
+    registration: Mapping[str, Any], relative_path: str
+) -> bytes:
+    safe_path = validate_relative_pack_path(relative_path)
+    record = _registration_record(registration)
+    expected_fingerprint = "sha256:" + sha256_bytes(canonical_json_bytes(record))
+    if registration.get("registrationFingerprint") != expected_fingerprint:
+        raise ValueError("capability pack registration fingerprint mismatch")
+
+    source = _source_root(record["source"]["repositoryPath"])
+    commit, tree = _require_fixed_git_identity(source, record)
+    entries = _tree_entries(source, commit)
+    manifest_entry = _entry_by_path(entries, "capability-pack.yaml")
+    if manifest_entry[1] not in {"100644", "100755"} or manifest_entry[2] != "blob":
+        raise ValueError("capability pack manifest is not a tracked regular file")
+    try:
+        manifest = yaml.safe_load(_blob(source, manifest_entry[3]).decode("utf-8", "strict"))
+    except (UnicodeDecodeError, yaml.YAMLError) as exc:
+        raise ValueError("capability pack manifest is invalid YAML") from exc
+    if not isinstance(manifest, dict) or manifest != registration.get("manifest"):
+        raise ValueError("capability pack locked manifest provenance mismatch")
+    _validate_manifest_identity(record, manifest)
+    selected = _selected_entries(entries, manifest)
+    if _digest_entries(source, selected) != record["resolvedContentDigest"]:
+        raise ValueError("capability pack content identity mismatch")
+
+    validator_path = record["validator"]["relativePath"]
+    validator_entry = _entry_by_path(entries, validator_path)
+    if validator_entry[1] != "100755" or validator_entry[2] != "blob":
+        raise ValueError("capability pack validator is not a tracked executable regular file")
+    validator_digest = "sha256:" + sha256_bytes(_blob(source, validator_entry[3]))
+    if validator_digest != record["validator"]["sha256"]:
+        raise ValueError("capability pack validator identity mismatch")
+
+    _require_no_hidden_index_flags(source)
+    _require_clean_source(source, manifest)
+    _, mode, object_type, object_id = _entry_by_path(entries, safe_path)
+    if mode not in {"100644", "100755"} or object_type != "blob":
+        raise ValueError("capability pack requested path is not a tracked regular file")
+    data = _blob(source, object_id)
+    _require_fixed_git_identity(source, record)
+    _require_no_hidden_index_flags(source)
+    _require_clean_source(source, manifest)
+    if tree != record["source"]["tree"]:
+        raise ValueError("capability pack source tree drift")
+    return data

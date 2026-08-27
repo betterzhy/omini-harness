@@ -8,7 +8,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import yaml
+
 from .anchored_fs import AnchoredPathError, AnchoredRoot
+from .capability_pack_registry import read_registered_pack_blob
 from .discussion import materialize_discussion_contract
 from .generated import deterministic_json_bytes
 from .hashing import file_sha256, sha256_bytes
@@ -357,6 +360,82 @@ def _render_skill(
     )
 
 
+def _external_source_capability(
+    selected: dict[str, Any],
+    locked: dict[str, Any],
+    registration: dict[str, Any],
+) -> dict[str, Any]:
+    if (
+        selected.get("sourceKind") != "EXTERNAL_CAPABILITY_PACK"
+        or selected.get("sourceRegistrationId") != locked["sourceRegistrationId"]
+        or registration.get("registrationId") != locked["sourceRegistrationId"]
+        or selected.get("version") != locked["resolvedVersion"]
+        or selected.get("contentHash") != locked["contentHash"]
+    ):
+        raise ProjectionError(f"resolved external capability provenance drift: {selected.get('id')}")
+    return {
+        "id": selected["id"],
+        "kind": selected["kind"],
+        "version": selected["version"],
+        "contentHash": selected["contentHash"],
+        "sourceKind": "EXTERNAL_CAPABILITY_PACK",
+        "sourceRegistrationId": locked["sourceRegistrationId"],
+        "sourceCommit": locked["sourceCommit"],
+        "sourceTree": locked["sourceTree"],
+        "resolvedContentDigest": locked["resolvedContentDigest"],
+        "validatorIdentity": locked["validatorIdentity"],
+        "registrationFingerprint": locked["registrationFingerprint"],
+    }
+
+
+def _external_skill_payload(
+    source: dict[str, Any], registration: dict[str, Any]
+) -> tuple[str, bytes, dict[str, Any]]:
+    manifest = registration.get("manifest")
+    if not isinstance(manifest, dict):
+        raise ProjectionError("external capability pack manifest is unavailable")
+    skill_name = manifest.get("skillName")
+    skill_path = manifest.get("skillPath")
+    if not isinstance(skill_name, str) or not isinstance(skill_path, str):
+        raise ProjectionError("external capability pack Skill declaration is invalid")
+    if skill_path != f"skills/{skill_name}/SKILL.md":
+        raise ProjectionError("external capability pack Skill declaration path drift")
+    try:
+        skill_bytes = read_registered_pack_blob(registration, skill_path)
+        skill_text = skill_bytes.decode("utf-8", "strict")
+    except (UnicodeDecodeError, ValueError) as exc:
+        raise ProjectionError("external capability pack Skill blob is invalid") from exc
+    if not skill_text.startswith("---\n"):
+        raise ProjectionError("external capability pack Skill front matter is missing")
+    end = skill_text.find("\n---\n", 4)
+    if end < 0:
+        raise ProjectionError("external capability pack Skill front matter is invalid")
+    try:
+        front_matter = yaml.safe_load(skill_text[4:end])
+    except yaml.YAMLError as exc:
+        raise ProjectionError("external capability pack Skill front matter is invalid") from exc
+    if not isinstance(front_matter, dict) or front_matter.get("name") != skill_name:
+        raise ProjectionError("external capability pack Skill front matter name drift")
+    relative = f"skills/{skill_name}/SKILL.md"
+    generated = {
+        "id": source["id"],
+        "version": source["version"],
+        "contentHash": source["contentHash"],
+        "skillProjectionVersion": AGENT_SKILL_PROJECTION_VERSION,
+        "path": relative,
+        "sourceKind": "EXTERNAL_CAPABILITY_PACK",
+        "sourceRegistrationId": source["sourceRegistrationId"],
+        "sourceCommit": source["sourceCommit"],
+        "sourceTree": source["sourceTree"],
+        "resolvedContentDigest": source["resolvedContentDigest"],
+        "validatorIdentity": source["validatorIdentity"],
+        "registrationFingerprint": source["registrationFingerprint"],
+        "sourceSkillPath": skill_path,
+        "skillBlobSha256": "sha256:" + _sha256(skill_bytes),
+    }
+    return relative, skill_bytes, generated
+
+
 def _build_projection_pack_unlocked(
     repository_root: Path,
     project_root: Path,
@@ -370,7 +449,7 @@ def _build_projection_pack_unlocked(
     adapter = _adapter(runtime)
     if resolved_context.get("runtime") != runtime:
         raise ProjectionError("resolved context runtime does not match projection runtime")
-    lock, _ = verify_capability_lock(root, project)
+    lock, verified_entries = verify_capability_lock(root, project)
     if resolved_context.get("capabilityLockFingerprint") != lock["lockFingerprint"]:
         raise ProjectionError("resolved context capability lock is stale")
     if resolved_context.get("project") != lock["project"]:
@@ -389,9 +468,19 @@ def _build_projection_pack_unlocked(
     if len(project_identity.parts) != 1:
         raise ProjectionError("resolved context project is not a safe identity")
     by_version = _capability_maps(root)
+    locked_index = {item["capabilityId"]: item for item in lock["capabilities"]}
     source_capabilities: list[dict[str, Any]] = []
     selected_index: dict[str, dict[str, Any]] = {}
     for item in sorted(resolved_context.get("selectedCapabilities", []), key=lambda value: value["id"]):
+        if item.get("sourceKind") == "EXTERNAL_CAPABILITY_PACK":
+            registration = verified_entries.get(item["id"])
+            locked = locked_index.get(item["id"])
+            if registration is None or locked is None:
+                raise ProjectionError(f"resolved external capability is not locked: {item['id']}")
+            source = _external_source_capability(item, locked, registration)
+            source_capabilities.append(source)
+            selected_index[item["id"]] = source
+            continue
         current = by_version.get((item["id"], item["version"]))
         if current is None or current.content_hash != item["contentHash"]:
             raise ProjectionError(f"resolved context is stale for {item['id']}")
@@ -437,8 +526,16 @@ def _build_projection_pack_unlocked(
                 }
 
                 omitted_references: list[dict[str, str]] = []
-                generated_skills: list[dict[str, str]] = []
+                generated_skills: list[dict[str, Any]] = []
                 for source in source_capabilities:
+                    if source.get("sourceKind") == "EXTERNAL_CAPABILITY_PACK":
+                        registration = verified_entries[source["id"]]
+                        relative, skill_bytes, generated = _external_skill_payload(
+                            source, registration
+                        )
+                        generated_payloads[relative] = skill_bytes
+                        generated_skills.append(generated)
+                        continue
                     if source["kind"] != "SKILL":
                         continue
                     capability = by_version[(source["id"], source["version"])]
@@ -582,7 +679,7 @@ def validate_projection_pack(
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     resolved = json.loads(context_path.read_text(encoding="utf-8"))
     SchemaStore(root).validate("core/schemas/runtime-projection-manifest.schema.json", manifest)
-    lock, _ = verify_capability_lock(root, project)
+    lock, verified_entries = verify_capability_lock(root, project)
     if resolved.get("project") != state["project"] or resolved.get("runtime") != runtime:
         raise ProjectionError("canonical projection resolved context identity mismatch")
     if resolved.get("capabilityLockFingerprint") != lock["lockFingerprint"]:
@@ -606,9 +703,19 @@ def validate_projection_pack(
         raise ProjectionError("canonical projection control-plane drift")
 
     by_version = _capability_maps(root)
+    locked_index = {item["capabilityId"]: item for item in lock["capabilities"]}
     selected_index: dict[str, dict[str, Any]] = {}
     source_capabilities: list[dict[str, Any]] = []
     for item in sorted(resolved.get("selectedCapabilities", []), key=lambda value: value["id"]):
+        if item.get("sourceKind") == "EXTERNAL_CAPABILITY_PACK":
+            registration = verified_entries.get(item["id"])
+            locked = locked_index.get(item["id"])
+            if registration is None or locked is None:
+                raise ProjectionError(f"canonical projection external lock drift: {item['id']}")
+            source = _external_source_capability(item, locked, registration)
+            source_capabilities.append(source)
+            selected_index[item["id"]] = source
+            continue
         capability = by_version.get((item["id"], item["version"]))
         if capability is None or capability.content_hash != item["contentHash"]:
             raise ProjectionError(f"canonical projection capability drift: {item['id']}")
@@ -631,8 +738,15 @@ def validate_projection_pack(
         "discussion-contract.md": materialize_discussion_contract(root, project, resolved).encode("utf-8"),
     }
     omitted: list[dict[str, str]] = []
-    generated_skills: list[dict[str, str]] = []
+    generated_skills: list[dict[str, Any]] = []
     for source in source_capabilities:
+        if source.get("sourceKind") == "EXTERNAL_CAPABILITY_PACK":
+            relative, skill_bytes, generated = _external_skill_payload(
+                source, verified_entries[source["id"]]
+            )
+            expected_bytes[relative] = skill_bytes
+            generated_skills.append(generated)
+            continue
         if source["kind"] != "SKILL":
             continue
         capability = by_version[(source["id"], source["version"])]
@@ -740,6 +854,8 @@ def check_projection_freshness(
             reasons.add("authority-snapshot-drift")
     by_version = _capability_maps(root)
     for source in manifest.get("sourceCapabilities", []):
+        if source.get("sourceKind") == "EXTERNAL_CAPABILITY_PACK":
+            continue
         current = by_version.get((source["id"], source["version"]))
         if current is None or current.content_hash != source["contentHash"]:
             reasons.add("source-capability-hash-changed")

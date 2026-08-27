@@ -2,9 +2,14 @@ from __future__ import annotations
 
 import json
 import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
+import yaml
+
+
+EXTERNAL_CAPABILITY_ID = "workflow:web-high-fidelity:reference-driven-visual-fidelity"
 
 
 def _pack(tmp_path: Path) -> tuple[Path, Path, Path]:
@@ -26,6 +31,75 @@ def _pack(tmp_path: Path) -> tuple[Path, Path, Path]:
     )
     build_projection_pack(root, project, resolved, runtime="CODEX")
     return root, project, root / "generated/projections/codex/project-fixture"
+
+
+def _external_pack(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
+    from evolution_harness.project import build_capability_lock
+    from evolution_harness.projection import build_projection_pack
+    from evolution_harness.resolver import resolve_design_context
+
+    source_root = Path(__file__).parents[1]
+    root = tmp_path / "harness"
+    for name in ["core", "design", "runtime", "examples"]:
+        shutil.copytree(source_root / name, root / name)
+    project = root / "examples/project-fixture"
+    registry_path = root / "core/registries/capability-packs.yaml"
+    registrations = yaml.safe_load(registry_path.read_text(encoding="utf-8"))
+    source = tmp_path / "external-pack"
+    subprocess.run(
+        [
+            "git",
+            "clone",
+            "-q",
+            "--no-hardlinks",
+            registrations[0]["source"]["repositoryPath"],
+            str(source),
+        ],
+        check=True,
+        capture_output=True,
+    )
+    registrations[0]["source"]["repositoryPath"] = str(source)
+    registry_path.write_text(
+        yaml.safe_dump(registrations, sort_keys=False), encoding="utf-8"
+    )
+    schema_path = root / "core/schemas/capability-pack-registration.schema.json"
+    schema = json.loads(schema_path.read_text(encoding="utf-8"))
+    schema["properties"]["source"]["properties"]["repositoryPath"]["const"] = str(
+        source
+    )
+    schema_path.write_text(json.dumps(schema, indent=2) + "\n", encoding="utf-8")
+    binding_path = project / ".agent-evolution/capabilities.yaml"
+    binding = yaml.safe_load(binding_path.read_text(encoding="utf-8"))
+    binding["capabilities"].append(EXTERNAL_CAPABILITY_ID)
+    binding_path.write_text(yaml.safe_dump(binding, sort_keys=False), encoding="utf-8")
+    build_capability_lock(root, project, write=True)
+    resolved = resolve_design_context(
+        root,
+        project,
+        intent="visual-reference-review",
+        topic="web-fidelity",
+        requested_output="review findings",
+        runtime="CODEX",
+    )
+    build_projection_pack(root, project, resolved, runtime="CODEX")
+    return root, project, source, root / "generated/projections/codex/project-fixture"
+
+
+def test_external_pack_projection_apply_remains_disabled(tmp_path: Path):
+    from evolution_harness.install import ProjectionInstallError, install_projection
+
+    root, _, _, pack = _external_pack(tmp_path)
+    target = tmp_path / "target"
+    target.mkdir()
+    before = {path.relative_to(target): path.read_bytes() for path in target.rglob("*") if path.is_file()}
+
+    with pytest.raises(
+        ProjectionInstallError, match="automatic projection install is disabled"
+    ):
+        install_projection(root, pack, target, apply=True)
+
+    after = {path.relative_to(target): path.read_bytes() for path in target.rglob("*") if path.is_file()}
+    assert after == before
 
 
 def _materialize_fixture_projection(root: Path, pack: Path, target: Path) -> Path:

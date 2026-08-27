@@ -436,6 +436,32 @@ def _external_skill_payload(
     return relative, skill_bytes, generated
 
 
+def _verify_external_source_snapshot(
+    repository_root: Path,
+    project_root: Path,
+    expected_lock: dict[str, Any],
+    expected_verified: dict[str, dict[str, Any]],
+) -> None:
+    external_ids = {
+        item["capabilityId"]
+        for item in expected_lock["capabilities"]
+        if item.get("sourceKind") == "EXTERNAL_CAPABILITY_PACK"
+    }
+    if not external_ids:
+        return
+    try:
+        live_lock, live_verified = verify_capability_lock(
+            repository_root, project_root
+        )
+    except Exception as exc:
+        raise ProjectionError("external source identity drift during projection") from exc
+    if live_lock != expected_lock:
+        raise ProjectionError("external source identity drift during projection")
+    for capability_id in sorted(external_ids):
+        if live_verified.get(capability_id) != expected_verified.get(capability_id):
+            raise ProjectionError("external source identity drift during projection")
+
+
 def _build_projection_pack_unlocked(
     repository_root: Path,
     project_root: Path,
@@ -559,6 +585,10 @@ def _build_projection_pack_unlocked(
                         }
                     )
 
+                _verify_external_source_snapshot(
+                    root, project, lock, verified_entries
+                )
+
                 generated_files = [
                     {"path": relative, "sha256": _sha256(data)}
                     for relative, data in sorted(generated_payloads.items())
@@ -589,6 +619,10 @@ def _build_projection_pack_unlocked(
                 generated_payloads["projection-manifest.json"] = deterministic_json_bytes(manifest)
                 for relative, data in sorted(generated_payloads.items()):
                     filesystem.write_bytes(f"{pack_relative}/{relative}", data)
+
+                _verify_external_source_snapshot(
+                    root, project, lock, verified_entries
+                )
 
                 journal = {
                     "schemaVersion": "projection-swap-transaction/v1",
@@ -788,6 +822,7 @@ def validate_projection_pack(
         path = pack / relative
         if path.read_bytes() != data:
             raise ProjectionError(f"canonical projection file bytes mismatch: {relative}")
+    _verify_external_source_snapshot(root, project, lock, verified_entries)
     return manifest, resolved
 
 

@@ -140,6 +140,24 @@ def _commit_and_relock(root: Path, project: Path, source: Path, message: str) ->
     build_capability_lock(root, project, write=True)
 
 
+def _advance_external_pack_identity(root: Path, project: Path, source: Path) -> None:
+    skill_path = source / "skills/web-high-fidelity/SKILL.md"
+    skill_path.write_text(
+        skill_path.read_text(encoding="utf-8")
+        + "\n<!-- projection source identity advanced -->\n",
+        encoding="utf-8",
+    )
+    _commit_and_relock(root, project, source, "test: advance projection source")
+
+
+def _file_snapshot(root: Path) -> dict[str, bytes]:
+    return {
+        path.relative_to(root).as_posix(): path.read_bytes()
+        for path in root.rglob("*")
+        if path.is_file()
+    }
+
+
 def test_projection_snapshots_external_skill_from_locked_git_blob(tmp_path: Path):
     from evolution_harness.projection import build_projection_pack
 
@@ -177,6 +195,67 @@ def test_projection_snapshots_external_skill_from_locked_git_blob(tmp_path: Path
         for item in manifest["generatedSkills"]
         if item.get("sourceKind") == "EXTERNAL_CAPABILITY_PACK"
     ] == [manifest["generatedSkills"][-1]]
+
+
+def test_projection_build_rejects_external_identity_drift_after_blob_read_without_replacing_canonical(
+    tmp_path: Path, monkeypatch
+):
+    from evolution_harness import projection
+
+    root, project, source = _external_pack_project(tmp_path)
+    resolved = _resolved(root, project, runtime="CODEX")
+    projection.build_projection_pack(root, project, resolved, runtime="CODEX")
+    pack = root / "generated/projections/codex/project-fixture"
+    before = _file_snapshot(pack)
+    original_read = projection.read_registered_pack_blob
+    advanced = False
+
+    def read_then_advance(registration, relative_path):
+        nonlocal advanced
+        data = original_read(registration, relative_path)
+        if not advanced:
+            advanced = True
+            _advance_external_pack_identity(root, project, source)
+        return data
+
+    monkeypatch.setattr(projection, "read_registered_pack_blob", read_then_advance)
+
+    with pytest.raises(projection.ProjectionError, match="external source identity drift"):
+        projection.build_projection_pack(root, project, resolved, runtime="CODEX")
+
+    assert advanced
+    assert _file_snapshot(pack) == before
+    assert not list(pack.parent.glob(".project-fixture.*"))
+
+
+def test_projection_validation_rejects_external_identity_drift_after_blob_read(
+    tmp_path: Path, monkeypatch
+):
+    from evolution_harness import projection
+
+    root, project, source = _external_pack_project(tmp_path)
+    resolved = _resolved(root, project, runtime="CODEX")
+    projection.build_projection_pack(root, project, resolved, runtime="CODEX")
+    pack = root / "generated/projections/codex/project-fixture"
+    before = _file_snapshot(pack)
+    original_read = projection.read_registered_pack_blob
+    advanced = False
+
+    def read_then_advance(registration, relative_path):
+        nonlocal advanced
+        data = original_read(registration, relative_path)
+        if not advanced:
+            advanced = True
+            _advance_external_pack_identity(root, project, source)
+        return data
+
+    monkeypatch.setattr(projection, "read_registered_pack_blob", read_then_advance)
+
+    with pytest.raises(projection.ProjectionError, match="external source identity drift"):
+        projection.validate_projection_pack(root, project, pack, runtime="CODEX")
+
+    assert advanced
+    assert _file_snapshot(pack) == before
 
 
 def test_registered_pack_blob_reader_rejects_unsafe_or_missing_paths(tmp_path: Path):

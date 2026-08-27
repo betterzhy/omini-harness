@@ -281,6 +281,51 @@ def test_registry_rejects_validator_digest_drift(tmp_path: Path):
         build_capability_pack_registry(root, write=False)
 
 
+def test_candidate_gate_executes_fixed_blob_in_isolated_git_checkout(tmp_path: Path):
+    repository, _, _ = _pack_fixture(tmp_path)
+    validator = repository / "scripts/verify-capability-pack"
+    validator.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        "repo_root=$(cd \"${0%/*}/..\" && pwd)\n"
+        "[ \"$#\" -eq 2 ]\n"
+        "[ -d \"$repo_root/.git\" ]\n"
+        "[ \"$(git -C \"$repo_root\" rev-parse HEAD)\" = \"$1\" ]\n"
+        "[ \"$(git -C \"$repo_root\" rev-parse 'HEAD^{tree}')\" = \"$2\" ]\n"
+        "[ -z \"$(git -C \"$repo_root\" status --porcelain=v1 --untracked-files=all)\" ]\n",
+        encoding="utf-8",
+    )
+    validator.chmod(0o755)
+    commit, tree = _commit(repository, "test: require isolated checkout")
+    source = tmp_path / "pack-linked"
+    _git(repository, "worktree", "add", "-q", "--detach", str(source), commit)
+    root = tmp_path / "harness"
+    _write_test_schemas(root, source)
+    _write_registrations(root, [_registration(source, commit, tree)])
+
+    registry = build_capability_pack_registry(root, write=False)
+
+    assert registry["entries"][0]["source"]["commit"] == commit
+
+
+@pytest.mark.parametrize("index_flag", ["--assume-unchanged", "--skip-worktree"])
+def test_registry_rejects_hidden_worktree_validator_drift(
+    tmp_path: Path, index_flag: str
+):
+    root, source, _, _ = _harness_with_pack(tmp_path)
+    validator = source / "scripts/verify-capability-pack"
+    validator.write_text("#!/usr/bin/env bash\nexit 23\n", encoding="utf-8")
+    validator.chmod(0o755)
+    _commit(source, "mutate: committed failing validator")
+    _refresh_source_identity(root, source, content_digest=True, validator_digest=True)
+    _git(source, "update-index", index_flag, "scripts/verify-capability-pack")
+    validator.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+    validator.chmod(0o755)
+
+    with pytest.raises(ValueError, match="capability pack source has hidden index flags"):
+        build_capability_pack_registry(root, write=False)
+
+
 def test_registry_rejects_duplicate_active_capability_id(tmp_path: Path):
     root, _, _, _ = _harness_with_pack(tmp_path)
     entry = _registered_entry(root)
@@ -300,6 +345,21 @@ def test_registry_rejects_wrong_commit_tree_pair(tmp_path: Path):
     _write_registrations(root, [entry])
 
     with pytest.raises(ValueError, match="capability pack commit/tree mismatch"):
+        build_capability_pack_registry(root, write=False)
+
+
+def test_registry_rejects_committed_active_content_digest_drift(tmp_path: Path):
+    root, source, _, _ = _harness_with_pack(tmp_path)
+    entry = _registered_entry(root)
+    original_digest = entry["resolvedContentDigest"]
+    (source / "docs/active.txt").write_text("changed active content\n", encoding="utf-8")
+    commit, tree = _commit(source, "mutate: active content digest")
+    entry["source"]["commit"] = commit
+    entry["source"]["tree"] = tree
+    assert entry["resolvedContentDigest"] == original_digest
+    _write_registrations(root, [entry])
+
+    with pytest.raises(ValueError, match="capability pack content identity mismatch"):
         build_capability_pack_registry(root, write=False)
 
 
@@ -323,6 +383,29 @@ def test_registry_rejects_dirty_source(tmp_path: Path):
 
     with pytest.raises(ValueError, match="capability pack source is not clean"):
         build_capability_pack_registry(root, write=False)
+
+
+def test_registry_rejects_ignored_untracked_active_content(tmp_path: Path):
+    root, source, _, _ = _harness_with_pack(tmp_path)
+    (source / ".gitignore").write_text("docs/ignored.txt\n", encoding="utf-8")
+    _commit(source, "test: ignore active content")
+    _refresh_source_identity(root, source, content_digest=True)
+    (source / "docs/ignored.txt").write_text("ignored active bytes\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="capability pack has ignored untracked active content"):
+        build_capability_pack_registry(root, write=False)
+
+
+def test_registry_allows_ignored_untracked_content_only_under_excluded_root(tmp_path: Path):
+    root, source, _, _ = _harness_with_pack(tmp_path)
+    (source / ".gitignore").write_text("docs/history/*.tmp\n", encoding="utf-8")
+    _commit(source, "test: ignore excluded content")
+    _refresh_source_identity(root, source, content_digest=True)
+    (source / "docs/history/excluded.tmp").write_text("excluded bytes\n", encoding="utf-8")
+
+    registry = build_capability_pack_registry(root, write=False)
+
+    assert registry["entries"][0]["capabilityId"] == CAPABILITY_ID
 
 
 def test_registry_rejects_missing_git_object(tmp_path: Path):

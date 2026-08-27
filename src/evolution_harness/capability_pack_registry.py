@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import hashlib
 import subprocess
+import tempfile
 import unicodedata
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -58,6 +60,7 @@ def _run(
     *,
     cwd: Path | None = None,
     check: bool = True,
+    input_data: bytes | None = None,
     timeout: int = 300,
 ) -> subprocess.CompletedProcess[bytes]:
     try:
@@ -67,6 +70,7 @@ def _run(
             check=check,
             capture_output=True,
             env=_GIT_ENVIRONMENT,
+            input=input_data,
             timeout=timeout,
         )
     except (OSError, subprocess.SubprocessError) as exc:
@@ -77,8 +81,13 @@ def _git(
     source_root: Path,
     *arguments: str,
     check: bool = True,
+    input_data: bytes | None = None,
 ) -> subprocess.CompletedProcess[bytes]:
-    return _run(["git", "-C", str(source_root), *arguments], check=check)
+    return _run(
+        ["git", "-C", str(source_root), *arguments],
+        check=check,
+        input_data=input_data,
+    )
 
 
 def _git_text(source_root: Path, *arguments: str) -> str:
@@ -281,13 +290,100 @@ def _untracked_active_paths(source: Path, manifest: Mapping[str, Any]) -> list[s
     return active
 
 
+def _ignored_untracked_active_paths(
+    source: Path, manifest: Mapping[str, Any]
+) -> list[str]:
+    roots = list(manifest["contentRoots"])
+    excluded = list(manifest["excludedContentRoots"])
+    output = _git(
+        source,
+        "status",
+        "--porcelain=v1",
+        "-z",
+        "--ignored=matching",
+        "--untracked-files=all",
+    ).stdout
+    active: list[str] = []
+    for record in output.split(b"\0"):
+        if not record.startswith(b"!! "):
+            continue
+        try:
+            relative_path = record[3:].decode("utf-8", "strict")
+        except UnicodeDecodeError as exc:
+            raise ValueError("capability pack ignored status path is not UTF-8") from exc
+        if any(_is_under(relative_path, root) for root in roots) and not any(
+            _is_under(relative_path, root) for root in excluded
+        ):
+            active.append(relative_path)
+    return active
+
+
 def _require_clean_source(source: Path, manifest: Mapping[str, Any]) -> None:
     status = _git(source, "status", "--porcelain=v1", "-z", "--untracked-files=all").stdout
-    if not status:
-        return
-    if _untracked_active_paths(source, manifest):
-        raise ValueError("capability pack has untracked active content")
-    raise ValueError("capability pack source is not clean")
+    if status:
+        if _untracked_active_paths(source, manifest):
+            raise ValueError("capability pack has untracked active content")
+        raise ValueError("capability pack source is not clean")
+    if _ignored_untracked_active_paths(source, manifest):
+        raise ValueError("capability pack has ignored untracked active content")
+
+
+def _require_no_hidden_index_flags(source: Path) -> None:
+    output = _git(source, "ls-files", "-v", "-z").stdout
+    for record in output.split(b"\0"):
+        if not record:
+            continue
+        if len(record) < 3 or record[1:2] != b" ":
+            raise ValueError("capability pack index metadata is malformed")
+        if record[:1] != b"H":
+            raise ValueError("capability pack source has hidden index flags")
+
+
+def _fixed_commit_object_ids(source: Path, commit: str, tree: str) -> list[str]:
+    object_ids = {commit, tree}
+    output = _git(source, "ls-tree", "-r", "-t", "-z", commit).stdout
+    for raw_entry in output.split(b"\0"):
+        if not raw_entry:
+            continue
+        metadata, separator, _ = raw_entry.partition(b"\t")
+        fields = metadata.split(b" ")
+        if not separator or len(fields) != 3:
+            raise ValueError("capability pack Git tree closure is malformed")
+        try:
+            object_ids.add(fields[2].decode("ascii", "strict"))
+        except UnicodeDecodeError as exc:
+            raise ValueError("capability pack Git object ID is malformed") from exc
+    return sorted(object_ids)
+
+
+@contextmanager
+def _isolated_fixed_checkout(source: Path, commit: str, tree: str) -> Iterator[Path]:
+    object_ids = _fixed_commit_object_ids(source, commit, tree)
+    packed_objects = _git(
+        source,
+        "pack-objects",
+        "--stdout",
+        input_data=("\n".join(object_ids) + "\n").encode("ascii"),
+    ).stdout
+    if not packed_objects:
+        raise ValueError("capability pack fixed object materialization is empty")
+
+    with tempfile.TemporaryDirectory(prefix="capability-pack-fixed-checkout-") as directory:
+        checkout = Path(directory) / "checkout"
+        checkout.mkdir()
+        _git(checkout, "init", "-q", "--template=")
+        _git(checkout, "index-pack", "--stdin", input_data=packed_objects)
+        if not _object_exists(checkout, commit, "commit") or not _object_exists(
+            checkout, tree, "tree"
+        ):
+            raise ValueError("capability pack fixed object materialization is incomplete")
+        _git(checkout, "update-ref", "--no-deref", "HEAD", commit)
+        _git(checkout, "reset", "--hard", commit)
+        if _git_text(checkout, "rev-parse", "HEAD") != commit or _git_text(
+            checkout, "rev-parse", "HEAD^{tree}"
+        ) != tree:
+            raise ValueError("capability pack isolated checkout identity mismatch")
+        yield checkout
 
 
 def _digest_entries(
@@ -357,6 +453,7 @@ def _validate_registration(repository_root: Path, registration: dict[str, Any]) 
     manifest = _load_manifest(repository_root, source, entries)
     _validate_manifest_identity(registration, manifest)
     selected = _selected_entries(entries, manifest)
+    _require_no_hidden_index_flags(source)
     _require_clean_source(source, manifest)
     content_digest = _digest_entries(source, selected)
     if content_digest != registration["resolvedContentDigest"]:
@@ -372,16 +469,28 @@ def _validate_registration(repository_root: Path, registration: dict[str, Any]) 
     if validator_digest != registration["validator"]["sha256"]:
         raise ValueError("capability pack validator identity mismatch")
 
-    validator_path = _worktree_validator_path(source, validator_relative)
-    completed = _run(
-        ["bash", str(validator_path), commit, tree],
-        cwd=source,
-        check=False,
-    )
-    if completed.returncode != 0:
-        raise ValueError("capability pack candidate Gate failed")
+    with _isolated_fixed_checkout(source, commit, tree) as checkout:
+        _require_no_hidden_index_flags(checkout)
+        _require_clean_source(checkout, manifest)
+        validator_path = _worktree_validator_path(checkout, validator_relative)
+        executed_validator_digest = "sha256:" + sha256_bytes(validator_path.read_bytes())
+        if executed_validator_digest != registration["validator"]["sha256"]:
+            raise ValueError("capability pack executed validator identity mismatch")
+        completed = _run(
+            ["bash", str(validator_path), commit, tree],
+            cwd=checkout,
+            check=False,
+        )
+        if completed.returncode != 0:
+            raise ValueError("capability pack candidate Gate failed")
+        if "sha256:" + sha256_bytes(validator_path.read_bytes()) != executed_validator_digest:
+            raise ValueError("capability pack validator changed during candidate Gate")
+        _require_fixed_git_identity(checkout, registration)
+        _require_no_hidden_index_flags(checkout)
+        _require_clean_source(checkout, manifest)
 
     _require_fixed_git_identity(source, registration)
+    _require_no_hidden_index_flags(source)
     _require_clean_source(source, manifest)
     return registration
 

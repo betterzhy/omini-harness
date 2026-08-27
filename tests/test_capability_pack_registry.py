@@ -21,6 +21,10 @@ from evolution_harness.capability_pack_registry import (
 CAPABILITY_ID = "workflow:web-high-fidelity:reference-driven-visual-fidelity"
 REGISTRATION_ID = "pack:web-high-fidelity"
 FIXTURE_CONTENT_DIGEST = "sha256:42e88d096cd91ade629f1bb47474f24a7730c76c43cf250ae0bc549c30654cd7"
+JAVA_CAPABILITY_ID = "framework:java:java-engineering-standard"
+JAVA_REGISTRATION_ID = "pack:java-engineering-standard"
+JAVA_SOURCE_COMMIT = "765e9d00a3173ecfe873c1646f5dbe375de677e7"
+JAVA_SOURCE_TREE = "d79644b05149419feba8cdd7860b7dbbb48e4961"
 
 
 def _git(repository: Path, *arguments: str) -> str:
@@ -388,6 +392,27 @@ def test_registration_fingerprint_binds_harness_declared_manifest(tmp_path: Path
     assert _registration_fingerprint(changed) != _registration_fingerprint(registration)
 
 
+def test_repository_registry_registers_fixed_java_engineering_standard():
+    root = Path(__file__).parents[1]
+
+    registry = build_capability_pack_registry(root, write=False)
+    entry = next(
+        item
+        for item in registry["entries"]
+        if item["registrationId"] == JAVA_REGISTRATION_ID
+    )
+
+    assert entry["capabilityId"] == JAVA_CAPABILITY_ID
+    assert entry["packVersion"] == "0.4.0"
+    assert entry["source"]["commit"] == JAVA_SOURCE_COMMIT
+    assert entry["source"]["tree"] == JAVA_SOURCE_TREE
+    assert entry["contentDeclaration"]["kind"] == "HARNESS_DECLARED_MANIFEST"
+    manifest = entry["contentDeclaration"]["manifest"]
+    assert manifest["projectPackName"] == "java-engineering-standard"
+    assert manifest["skillName"] == "java-engineering-standard"
+    assert manifest["skillPath"] == "skills/java-engineering-standard/SKILL.md"
+
+
 def test_registry_write_materializes_only_the_external_registry_projection(tmp_path: Path):
     root, _, _, _ = _harness_with_pack(tmp_path)
 
@@ -446,6 +471,121 @@ def test_candidate_gate_executes_fixed_blob_in_isolated_git_checkout(tmp_path: P
     registry = build_capability_pack_registry(root, write=False)
 
     assert registry["entries"][0]["source"]["commit"] == commit
+
+
+def test_candidate_gate_uses_registered_host_home_offline_cache_contract(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    repository, _, _ = _pack_fixture(tmp_path)
+    trusted_home = tmp_path / "trusted-home"
+    trusted_home.mkdir()
+    trusted_bin = tmp_path / "trusted-bin"
+    trusted_bin.mkdir()
+    trusted_java_home = tmp_path / "trusted-java-home"
+    (trusted_java_home / "bin").mkdir(parents=True)
+    for executable in ["ruby", "rg"]:
+        (trusted_bin / executable).symlink_to("/bin/bash")
+    (trusted_java_home / "bin/java").symlink_to("/bin/bash")
+    monkeypatch.setenv("HOME", str(trusted_home))
+    validator = repository / "scripts/verify-capability-pack"
+    validator.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        f"[ \"$HOME\" = \"{trusted_home}\" ]\n"
+        "[ \"$LANG\" = \"en_US.UTF-8\" ]\n"
+        "[ \"$LC_ALL\" = \"en_US.UTF-8\" ]\n"
+        f"[ \"$JAVA_HOME\" = \"{trusted_java_home}\" ]\n",
+        encoding="utf-8",
+    )
+    validator.chmod(0o755)
+    commit, tree = _commit(repository, "test: require registered host home")
+    root = tmp_path / "harness"
+    _write_test_schemas(root, repository)
+    registration = _registration(repository, commit, tree)
+    bash_digest = "sha256:" + hashlib.sha256(Path("/bin/bash").read_bytes()).hexdigest()
+    registration["validator"]["environmentContract"] = (
+        "REGISTERED_TOOLCHAIN_OFFLINE_CACHE"
+    )
+    registration["validator"]["toolchain"] = {
+        executable: {
+            "absolutePath": str(trusted_bin / executable),
+            "sha256": bash_digest,
+        }
+        for executable in ["ruby", "rg"]
+    }
+    registration["validator"]["toolchain"]["java"] = {
+        "absolutePath": str(trusted_java_home / "bin/java"),
+        "sha256": bash_digest,
+    }
+    registration["validator"]["sha256"] = "sha256:" + hashlib.sha256(
+        validator.read_bytes()
+    ).hexdigest()
+    _write_registrations(root, [registration])
+
+    registry = build_capability_pack_registry(root, write=False)
+
+    assert registry["entries"][0]["validator"]["environmentContract"] == (
+        "REGISTERED_TOOLCHAIN_OFFLINE_CACHE"
+    )
+
+
+def test_registry_rejects_registered_toolchain_digest_drift(tmp_path: Path):
+    root, source, _, _ = _harness_with_pack(tmp_path)
+    toolchain_root = tmp_path / "registered-toolchain"
+    toolchain_root.mkdir()
+    bash_bytes = Path("/bin/bash").read_bytes()
+    toolchain = {}
+    for executable in ("ruby", "rg", "java"):
+        path = toolchain_root / executable
+        path.write_bytes(bash_bytes)
+        path.chmod(0o755)
+        toolchain[executable] = {
+            "absolutePath": str(path),
+            "sha256": "sha256:" + hashlib.sha256(bash_bytes).hexdigest(),
+        }
+    toolchain["java"]["sha256"] = "sha256:" + "0" * 64
+    entry = _registered_entry(root)
+    entry["validator"]["environmentContract"] = (
+        "REGISTERED_TOOLCHAIN_OFFLINE_CACHE"
+    )
+    entry["validator"]["toolchain"] = toolchain
+    _write_registrations(root, [entry])
+
+    with pytest.raises(
+        ValueError, match="capability pack validator toolchain identity mismatch"
+    ):
+        build_capability_pack_registry(root, write=False)
+
+
+def test_candidate_gate_materializes_registered_parent_tree_closure(tmp_path: Path):
+    source, _, _ = _pack_fixture(tmp_path)
+    (source / "docs/active.txt").write_text("candidate bytes\n", encoding="utf-8")
+    validator = source / "scripts/verify-capability-pack"
+    validator.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        "git -C \"${0%/*}/..\" cat-file -e \"$1^\"\n"
+        "git -C \"${0%/*}/..\" diff --check \"$1^\" \"$1\"\n",
+        encoding="utf-8",
+    )
+    validator.chmod(0o755)
+    commit, tree = _commit(source, "test: candidate requiring parent closure")
+    root = tmp_path / "harness"
+    _write_test_schemas(root, source)
+    registration = _registration(source, commit, tree)
+    registration["resolvedContentDigest"] = _expected_content_digest(source, _manifest())
+    registration["validator"]["sha256"] = "sha256:" + hashlib.sha256(
+        validator.read_bytes()
+    ).hexdigest()
+    registration["validator"]["gitHistoryContract"] = "CANDIDATE_PARENT_TREE"
+    _write_registrations(root, [registration])
+
+    registry = build_capability_pack_registry(root, write=False)
+
+    assert registry["entries"][0]["validator"]["gitHistoryContract"] == (
+        "CANDIDATE_PARENT_TREE"
+    )
 
 
 @pytest.mark.parametrize("index_flag", ["--assume-unchanged", "--skip-worktree"])

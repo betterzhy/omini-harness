@@ -1,0 +1,16 @@
+schemaVersion: project-design-state/v1
+project: java-engineering-standard-registration-fixture
+currentStage: ENGINEERING_DESIGN
+topics:
+  - topicId: neutral-java-pilot-readiness
+    status: OPEN
+    scope:
+      domain: java-engineering
+      concern: capability-pack-registration
+baselines: []
+assumptions: []
+openDecisions: []
+nextTopicCandidates: []
+projectAuthorityReferences: []
+protectedDecisions: []
+projectConstraints: []

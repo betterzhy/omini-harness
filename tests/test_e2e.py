@@ -5,6 +5,8 @@ from pathlib import Path
 
 import yaml
 
+from capability_pack_test_support import retain_web_registration_fixture
+
 
 def _copy_repo(tmp_path: Path) -> tuple[Path, Path]:
     source = Path(__file__).parents[1]
@@ -13,6 +15,7 @@ def _copy_repo(tmp_path: Path) -> tuple[Path, Path]:
         src = source / name
         if src.exists():
             shutil.copytree(src, root / name)
+    retain_web_registration_fixture(root)
     return root, root / "examples/project-fixture"
 
 

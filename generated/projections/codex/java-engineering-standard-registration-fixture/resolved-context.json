@@ -1,0 +1,52 @@
+{
+  "capabilityLockFingerprint": "sha256:a7f235cdd9ad0b2286bc7c1f57a5a02a164d945f0690647737caaffa49c3e9f9",
+  "closedTopics": [],
+  "conflictSignals": [],
+  "explain": {
+    "excluded": [],
+    "selected": [
+      {
+        "contentHash": "b226ed62d3b3e3710fb0a3611762864524ea94e8c15fe00a3b2b7e40943de666",
+        "id": "framework:java:java-engineering-standard",
+        "kind": "FRAMEWORK",
+        "selectedBecause": [
+          "explicit-binding"
+        ],
+        "sourceKind": "EXTERNAL_CAPABILITY_PACK",
+        "sourceRegistrationId": "pack:java-engineering-standard",
+        "version": "0.4.0"
+      }
+    ]
+  },
+  "humanGates": [],
+  "intent": "java-engineering",
+  "project": "java-engineering-standard-registration-fixture",
+  "projectAuthorityReferences": [],
+  "projectBindingHash": "82b51ec071edd06f14ec7f7efdd75693bd3f623f85f8fd5cb0454306054b95e0",
+  "projectStateHash": "8df5a991ef9d060782a03981c1a5b1beb2e94ccfca24033d2ec3aae3c9ac7f76",
+  "protectedDecisions": [],
+  "reopenSignal": null,
+  "requestedOutput": "neutral pilot readiness evidence",
+  "requiredSelfReview": [],
+  "resolutionId": "resolution:152449aa3086c14af9d2458c",
+  "runtime": "CODEX",
+  "schemaVersion": "resolved-design-context/v1",
+  "selectedCapabilities": [
+    {
+      "contentHash": "b226ed62d3b3e3710fb0a3611762864524ea94e8c15fe00a3b2b7e40943de666",
+      "id": "framework:java:java-engineering-standard",
+      "kind": "FRAMEWORK",
+      "selectedBecause": [
+        "explicit-binding"
+      ],
+      "sourceKind": "EXTERNAL_CAPABILITY_PACK",
+      "sourceRegistrationId": "pack:java-engineering-standard",
+      "version": "0.4.0"
+    }
+  ],
+  "semanticSelectionCandidates": [],
+  "stage": "ENGINEERING_DESIGN",
+  "topic": "neutral-java-pilot-readiness",
+  "topicGuard": "OPEN_OR_IN_PROGRESS",
+  "workflowStage": null
+}

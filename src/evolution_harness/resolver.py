@@ -10,6 +10,13 @@ from .project import load_profile, load_project_binding, load_project_state, ver
 from .registry import build_design_registry
 
 
+def _external_capability_kind(capability_id: str) -> str:
+    kind = capability_id.partition(":")[0].upper()
+    if kind not in {"PRINCIPLE", "FRAMEWORK", "SKILL", "WORKFLOW"}:
+        raise ValueError("external capability pack canonical ID has unsupported kind")
+    return kind
+
+
 def _load_asset(root: Path, entry: dict[str, Any]) -> dict[str, Any]:
     path = root / entry["location"] / "asset.yaml"
     return yaml.safe_load(path.read_text(encoding="utf-8")) or {}
@@ -190,7 +197,7 @@ def resolve_design_context(
         if entry.get("sourceKind") == "EXTERNAL_CAPABILITY_PACK":
             item = {
                 "id": entry["capabilityId"],
-                "kind": "WORKFLOW",
+                "kind": _external_capability_kind(entry["capabilityId"]),
                 "version": entry["packVersion"],
                 "contentHash": entry["resolvedContentDigest"].removeprefix("sha256:"),
                 "sourceKind": "EXTERNAL_CAPABILITY_PACK",

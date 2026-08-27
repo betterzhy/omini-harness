@@ -182,6 +182,21 @@ def _canonical_registration_identity_record(
             "relativePath": validator["relativePath"],
             "sha256": validator["sha256"],
             "argumentsContract": validator["argumentsContract"],
+            **(
+                {"environmentContract": validator["environmentContract"]}
+                if "environmentContract" in validator
+                else {}
+            ),
+            **(
+                {"toolchain": validator["toolchain"]}
+                if "toolchain" in validator
+                else {}
+            ),
+            **(
+                {"gitHistoryContract": validator["gitHistoryContract"]}
+                if "gitHistoryContract" in validator
+                else {}
+            ),
         },
     }
     if "contentDeclaration" in registration:
@@ -215,6 +230,29 @@ def _external_lock_source(registration: dict[str, Any]) -> dict[str, Any]:
         "validatorIdentity": {
             "relativePath": registration["validator"]["relativePath"],
             "sha256": registration["validator"]["sha256"],
+            **(
+                {
+                    "environmentContract": registration["validator"][
+                        "environmentContract"
+                    ]
+                }
+                if "environmentContract" in registration["validator"]
+                else {}
+            ),
+            **(
+                {"toolchain": registration["validator"]["toolchain"]}
+                if "toolchain" in registration["validator"]
+                else {}
+            ),
+            **(
+                {
+                    "gitHistoryContract": registration["validator"][
+                        "gitHistoryContract"
+                    ]
+                }
+                if "gitHistoryContract" in registration["validator"]
+                else {}
+            ),
         },
         "registrationFingerprint": _registration_fingerprint(registration),
     }

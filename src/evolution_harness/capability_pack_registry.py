@@ -62,6 +62,7 @@ def _run(
     check: bool = True,
     input_data: bytes | None = None,
     timeout: int = 300,
+    environment: Mapping[str, str] | None = None,
 ) -> subprocess.CompletedProcess[bytes]:
     try:
         return subprocess.run(
@@ -69,12 +70,58 @@ def _run(
             cwd=cwd,
             check=check,
             capture_output=True,
-            env=_GIT_ENVIRONMENT,
+            env=dict(environment or _GIT_ENVIRONMENT),
             input=input_data,
             timeout=timeout,
         )
     except (OSError, subprocess.SubprocessError) as exc:
         raise ValueError(f"capability pack command failed: {arguments[0]}") from exc
+
+
+def _validator_toolchain_paths(registration: Mapping[str, Any]) -> list[Path]:
+    validator = registration["validator"]
+    contract = validator.get("environmentContract", "SANITIZED")
+    if contract == "SANITIZED":
+        return []
+    if contract != "REGISTERED_TOOLCHAIN_OFFLINE_CACHE":
+        raise ValueError("capability pack validator environment contract is unsupported")
+    paths: list[Path] = []
+    for command in ("ruby", "rg", "java"):
+        identity = validator["toolchain"][command]
+        path = Path(identity["absolutePath"])
+        if not path.is_absolute() or not path.is_file() or path.name != command:
+            raise ValueError("capability pack validator toolchain path is unavailable or unsafe")
+        if "sha256:" + sha256_bytes(path.read_bytes()) != identity["sha256"]:
+            raise ValueError("capability pack validator toolchain identity mismatch")
+        paths.append(path)
+    return paths
+
+
+def _validator_environment(registration: Mapping[str, Any]) -> dict[str, str]:
+    environment = dict(_GIT_ENVIRONMENT)
+    contract = registration["validator"].get("environmentContract", "SANITIZED")
+    if contract == "SANITIZED":
+        return environment
+    if contract != "REGISTERED_TOOLCHAIN_OFFLINE_CACHE":
+        raise ValueError("capability pack validator environment contract is unsupported")
+    host_home = Path.home()
+    if (
+        not host_home.is_absolute()
+        or host_home.is_symlink()
+        or not host_home.is_dir()
+        or host_home.resolve(strict=True) != host_home
+    ):
+        raise ValueError("capability pack validator host HOME is unavailable or unsafe")
+    toolchain_paths = _validator_toolchain_paths(registration)
+    path_entries = [str(path.parent) for path in toolchain_paths]
+    path_entries.extend(["/usr/bin", "/bin", "/usr/sbin", "/sbin"])
+    environment["PATH"] = ":".join(dict.fromkeys(path_entries))
+    environment["HOME"] = str(host_home)
+    java_path = next(path for path in toolchain_paths if path.name == "java")
+    environment["JAVA_HOME"] = str(java_path.parent.parent)
+    environment["LANG"] = "en_US.UTF-8"
+    environment["LC_ALL"] = "en_US.UTF-8"
+    return environment
 
 
 def _git(
@@ -381,9 +428,10 @@ def _require_no_hidden_index_flags(source: Path) -> None:
             raise ValueError("capability pack source has hidden index flags")
 
 
-def _fixed_commit_object_ids(source: Path, commit: str, tree: str) -> list[str]:
-    object_ids = {commit, tree}
-    output = _git(source, "ls-tree", "-r", "-t", "-z", commit).stdout
+def _revision_object_ids(source: Path, revision: str) -> set[str]:
+    tree = _git_text(source, "rev-parse", f"{revision}^{{tree}}")
+    object_ids = {revision, tree}
+    output = _git(source, "ls-tree", "-r", "-t", "-z", revision).stdout
     for raw_entry in output.split(b"\0"):
         if not raw_entry:
             continue
@@ -395,12 +443,38 @@ def _fixed_commit_object_ids(source: Path, commit: str, tree: str) -> list[str]:
             object_ids.add(fields[2].decode("ascii", "strict"))
         except UnicodeDecodeError as exc:
             raise ValueError("capability pack Git object ID is malformed") from exc
+    return object_ids
+
+
+def _fixed_commit_object_ids(
+    source: Path,
+    commit: str,
+    tree: str,
+    git_history_contract: str,
+) -> list[str]:
+    object_ids = _revision_object_ids(source, commit)
+    object_ids.add(tree)
+    if git_history_contract == "CANDIDATE_PARENT_TREE":
+        parent = _git_text(source, "rev-parse", f"{commit}^")
+        object_ids.update(_revision_object_ids(source, parent))
+    elif git_history_contract != "CANDIDATE_ONLY":
+        raise ValueError("capability pack validator Git history contract is unsupported")
     return sorted(object_ids)
 
 
 @contextmanager
-def _isolated_fixed_checkout(source: Path, commit: str, tree: str) -> Iterator[Path]:
-    object_ids = _fixed_commit_object_ids(source, commit, tree)
+def _isolated_fixed_checkout(
+    source: Path,
+    commit: str,
+    tree: str,
+    git_history_contract: str = "CANDIDATE_ONLY",
+) -> Iterator[Path]:
+    object_ids = _fixed_commit_object_ids(
+        source,
+        commit,
+        tree,
+        git_history_contract,
+    )
     packed_objects = _git(
         source,
         "pack-objects",
@@ -515,22 +589,30 @@ def _validate_registration(repository_root: Path, registration: dict[str, Any]) 
     if validator_digest != registration["validator"]["sha256"]:
         raise ValueError("capability pack validator identity mismatch")
 
-    with _isolated_fixed_checkout(source, commit, tree) as checkout:
+    with _isolated_fixed_checkout(
+        source,
+        commit,
+        tree,
+        registration["validator"].get("gitHistoryContract", "CANDIDATE_ONLY"),
+    ) as checkout:
         _require_no_hidden_index_flags(checkout)
         _require_clean_source(checkout, manifest)
         validator_path = _worktree_validator_path(checkout, validator_relative)
         executed_validator_digest = "sha256:" + sha256_bytes(validator_path.read_bytes())
         if executed_validator_digest != registration["validator"]["sha256"]:
             raise ValueError("capability pack executed validator identity mismatch")
+        _validator_toolchain_paths(registration)
         completed = _run(
             ["bash", str(validator_path), commit, tree],
             cwd=checkout,
             check=False,
+            environment=_validator_environment(registration),
         )
         if completed.returncode != 0:
             raise ValueError("capability pack candidate Gate failed")
         if "sha256:" + sha256_bytes(validator_path.read_bytes()) != executed_validator_digest:
             raise ValueError("capability pack validator changed during candidate Gate")
+        _validator_toolchain_paths(registration)
         _require_fixed_git_identity(checkout, registration)
         _require_no_hidden_index_flags(checkout)
         _require_clean_source(checkout, manifest)
@@ -625,7 +707,8 @@ def _registration_record(registration: Mapping[str, Any]) -> dict[str, Any]:
         "registrationFingerprint",
         "manifest",
     }
-    if set(registration) != allowed:
+    keys = set(registration)
+    if not set(required).issubset(keys) or not keys.issubset(allowed):
         raise ValueError("capability pack registration identity is incomplete")
     try:
         return {

@@ -8,6 +8,8 @@ from pathlib import Path
 import pytest
 import yaml
 
+from capability_pack_test_support import retain_web_registration_fixture
+
 
 EXTERNAL_CAPABILITY_ID = "workflow:web-high-fidelity:reference-driven-visual-fidelity"
 
@@ -42,6 +44,7 @@ def _external_pack(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
     root = tmp_path / "harness"
     for name in ["core", "design", "runtime", "examples"]:
         shutil.copytree(source_root / name, root / name)
+    retain_web_registration_fixture(root)
     project = root / "examples/project-fixture"
     registry_path = root / "core/registries/capability-packs.yaml"
     registrations = yaml.safe_load(registry_path.read_text(encoding="utf-8"))

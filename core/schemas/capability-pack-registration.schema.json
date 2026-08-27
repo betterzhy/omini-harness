@@ -82,7 +82,50 @@
         "kind": {"const": "FIXED_CANDIDATE_GATE"},
         "relativePath": {"const": "scripts/verify-capability-pack"},
         "sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
-        "argumentsContract": {"const": "CANDIDATE_COMMIT_TREE"}
+        "argumentsContract": {"const": "CANDIDATE_COMMIT_TREE"},
+        "environmentContract": {
+          "enum": ["SANITIZED", "REGISTERED_TOOLCHAIN_OFFLINE_CACHE"]
+        },
+        "gitHistoryContract": {
+          "enum": ["CANDIDATE_ONLY", "CANDIDATE_PARENT_TREE"]
+        },
+        "toolchain": {
+          "type": "object",
+          "required": ["ruby", "rg", "java"],
+          "properties": {
+            "ruby": {"$ref": "#/$defs/toolIdentity"},
+            "rg": {"$ref": "#/$defs/toolIdentity"},
+            "java": {"$ref": "#/$defs/toolIdentity"}
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "required": ["environmentContract"],
+            "properties": {
+              "environmentContract": {
+                "const": "REGISTERED_TOOLCHAIN_OFFLINE_CACHE"
+              }
+            }
+          },
+          "then": {"required": ["toolchain"]}
+        }
+      ]
+    }
+  },
+  "$defs": {
+    "toolIdentity": {
+      "type": "object",
+      "required": ["absolutePath", "sha256"],
+      "properties": {
+        "absolutePath": {
+          "type": "string",
+          "pattern": "^/(?:[^/]+/)*[^/]+$"
+        },
+        "sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
       },
       "additionalProperties": false
     }

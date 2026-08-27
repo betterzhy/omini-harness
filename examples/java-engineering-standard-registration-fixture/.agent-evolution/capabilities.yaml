@@ -1,0 +1,6 @@
+schemaVersion: project-capability-binding/v1
+profiles: []
+capabilities:
+  - framework:java:java-engineering-standard
+extensions: []
+disabledCapabilities: []

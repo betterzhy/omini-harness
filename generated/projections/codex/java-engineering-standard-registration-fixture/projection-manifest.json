@@ -1,0 +1,105 @@
+{
+  "capabilityLockFingerprint": "sha256:a7f235cdd9ad0b2286bc7c1f57a5a02a164d945f0690647737caaffa49c3e9f9",
+  "generatedFiles": [
+    {
+      "path": "discussion-contract.md",
+      "sha256": "b162cab8a37f30278baff53609c033a4f9d74fe95f8a6a441a5b193a5c329c40"
+    },
+    {
+      "path": "repository-guidance.md",
+      "sha256": "07746167936eb39d12a8d465beaf8355744bd7eebbe5895db81fd76c41acfe54"
+    },
+    {
+      "path": "resolved-context.json",
+      "sha256": "3bd0378897d3d45553f7db3f2f5ca672e0495ceb3adf8a94d33cce32e93d041a"
+    },
+    {
+      "path": "resolved-task-context.md",
+      "sha256": "af290abd1e335d0ae210c5901736e3e02272f15f6627d5e08d080288b43b34d2"
+    },
+    {
+      "path": "skills/java-engineering-standard/SKILL.md",
+      "sha256": "ca01a6b791a2638ab0bf1c85df9b6cf6f1f8c0851975cf4a3c896fc44121dae8"
+    }
+  ],
+  "generatedSkills": [
+    {
+      "contentHash": "b226ed62d3b3e3710fb0a3611762864524ea94e8c15fe00a3b2b7e40943de666",
+      "id": "framework:java:java-engineering-standard",
+      "path": "skills/java-engineering-standard/SKILL.md",
+      "registrationFingerprint": "sha256:a0d451ce3f3c15112eccb50ee3d0f5ed39ea864950fc39d32d81480e8143f7d4",
+      "resolvedContentDigest": "sha256:b226ed62d3b3e3710fb0a3611762864524ea94e8c15fe00a3b2b7e40943de666",
+      "skillBlobSha256": "sha256:ca01a6b791a2638ab0bf1c85df9b6cf6f1f8c0851975cf4a3c896fc44121dae8",
+      "skillProjectionVersion": "agent-skill-projection/1",
+      "sourceCommit": "765e9d00a3173ecfe873c1646f5dbe375de677e7",
+      "sourceKind": "EXTERNAL_CAPABILITY_PACK",
+      "sourceRegistrationId": "pack:java-engineering-standard",
+      "sourceSkillPath": "skills/java-engineering-standard/SKILL.md",
+      "sourceTree": "d79644b05149419feba8cdd7860b7dbbb48e4961",
+      "validatorIdentity": {
+        "environmentContract": "REGISTERED_TOOLCHAIN_OFFLINE_CACHE",
+        "gitHistoryContract": "CANDIDATE_PARENT_TREE",
+        "relativePath": "scripts/verify-capability-pack",
+        "sha256": "sha256:5bd70fd85092be6424410a42c0f0a1330820cc3d7d36bc1ee0e948958e54ee01",
+        "toolchain": {
+          "java": {
+            "absolutePath": "/Library/Java/JavaVirtualMachines/temurin-21.jdk/Contents/Home/bin/java",
+            "sha256": "sha256:1069d726eae63d510d2983a2a4c7869f14db200605685c98117d9a27aaa5270f"
+          },
+          "rg": {
+            "absolutePath": "/Applications/ChatGPT.app/Contents/Resources/rg",
+            "sha256": "sha256:83761933102235b0932142806cd2f56f76f2b02721078549ffa64866b165ceaf"
+          },
+          "ruby": {
+            "absolutePath": "/opt/homebrew/bin/ruby",
+            "sha256": "sha256:4694e9689687f3c2d30339c3d444a7c3f3eb39d68c7e1d9e37194ece9fe15512"
+          }
+        }
+      },
+      "version": "0.4.0"
+    }
+  ],
+  "omittedReferences": [],
+  "project": "java-engineering-standard-registration-fixture",
+  "projectBindingHash": "82b51ec071edd06f14ec7f7efdd75693bd3f623f85f8fd5cb0454306054b95e0",
+  "projectStateHash": "8df5a991ef9d060782a03981c1a5b1beb2e94ccfca24033d2ec3aae3c9ac7f76",
+  "projectionType": "CODEX_REPOSITORY_PACK",
+  "projectionVersion": "codex-project-pack/1",
+  "runtime": "CODEX",
+  "schemaVersion": "runtime-projection-manifest/v1",
+  "sourceCapabilities": [
+    {
+      "contentHash": "b226ed62d3b3e3710fb0a3611762864524ea94e8c15fe00a3b2b7e40943de666",
+      "id": "framework:java:java-engineering-standard",
+      "kind": "FRAMEWORK",
+      "registrationFingerprint": "sha256:a0d451ce3f3c15112eccb50ee3d0f5ed39ea864950fc39d32d81480e8143f7d4",
+      "resolvedContentDigest": "sha256:b226ed62d3b3e3710fb0a3611762864524ea94e8c15fe00a3b2b7e40943de666",
+      "sourceCommit": "765e9d00a3173ecfe873c1646f5dbe375de677e7",
+      "sourceKind": "EXTERNAL_CAPABILITY_PACK",
+      "sourceRegistrationId": "pack:java-engineering-standard",
+      "sourceTree": "d79644b05149419feba8cdd7860b7dbbb48e4961",
+      "validatorIdentity": {
+        "environmentContract": "REGISTERED_TOOLCHAIN_OFFLINE_CACHE",
+        "gitHistoryContract": "CANDIDATE_PARENT_TREE",
+        "relativePath": "scripts/verify-capability-pack",
+        "sha256": "sha256:5bd70fd85092be6424410a42c0f0a1330820cc3d7d36bc1ee0e948958e54ee01",
+        "toolchain": {
+          "java": {
+            "absolutePath": "/Library/Java/JavaVirtualMachines/temurin-21.jdk/Contents/Home/bin/java",
+            "sha256": "sha256:1069d726eae63d510d2983a2a4c7869f14db200605685c98117d9a27aaa5270f"
+          },
+          "rg": {
+            "absolutePath": "/Applications/ChatGPT.app/Contents/Resources/rg",
+            "sha256": "sha256:83761933102235b0932142806cd2f56f76f2b02721078549ffa64866b165ceaf"
+          },
+          "ruby": {
+            "absolutePath": "/opt/homebrew/bin/ruby",
+            "sha256": "sha256:4694e9689687f3c2d30339c3d444a7c3f3eb39d68c7e1d9e37194ece9fe15512"
+          }
+        }
+      },
+      "version": "0.4.0"
+    }
+  ],
+  "sourceResolutionId": "resolution:152449aa3086c14af9d2458c"
+}

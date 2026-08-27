@@ -10,6 +10,8 @@ from pathlib import Path
 import pytest
 import yaml
 
+from capability_pack_test_support import retain_web_registration_fixture
+
 
 EXTERNAL_CAPABILITY_ID = "workflow:web-high-fidelity:reference-driven-visual-fidelity"
 
@@ -21,6 +23,7 @@ def _copy_repo(tmp_path: Path) -> tuple[Path, Path]:
         src = source / name
         if src.exists():
             shutil.copytree(src, root / name)
+    retain_web_registration_fixture(root)
     return root, root / "examples/project-fixture"
 
 

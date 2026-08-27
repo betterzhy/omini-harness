@@ -8,6 +8,31 @@
       "required": ["relativePath", "sha256"],
       "properties": {
         "relativePath": {"type": "string", "minLength": 1},
+        "sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+        "environmentContract": {
+          "enum": ["SANITIZED", "REGISTERED_TOOLCHAIN_OFFLINE_CACHE"]
+        },
+        "gitHistoryContract": {
+          "enum": ["CANDIDATE_ONLY", "CANDIDATE_PARENT_TREE"]
+        },
+        "toolchain": {
+          "type": "object",
+          "required": ["ruby", "rg", "java"],
+          "properties": {
+            "ruby": {"$ref": "#/$defs/toolIdentity"},
+            "rg": {"$ref": "#/$defs/toolIdentity"},
+            "java": {"$ref": "#/$defs/toolIdentity"}
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "toolIdentity": {
+      "type": "object",
+      "required": ["absolutePath", "sha256"],
+      "properties": {
+        "absolutePath": {"type": "string", "pattern": "^/(?:[^/]+/)*[^/]+$"},
         "sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
       },
       "additionalProperties": false
@@ -32,7 +57,7 @@
       ],
       "properties": {
         "id": {"type": "string", "minLength": 1},
-        "kind": {"const": "WORKFLOW"},
+        "kind": {"enum": ["PRINCIPLE", "FRAMEWORK", "SKILL", "WORKFLOW"]},
         "version": {"type": "string", "minLength": 1},
         "contentHash": {"$ref": "#/$defs/sha256"},
         "sourceKind": {"const": "EXTERNAL_CAPABILITY_PACK"},

@@ -8,8 +8,22 @@ from pathlib import Path
 import pytest
 import yaml
 
+from capability_pack_test_support import retain_web_registration_fixture
+
 
 EXTERNAL_CAPABILITY_ID = "workflow:web-high-fidelity:reference-driven-visual-fidelity"
+
+
+def test_external_capability_kind_is_derived_from_canonical_id():
+    from evolution_harness.resolver import _external_capability_kind
+
+    assert _external_capability_kind("framework:java:java-engineering-standard") == "FRAMEWORK"
+    assert (
+        _external_capability_kind(
+            "workflow:web-high-fidelity:reference-driven-visual-fidelity"
+        )
+        == "WORKFLOW"
+    )
 
 
 def _copy_repo(tmp_path: Path) -> tuple[Path, Path]:
@@ -19,6 +33,7 @@ def _copy_repo(tmp_path: Path) -> tuple[Path, Path]:
         src = source / name
         if src.exists():
             shutil.copytree(src, root / name)
+    retain_web_registration_fixture(root)
     return root, root / "examples/project-fixture"
 
 

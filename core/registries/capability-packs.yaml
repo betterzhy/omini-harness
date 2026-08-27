@@ -16,3 +16,68 @@
     relativePath: scripts/verify-capability-pack
     sha256: sha256:f0a09d48e3a296bb67565a6f0a5edc46c6a7dcf72c8e48f32a6f80a9c0823d94
     argumentsContract: CANDIDATE_COMMIT_TREE
+- schemaVersion: capability-pack-registration/v1
+  registrationId: pack:java-engineering-standard
+  capabilityId: framework:java:java-engineering-standard
+  packVersion: 0.4.0
+  status: ACTIVE
+  distributionStatus: LOCAL_ONLY
+  source:
+    kind: LOCAL_GIT
+    repositoryId: java-engineering-standard
+    repositoryPath: /Users/yuzhuangzhuang/Projects/java-engineering-standard
+    commit: 765e9d00a3173ecfe873c1646f5dbe375de677e7
+    tree: d79644b05149419feba8cdd7860b7dbbb48e4961
+  contentDeclaration:
+    kind: HARNESS_DECLARED_MANIFEST
+    manifest:
+      schemaVersion: capability-pack/v1
+      projectPackName: java-engineering-standard
+      skillName: java-engineering-standard
+      displayName: Java Engineering Capability Pack
+      capabilityId: framework:java:java-engineering-standard
+      version: 0.4.0
+      contentDigestContract: capability-pack-content/v1
+      contentRoots:
+        - AGENTS.md
+        - README.md
+        - JAVA-DEVELOPMENT-STANDARD.md
+        - VERSION
+        - baselines
+        - compatibility
+        - config
+        - docs
+        - policies
+        - profiles
+        - registries
+        - schemas
+        - skills
+        - sources
+        - templates
+      excludedContentRoots:
+        - docs/history
+        - docs/migrations
+        - docs/superpowers
+      skillPath: skills/java-engineering-standard/SKILL.md
+      validator:
+        kind: FIXED_CANDIDATE_GATE
+        path: scripts/verify-capability-pack
+        argumentsContract: CANDIDATE_COMMIT_TREE
+  resolvedContentDigest: sha256:b226ed62d3b3e3710fb0a3611762864524ea94e8c15fe00a3b2b7e40943de666
+  validator:
+    kind: FIXED_CANDIDATE_GATE
+    relativePath: scripts/verify-capability-pack
+    sha256: sha256:5bd70fd85092be6424410a42c0f0a1330820cc3d7d36bc1ee0e948958e54ee01
+    argumentsContract: CANDIDATE_COMMIT_TREE
+    environmentContract: REGISTERED_TOOLCHAIN_OFFLINE_CACHE
+    gitHistoryContract: CANDIDATE_PARENT_TREE
+    toolchain:
+      ruby:
+        absolutePath: /opt/homebrew/bin/ruby
+        sha256: sha256:4694e9689687f3c2d30339c3d444a7c3f3eb39d68c7e1d9e37194ece9fe15512
+      rg:
+        absolutePath: /Applications/ChatGPT.app/Contents/Resources/rg
+        sha256: sha256:83761933102235b0932142806cd2f56f76f2b02721078549ffa64866b165ceaf
+      java:
+        absolutePath: /Library/Java/JavaVirtualMachines/temurin-21.jdk/Contents/Home/bin/java
+        sha256: sha256:1069d726eae63d510d2983a2a4c7869f14db200605685c98117d9a27aaa5270f

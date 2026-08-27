@@ -1,6 +1,84 @@
 {
   "entries": [
     {
+      "capabilityId": "framework:java:java-engineering-standard",
+      "contentDeclaration": {
+        "kind": "HARNESS_DECLARED_MANIFEST",
+        "manifest": {
+          "capabilityId": "framework:java:java-engineering-standard",
+          "contentDigestContract": "capability-pack-content/v1",
+          "contentRoots": [
+            "AGENTS.md",
+            "README.md",
+            "JAVA-DEVELOPMENT-STANDARD.md",
+            "VERSION",
+            "baselines",
+            "compatibility",
+            "config",
+            "docs",
+            "policies",
+            "profiles",
+            "registries",
+            "schemas",
+            "skills",
+            "sources",
+            "templates"
+          ],
+          "displayName": "Java Engineering Capability Pack",
+          "excludedContentRoots": [
+            "docs/history",
+            "docs/migrations",
+            "docs/superpowers"
+          ],
+          "projectPackName": "java-engineering-standard",
+          "schemaVersion": "capability-pack/v1",
+          "skillName": "java-engineering-standard",
+          "skillPath": "skills/java-engineering-standard/SKILL.md",
+          "validator": {
+            "argumentsContract": "CANDIDATE_COMMIT_TREE",
+            "kind": "FIXED_CANDIDATE_GATE",
+            "path": "scripts/verify-capability-pack"
+          },
+          "version": "0.4.0"
+        }
+      },
+      "distributionStatus": "LOCAL_ONLY",
+      "packVersion": "0.4.0",
+      "registrationId": "pack:java-engineering-standard",
+      "resolvedContentDigest": "sha256:b226ed62d3b3e3710fb0a3611762864524ea94e8c15fe00a3b2b7e40943de666",
+      "schemaVersion": "capability-pack-registration/v1",
+      "source": {
+        "commit": "765e9d00a3173ecfe873c1646f5dbe375de677e7",
+        "kind": "LOCAL_GIT",
+        "repositoryId": "java-engineering-standard",
+        "repositoryPath": "/Users/yuzhuangzhuang/Projects/java-engineering-standard",
+        "tree": "d79644b05149419feba8cdd7860b7dbbb48e4961"
+      },
+      "status": "ACTIVE",
+      "validator": {
+        "argumentsContract": "CANDIDATE_COMMIT_TREE",
+        "environmentContract": "REGISTERED_TOOLCHAIN_OFFLINE_CACHE",
+        "gitHistoryContract": "CANDIDATE_PARENT_TREE",
+        "kind": "FIXED_CANDIDATE_GATE",
+        "relativePath": "scripts/verify-capability-pack",
+        "sha256": "sha256:5bd70fd85092be6424410a42c0f0a1330820cc3d7d36bc1ee0e948958e54ee01",
+        "toolchain": {
+          "java": {
+            "absolutePath": "/Library/Java/JavaVirtualMachines/temurin-21.jdk/Contents/Home/bin/java",
+            "sha256": "sha256:1069d726eae63d510d2983a2a4c7869f14db200605685c98117d9a27aaa5270f"
+          },
+          "rg": {
+            "absolutePath": "/Applications/ChatGPT.app/Contents/Resources/rg",
+            "sha256": "sha256:83761933102235b0932142806cd2f56f76f2b02721078549ffa64866b165ceaf"
+          },
+          "ruby": {
+            "absolutePath": "/opt/homebrew/bin/ruby",
+            "sha256": "sha256:4694e9689687f3c2d30339c3d444a7c3f3eb39d68c7e1d9e37194ece9fe15512"
+          }
+        }
+      }
+    },
+    {
       "capabilityId": "workflow:web-high-fidelity:reference-driven-visual-fidelity",
       "distributionStatus": "LOCAL_ONLY",
       "packVersion": "2.0.0",
@@ -24,5 +102,5 @@
     }
   ],
   "schemaVersion": "capability-pack-registry/v1",
-  "sourceRevision": "content-sha256:cfe0af64246590613a81cc69399db72c8d5f0e2e01ffeb29c09e48456a9fc347"
+  "sourceRevision": "content-sha256:b0b9c33de113d42d21d6b0c432267cd0fbb6ad44fd1fc8646236224e8e84736d"
 }

@@ -538,6 +538,14 @@ def test_candidate_gate_uses_registered_host_home_offline_cache_contract(
         "absolutePath": str(trusted_maven_home / "bin/mvn"),
         "sha256": bash_digest,
     }
+    for root_path in (
+        trusted_java_home,
+        trusted_maven_home,
+        trusted_home / ".m2/repository",
+    ):
+        for item in root_path.rglob("*"):
+            item.chmod(0o555 if item.is_dir() or os.access(item, os.X_OK) else 0o444)
+        root_path.chmod(0o555)
     for name, path in {
         "javaHome": trusted_java_home,
         "mavenHome": trusted_maven_home,
@@ -559,7 +567,17 @@ def test_candidate_gate_uses_registered_host_home_offline_cache_contract(
     )
 
 
-@pytest.mark.parametrize("drift", ["javac", "mvn", "maven-lib", "plugin-artifact"])
+@pytest.mark.parametrize(
+    "drift",
+    [
+        "javac",
+        "mvn",
+        "maven-lib",
+        "plugin-artifact",
+        "directory-mode",
+        "empty-directory-add",
+    ],
+)
 def test_registry_rejects_registered_toolchain_digest_drift(
     tmp_path: Path, drift: str
 ):
@@ -575,6 +593,8 @@ def test_registry_rejects_registered_toolchain_digest_drift(
     (maven_home / "bin").mkdir(parents=True)
     (maven_home / "lib").mkdir()
     (maven_home / "lib/maven-core.jar").write_bytes(b"maven-core")
+    empty_directory = maven_home / "empty"
+    empty_directory.mkdir()
     repository.mkdir(parents=True)
     plugin_artifact = repository / "org/example/plugin/1.0/plugin-1.0.jar"
     plugin_artifact.parent.mkdir(parents=True)
@@ -593,6 +613,10 @@ def test_registry_rejects_registered_toolchain_digest_drift(
             "absolutePath": str(path),
             "sha256": "sha256:" + hashlib.sha256(bash_bytes).hexdigest(),
         }
+    for root_path in (java_home, maven_home, repository):
+        for item in root_path.rglob("*"):
+            item.chmod(0o555 if item.is_dir() or os.access(item, os.X_OK) else 0o444)
+        root_path.chmod(0o555)
     for name, path in {
         "javaHome": java_home,
         "mavenHome": maven_home,
@@ -600,11 +624,24 @@ def test_registry_rejects_registered_toolchain_digest_drift(
     }.items():
         toolchain[name] = {"absolutePath": str(path), "sha256": _directory_identity_digest(path)}
     if drift in {"javac", "mvn"}:
+        executable_paths[drift].chmod(0o755)
         executable_paths[drift].write_bytes(b"replaced executable")
+        executable_paths[drift].chmod(0o555)
     elif drift == "maven-lib":
+        (maven_home / "lib/maven-core.jar").chmod(0o644)
         (maven_home / "lib/maven-core.jar").write_bytes(b"replaced maven lib")
-    else:
+        (maven_home / "lib/maven-core.jar").chmod(0o444)
+    elif drift == "plugin-artifact":
+        plugin_artifact.chmod(0o644)
         plugin_artifact.write_bytes(b"replaced plugin artifact")
+        plugin_artifact.chmod(0o444)
+    elif drift == "directory-mode":
+        empty_directory.chmod(0o755)
+    else:
+        (maven_home / "lib").chmod(0o755)
+        (maven_home / "lib/added-empty-directory").mkdir()
+        (maven_home / "lib/added-empty-directory").chmod(0o555)
+        (maven_home / "lib").chmod(0o555)
     entry = _registered_entry(root)
     entry["validator"]["environmentContract"] = (
         "REGISTERED_TOOLCHAIN_OFFLINE_CACHE"
@@ -612,7 +649,7 @@ def test_registry_rejects_registered_toolchain_digest_drift(
     entry["validator"]["toolchain"] = toolchain
     _write_registrations(root, [entry])
 
-    with pytest.raises(ValueError, match="toolchain .*identity mismatch"):
+    with pytest.raises(ValueError, match="toolchain .*(identity mismatch|is writable)"):
         build_capability_pack_registry(root, write=False)
 
 
@@ -657,7 +694,9 @@ def test_candidate_gate_timeout_terminates_descendant_process_group(tmp_path: Pa
     validator.write_text(
         "#!/usr/bin/env bash\n"
         "set -euo pipefail\n"
-        f"bash -c '(sleep 60; printf late > {late_side_effect}) & echo $! > {grandchild_pid}; wait' &\n"
+        f"bash -c 'trap \"\" TERM; exec >/dev/null 2>&1; "
+        f"(trap \"\" TERM; sleep 60; printf late > {late_side_effect}) & "
+        f"echo $! > {grandchild_pid}; wait' &\n"
         f"echo $! > {child_pid}\n"
         "wait\n",
         encoding="utf-8",

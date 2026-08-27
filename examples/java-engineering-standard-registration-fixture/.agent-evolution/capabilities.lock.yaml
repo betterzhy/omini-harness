@@ -1,6 +1,6 @@
 schemaVersion: capability-lock/v2
 project: java-engineering-standard-registration-fixture
-sourceHarnessRevision: content-sha256:8375213ba71ed45472c3d62db84e5b3cf03ae991b75486cc86c1cfae325703fd
+sourceHarnessRevision: content-sha256:663c17b154a77b78af4d2040d96f2a16b81bddf82011718ce3243f270f45f1f1
 disabledCapabilities: []
 capabilities:
 - capabilityId: framework:java:java-engineering-standard
@@ -33,17 +33,17 @@ capabilities:
         sha256: sha256:f9381d0cb98abaaf9592dae421eddc497e84ed9bfb723b84c111d1350863c3a2
       javaHome:
         absolutePath: /Library/Java/JavaVirtualMachines/temurin-21.jdk/Contents/Home
-        sha256: sha256:e230de581457766929ddc9a397c1e0f643ce2edf929c48105084fd81358bf574
+        sha256: sha256:a30ae0a3178be8aa787ecdb850d150f529e811e9b712c3bfcdbdfc2fdf91fd90
       mavenHome:
         absolutePath: /Users/yuzhuangzhuang/Projects/omini-harness/.worktrees/.capability-pack-cache/java-engineering-standard/home/.m2/wrapper/dists/apache-maven-3.9.16/56ba1f9f
-        sha256: sha256:d65c0197fa8531e537737c950c5ab35bcf808e63001361186ac2ab6ff0c57f64
+        sha256: sha256:5447e4224f32bb94d26420a62ee18a39ccef3b2dfe62c7739c36c313991c2286
       mavenRepository:
         absolutePath: /Users/yuzhuangzhuang/Projects/omini-harness/.worktrees/.capability-pack-cache/java-engineering-standard/home/.m2/repository
-        sha256: sha256:8362290d699f9a80f19d3dba330cbe17277af46fbd9bab8519a7bb6266fb96cd
+        sha256: sha256:5187065b1bb4bf7d0a139cc97b3fb19213ed3ee713a15d83b525760ed3d520fe
     gitHistoryContract: CANDIDATE_PARENT_TREE
     timeoutSeconds: 600
-  registrationFingerprint: sha256:0f65cd30ddbea6b2c446d0d59285872c87c34080204dc83f50e69d697d070541
-  sourceHarnessRevision: content-sha256:8375213ba71ed45472c3d62db84e5b3cf03ae991b75486cc86c1cfae325703fd
+  registrationFingerprint: sha256:08d11e4ad26b2d2a4d5eddd1186a54b720c5221027612b28a00a7047412c9074
+  sourceHarnessRevision: content-sha256:663c17b154a77b78af4d2040d96f2a16b81bddf82011718ce3243f270f45f1f1
   resolvedBecause:
   - explicit-binding
-lockFingerprint: sha256:8412f1abf468c3a770d7d729d2164e5463469cb81d63886ae7f5cb704c733eba
+lockFingerprint: sha256:64f0837e0ba4afce65aebe06e53f1e5ff8e167cbabaab9b6bb23c9ab02f8f209

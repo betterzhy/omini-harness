@@ -92,7 +92,8 @@ resolver，禁止后续阶段退回到 locator 上的可变文件系统内容。
 v2 lock → resolved context → Codex projection 的闭环。它不代表任何真实 Java 项目采用，
 不包含业务 Authority、Profile 选择、构建命令或项目完成状态。
 
-投影只包含来源 Skill blob；生成的
+投影包含 Harness 声明活动范围内的 45 个固定来源 blob，以来源 Skill 为入口并保留相对资源
+结构；manifest 记录逐文件 sourcePath/SHA-256 与资源集 digest。入口
 `skills/java-engineering-standard/SKILL.md` 必须与固定来源 commit 中同路径 blob 字节相同，
 且 `skillBlobSha256` 必须一致。
 

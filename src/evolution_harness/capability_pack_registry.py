@@ -102,12 +102,19 @@ def _run_candidate_gate(
     try:
         stdout, stderr = process.communicate(timeout=timeout)
     except subprocess.TimeoutExpired as exc:
-        os.killpg(process.pid, signal.SIGTERM)
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
         try:
             stdout, stderr = process.communicate(timeout=5)
         except subprocess.TimeoutExpired:
+            pass
+        try:
             os.killpg(process.pid, signal.SIGKILL)
-            stdout, stderr = process.communicate()
+        except ProcessLookupError:
+            pass
+        stdout, stderr = process.communicate()
         raise ValueError("capability pack candidate Gate timed out") from exc
     return subprocess.CompletedProcess(arguments, process.returncode, stdout, stderr)
 
@@ -120,16 +127,35 @@ def _directory_identity_digest(root: Path) -> str:
         or root.resolve(strict=True) != root
     ):
         raise ValueError("capability pack validator toolchain directory is unavailable or unsafe")
-    entries: list[dict[str, str]] = []
+    if os.access(root, os.W_OK):
+        raise ValueError("capability pack validator toolchain directory is writable")
+    entries: list[dict[str, str]] = [
+        {
+            "path": ".",
+            "type": "directory",
+            "mode": format(stat.S_IMODE(root.lstat().st_mode), "04o"),
+        }
+    ]
     for path in sorted(root.rglob("*"), key=lambda item: item.relative_to(root).as_posix().encode("utf-8")):
         relative = path.relative_to(root).as_posix()
         before = path.lstat()
         if stat.S_ISLNK(before.st_mode):
             raise ValueError("capability pack validator toolchain directory contains symlink")
         if stat.S_ISDIR(before.st_mode):
+            if os.access(path, os.W_OK):
+                raise ValueError("capability pack validator toolchain directory is writable")
+            entries.append(
+                {
+                    "path": relative,
+                    "type": "directory",
+                    "mode": format(stat.S_IMODE(before.st_mode), "04o"),
+                }
+            )
             continue
         if not stat.S_ISREG(before.st_mode):
             raise ValueError("capability pack validator toolchain directory contains special file")
+        if os.access(path, os.W_OK):
+            raise ValueError("capability pack validator toolchain file is writable")
         data = path.read_bytes()
         after = path.lstat()
         identity = (
@@ -150,6 +176,7 @@ def _directory_identity_digest(root: Path) -> str:
         entries.append(
             {
                 "path": relative,
+                "type": "file",
                 "mode": format(stat.S_IMODE(before.st_mode), "04o"),
                 "sha256": sha256_bytes(data),
             }

@@ -1,6 +1,6 @@
 # Resolved Design Context
 
-- Resolution: `resolution:e7ab70388b161809efa829fb`
+- Resolution: `resolution:59ba57677fb1dd3a2cdac08f`
 - Project: `java-engineering-standard-registration-fixture`
 - Topic: `neutral-java-pilot-readiness`
 - Stage: `ENGINEERING_DESIGN`

@@ -91,10 +91,10 @@
         sha256: sha256:f9381d0cb98abaaf9592dae421eddc497e84ed9bfb723b84c111d1350863c3a2
       javaHome:
         absolutePath: /Library/Java/JavaVirtualMachines/temurin-21.jdk/Contents/Home
-        sha256: sha256:e230de581457766929ddc9a397c1e0f643ce2edf929c48105084fd81358bf574
+        sha256: sha256:a30ae0a3178be8aa787ecdb850d150f529e811e9b712c3bfcdbdfc2fdf91fd90
       mavenHome:
         absolutePath: /Users/yuzhuangzhuang/Projects/omini-harness/.worktrees/.capability-pack-cache/java-engineering-standard/home/.m2/wrapper/dists/apache-maven-3.9.16/56ba1f9f
-        sha256: sha256:d65c0197fa8531e537737c950c5ab35bcf808e63001361186ac2ab6ff0c57f64
+        sha256: sha256:5447e4224f32bb94d26420a62ee18a39ccef3b2dfe62c7739c36c313991c2286
       mavenRepository:
         absolutePath: /Users/yuzhuangzhuang/Projects/omini-harness/.worktrees/.capability-pack-cache/java-engineering-standard/home/.m2/repository
-        sha256: sha256:8362290d699f9a80f19d3dba330cbe17277af46fbd9bab8519a7bb6266fb96cd
+        sha256: sha256:5187065b1bb4bf7d0a139cc97b3fb19213ed3ee713a15d83b525760ed3d520fe

@@ -1,5 +1,5 @@
 {
-  "capabilityLockFingerprint": "sha256:8412f1abf468c3a770d7d729d2164e5463469cb81d63886ae7f5cb704c733eba",
+  "capabilityLockFingerprint": "sha256:64f0837e0ba4afce65aebe06e53f1e5ff8e167cbabaab9b6bb23c9ab02f8f209",
   "closedTopics": [],
   "conflictSignals": [],
   "explain": {
@@ -28,7 +28,7 @@
   "reopenSignal": null,
   "requestedOutput": "registration evidence",
   "requiredSelfReview": [],
-  "resolutionId": "resolution:e7ab70388b161809efa829fb",
+  "resolutionId": "resolution:59ba57677fb1dd3a2cdac08f",
   "runtime": "CODEX",
   "schemaVersion": "resolved-design-context/v1",
   "selectedCapabilities": [

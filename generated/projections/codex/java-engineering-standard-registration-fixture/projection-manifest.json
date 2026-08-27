@@ -1,5 +1,5 @@
 {
-  "capabilityLockFingerprint": "sha256:8412f1abf468c3a770d7d729d2164e5463469cb81d63886ae7f5cb704c733eba",
+  "capabilityLockFingerprint": "sha256:64f0837e0ba4afce65aebe06e53f1e5ff8e167cbabaab9b6bb23c9ab02f8f209",
   "generatedFiles": [
     {
       "path": "discussion-contract.md",
@@ -11,11 +11,11 @@
     },
     {
       "path": "resolved-context.json",
-      "sha256": "f7a29887c14fc4ae8b7957572b6e6c1e71bc7cdb92e084e8a423a2803d0e75e7"
+      "sha256": "01dffa08cd47e2077767484fb11c4a292bb6a48350e35f81c53af6a53d781f2a"
     },
     {
       "path": "resolved-task-context.md",
-      "sha256": "17536822f5f2b0ebb9890ac579b0dc395711d8a90a9cf30093caa092eb2004b7"
+      "sha256": "90f5e3fa53ad25272203864347ec6ee0b0714c4cd1094feff8df0fa7ff3df9bb"
     },
     {
       "path": "skills/java-engineering-standard/AGENTS.md",
@@ -204,7 +204,7 @@
       "id": "framework:java:java-engineering-standard",
       "path": "skills/java-engineering-standard/SKILL.md",
       "projectionContract": "SELF_CONTAINED_SKILL_BUNDLE",
-      "registrationFingerprint": "sha256:0f65cd30ddbea6b2c446d0d59285872c87c34080204dc83f50e69d697d070541",
+      "registrationFingerprint": "sha256:08d11e4ad26b2d2a4d5eddd1186a54b720c5221027612b28a00a7047412c9074",
       "resolvedContentDigest": "sha256:b226ed62d3b3e3710fb0a3611762864524ea94e8c15fe00a3b2b7e40943de666",
       "resourceFiles": [
         {
@@ -454,7 +454,7 @@
           },
           "javaHome": {
             "absolutePath": "/Library/Java/JavaVirtualMachines/temurin-21.jdk/Contents/Home",
-            "sha256": "sha256:e230de581457766929ddc9a397c1e0f643ce2edf929c48105084fd81358bf574"
+            "sha256": "sha256:a30ae0a3178be8aa787ecdb850d150f529e811e9b712c3bfcdbdfc2fdf91fd90"
           },
           "javac": {
             "absolutePath": "/Library/Java/JavaVirtualMachines/temurin-21.jdk/Contents/Home/bin/javac",
@@ -462,11 +462,11 @@
           },
           "mavenHome": {
             "absolutePath": "/Users/yuzhuangzhuang/Projects/omini-harness/.worktrees/.capability-pack-cache/java-engineering-standard/home/.m2/wrapper/dists/apache-maven-3.9.16/56ba1f9f",
-            "sha256": "sha256:d65c0197fa8531e537737c950c5ab35bcf808e63001361186ac2ab6ff0c57f64"
+            "sha256": "sha256:5447e4224f32bb94d26420a62ee18a39ccef3b2dfe62c7739c36c313991c2286"
           },
           "mavenRepository": {
             "absolutePath": "/Users/yuzhuangzhuang/Projects/omini-harness/.worktrees/.capability-pack-cache/java-engineering-standard/home/.m2/repository",
-            "sha256": "sha256:8362290d699f9a80f19d3dba330cbe17277af46fbd9bab8519a7bb6266fb96cd"
+            "sha256": "sha256:5187065b1bb4bf7d0a139cc97b3fb19213ed3ee713a15d83b525760ed3d520fe"
           },
           "mvn": {
             "absolutePath": "/Users/yuzhuangzhuang/Projects/omini-harness/.worktrees/.capability-pack-cache/java-engineering-standard/home/.m2/wrapper/dists/apache-maven-3.9.16/56ba1f9f/bin/mvn",
@@ -498,7 +498,7 @@
       "contentHash": "b226ed62d3b3e3710fb0a3611762864524ea94e8c15fe00a3b2b7e40943de666",
       "id": "framework:java:java-engineering-standard",
       "kind": "FRAMEWORK",
-      "registrationFingerprint": "sha256:0f65cd30ddbea6b2c446d0d59285872c87c34080204dc83f50e69d697d070541",
+      "registrationFingerprint": "sha256:08d11e4ad26b2d2a4d5eddd1186a54b720c5221027612b28a00a7047412c9074",
       "resolvedContentDigest": "sha256:b226ed62d3b3e3710fb0a3611762864524ea94e8c15fe00a3b2b7e40943de666",
       "sourceCommit": "765e9d00a3173ecfe873c1646f5dbe375de677e7",
       "sourceKind": "EXTERNAL_CAPABILITY_PACK",
@@ -517,7 +517,7 @@
           },
           "javaHome": {
             "absolutePath": "/Library/Java/JavaVirtualMachines/temurin-21.jdk/Contents/Home",
-            "sha256": "sha256:e230de581457766929ddc9a397c1e0f643ce2edf929c48105084fd81358bf574"
+            "sha256": "sha256:a30ae0a3178be8aa787ecdb850d150f529e811e9b712c3bfcdbdfc2fdf91fd90"
           },
           "javac": {
             "absolutePath": "/Library/Java/JavaVirtualMachines/temurin-21.jdk/Contents/Home/bin/javac",
@@ -525,11 +525,11 @@
           },
           "mavenHome": {
             "absolutePath": "/Users/yuzhuangzhuang/Projects/omini-harness/.worktrees/.capability-pack-cache/java-engineering-standard/home/.m2/wrapper/dists/apache-maven-3.9.16/56ba1f9f",
-            "sha256": "sha256:d65c0197fa8531e537737c950c5ab35bcf808e63001361186ac2ab6ff0c57f64"
+            "sha256": "sha256:5447e4224f32bb94d26420a62ee18a39ccef3b2dfe62c7739c36c313991c2286"
           },
           "mavenRepository": {
             "absolutePath": "/Users/yuzhuangzhuang/Projects/omini-harness/.worktrees/.capability-pack-cache/java-engineering-standard/home/.m2/repository",
-            "sha256": "sha256:8362290d699f9a80f19d3dba330cbe17277af46fbd9bab8519a7bb6266fb96cd"
+            "sha256": "sha256:5187065b1bb4bf7d0a139cc97b3fb19213ed3ee713a15d83b525760ed3d520fe"
           },
           "mvn": {
             "absolutePath": "/Users/yuzhuangzhuang/Projects/omini-harness/.worktrees/.capability-pack-cache/java-engineering-standard/home/.m2/wrapper/dists/apache-maven-3.9.16/56ba1f9f/bin/mvn",
@@ -548,5 +548,5 @@
       "version": "0.4.0"
     }
   ],
-  "sourceResolutionId": "resolution:e7ab70388b161809efa829fb"
+  "sourceResolutionId": "resolution:59ba57677fb1dd3a2cdac08f"
 }

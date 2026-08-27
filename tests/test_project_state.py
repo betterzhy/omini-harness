@@ -30,6 +30,21 @@ def _project_selecting_registered_pack(tmp_path: Path) -> tuple[Path, Path]:
     return root, project
 
 
+def _add_internal_capability_version(
+    root: Path, *, suffix: str, version: str, lifecycle: str
+) -> None:
+    source = root / "design/capabilities/workflows/design-discussion"
+    target = root / f"design/capabilities/workflows/web-high-fidelity-{suffix}"
+    shutil.copytree(source, target)
+    asset_path = target / "asset.yaml"
+    asset = yaml.safe_load(asset_path.read_text(encoding="utf-8"))
+    asset["id"] = EXTERNAL_CAPABILITY_ID
+    asset["version"] = version
+    asset["lifecycle"] = lifecycle
+    asset["title"] = f"Web High Fidelity {suffix}"
+    asset_path.write_text(yaml.safe_dump(asset, sort_keys=False), encoding="utf-8")
+
+
 def test_project_fixture_state_and_binding_validate():
     from evolution_harness.schema import SchemaStore
 
@@ -199,6 +214,49 @@ def test_unrelated_registry_entry_does_not_move_selected_external_lock(tmp_path:
     after = build_capability_lock(root, project, write=False)
 
     assert after == before
+
+
+def test_retired_current_and_active_noncurrent_internal_collision_keeps_external_lock(
+    tmp_path: Path,
+):
+    from evolution_harness.project import build_capability_lock, verify_capability_lock
+
+    root, project = _project_selecting_registered_pack(tmp_path)
+    _add_internal_capability_version(
+        root, suffix="historical-active", version="0.8.0", lifecycle="ACTIVE"
+    )
+    _add_internal_capability_version(
+        root, suffix="current-retired", version="0.9.0", lifecycle="RETIRED"
+    )
+
+    lock = build_capability_lock(root, project, write=True)
+    _, verified = verify_capability_lock(root, project)
+
+    selected = next(
+        item for item in lock["capabilities"] if item["capabilityId"] == EXTERNAL_CAPABILITY_ID
+    )
+    assert lock["schemaVersion"] == "capability-lock/v2"
+    assert selected["sourceKind"] == "EXTERNAL_CAPABILITY_PACK"
+    assert verified[EXTERNAL_CAPABILITY_ID]["sourceKind"] == "EXTERNAL_CAPABILITY_PACK"
+
+
+def test_active_internal_collision_keeps_builder_internal_first(tmp_path: Path):
+    from evolution_harness.project import build_capability_lock, verify_capability_lock
+
+    root, project = _project_selecting_registered_pack(tmp_path)
+    _add_internal_capability_version(
+        root, suffix="current-active", version="9.0.0", lifecycle="ACTIVE"
+    )
+
+    lock = build_capability_lock(root, project, write=True)
+    _, verified = verify_capability_lock(root, project)
+
+    selected = next(
+        item for item in lock["capabilities"] if item["capabilityId"] == EXTERNAL_CAPABILITY_ID
+    )
+    assert lock["schemaVersion"] == "capability-lock/v1"
+    assert "sourceKind" not in selected
+    assert verified[EXTERNAL_CAPABILITY_ID]["version"] == "9.0.0"
 
 
 def test_project_design_state_rejects_path_like_project_identity(tmp_path: Path):

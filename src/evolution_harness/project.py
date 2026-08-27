@@ -226,6 +226,13 @@ def verify_capability_lock(
     root = Path(repository_root)
     project = Path(project_root)
     lock = load_capability_lock(root, project)
+    if lock["schemaVersion"] == "capability-lock/v2" and not any(
+        item.get("sourceKind") == "EXTERNAL_CAPABILITY_PACK"
+        for item in lock["capabilities"]
+    ):
+        raise ValueError(
+            "capability-lock/v2 requires at least one external capability pack"
+        )
     state = load_project_state(root, project)
     binding = load_project_binding(root, project)
     reasons = bound_capability_reasons(root, project)
@@ -247,7 +254,10 @@ def verify_capability_lock(
 
     registry = build_design_registry(root, write=False)
     by_version = {(entry["id"], entry["version"]): entry for entry in registry["entries"]}
-    internal_ids = {entry["id"] for entry in registry["entries"]}
+    active_internal_ids = {
+        entry["id"]
+        for entry in build_design_active_catalog(root, write=False)["entries"]
+    }
     external_items = [
         item
         for item in lock["capabilities"]
@@ -275,7 +285,7 @@ def verify_capability_lock(
             raise ValueError(f"capability lock binding reasons drift: {capability_id}")
         if item.get("sourceKind") == "EXTERNAL_CAPABILITY_PACK":
             matches = external_by_id.get(capability_id, [])
-            if capability_id in internal_ids or len(matches) != 1:
+            if capability_id in active_internal_ids or len(matches) != 1:
                 raise ValueError(
                     f"external capability pack lock registration drift: {capability_id}"
                 )

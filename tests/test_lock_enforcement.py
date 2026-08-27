@@ -261,3 +261,27 @@ def test_v1_lock_never_reinterprets_external_source_fields(tmp_path: Path):
 
     with pytest.raises(SchemaValidationError):
         verify_capability_lock(root, project)
+
+
+def test_internal_only_v2_lock_is_rejected_even_when_self_consistent(tmp_path: Path):
+    from evolution_harness.project import (
+        build_capability_lock,
+        verify_capability_lock,
+    )
+    from evolution_harness.schema import SchemaValidationError
+
+    root, project = _copy_repo(tmp_path)
+    lock_path = project / ".agent-evolution/capabilities.lock.yaml"
+    lock = yaml.safe_load(lock_path.read_text(encoding="utf-8"))
+    lock["schemaVersion"] = "capability-lock/v2"
+    for item in lock["capabilities"]:
+        item["sourceKind"] = "HARNESS_CANONICAL"
+    _resign_v2_lock(lock)
+    lock_path.write_text(yaml.safe_dump(lock, sort_keys=False), encoding="utf-8")
+
+    with pytest.raises(SchemaValidationError):
+        verify_capability_lock(root, project)
+
+    assert build_capability_lock(root, project, write=False)["schemaVersion"] == (
+        "capability-lock/v1"
+    )

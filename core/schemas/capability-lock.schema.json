@@ -122,7 +122,15 @@
                 "additionalProperties": false
               }
             ]
-          }
+          },
+          "contains": {
+            "type": "object",
+            "required": ["sourceKind"],
+            "properties": {
+              "sourceKind": {"const": "EXTERNAL_CAPABILITY_PACK"}
+            }
+          },
+          "minContains": 1
         },
         "lockFingerprint": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
       },

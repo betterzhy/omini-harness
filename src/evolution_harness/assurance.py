@@ -6,13 +6,18 @@ from typing import Any, Iterable
 import json
 import yaml
 
+from .capability_pack_registry import build_capability_pack_registry
 from .catalog import build_all_catalogs
 from .generated import deterministic_json_bytes
 from .integration import load_integration
 from .learning import _candidate_paths, _experience_paths, _load_yaml
 from .project import build_capability_lock, load_project_binding, load_project_state
 from .projection import check_projection_freshness
-from .registry import build_all_registries
+from .registry import (
+    build_design_learning_registry,
+    build_design_registry,
+    build_engineering_registry,
+)
 from .schema import SchemaStore
 from .validation import validate_repository
 
@@ -70,7 +75,7 @@ def _validate_learning(root: Path, issues: list[dict[str, Any]]) -> None:
 
 def _validate_engineering(root: Path, issues: list[dict[str, Any]]) -> None:
     try:
-        registry = build_all_registries(root, write=False)["engineering"]
+        registry = build_engineering_registry(root, write=False)
         ids = {entry["id"] for entry in registry["entries"]}
         for entry in registry["entries"]:
             for targets in entry.get("relationships", {}).values():
@@ -139,19 +144,33 @@ def structural_validate(
 
     if check_generated:
         try:
-            registries = build_all_registries(root, write=False)
-            _check_json_file(root / "generated/registries/design-registry.json", registries["design"], issues)
-            _check_json_file(root / "generated/registries/design-learning-registry.json", registries["designLearning"], issues)
-            _check_json_file(root / "engineering/generated/registry.json", registries["engineering"], issues)
             _check_json_file(
-                root / "generated/registries/capability-pack-registry.json",
-                registries["capabilityPacks"],
+                root / "generated/registries/design-registry.json",
+                build_design_registry(root, write=False),
+                issues,
+            )
+            _check_json_file(
+                root / "generated/registries/design-learning-registry.json",
+                build_design_learning_registry(root, write=False),
+                issues,
+            )
+            _check_json_file(
+                root / "engineering/generated/registry.json",
+                build_engineering_registry(root, write=False),
                 issues,
             )
             catalogs = build_all_catalogs(root, write=False)
             _check_json_file(root / "generated/catalogs/design-active-catalog.json", catalogs["design"], issues)
             _check_json_file(root / "generated/catalogs/unified-active-catalog.json", catalogs["unified"], issues)
             _check_json_file(root / "engineering/generated/active-catalog.json", catalogs["engineering"], issues)
+        except Exception as exc:
+            issues.append(_issue("GENERATED_CHECK_FAILED", str(exc)))
+        try:
+            _check_json_file(
+                root / "generated/registries/capability-pack-registry.json",
+                build_capability_pack_registry(root, write=False),
+                issues,
+            )
         except Exception as exc:
             issues.append(_issue("GENERATED_CHECK_FAILED", str(exc)))
         for project in projects:
@@ -174,7 +193,7 @@ def structural_validate(
         "structuralGate": "PASS" if not issues else "FAIL",
         "semanticGate": "NOT_ASSERTED_BY_CI",
         "issues": issues,
-        "capabilityCount": len(build_all_registries(root, write=False)["design"]["entries"]),
+        "capabilityCount": len(build_design_registry(root, write=False)["entries"]),
         "experienceCount": sum(1 for _ in _experience_paths(root)),
         "candidateCount": sum(1 for _ in _candidate_paths(root)),
         "evalCount": len(list((root / "design/evals").glob("*.yaml"))),

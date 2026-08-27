@@ -30,6 +30,26 @@ def _copy_repo(tmp_path: Path) -> tuple[Path, Path]:
     return root, root / "examples/project-fixture"
 
 
+def _make_external_pack_source_unavailable(root: Path, tmp_path: Path) -> None:
+    schema_path = root / "core/schemas/capability-pack-registration.schema.json"
+    schema = json.loads(schema_path.read_text(encoding="utf-8"))
+    repository_path = schema["properties"]["source"]["properties"][
+        "repositoryPath"
+    ]["const"]
+    unavailable_path = str(tmp_path / "unavailable-pack")
+
+    registration_path = root / "core/registries/capability-packs.yaml"
+    registration = registration_path.read_text(encoding="utf-8")
+    assert repository_path in registration
+    registration_path.write_text(
+        registration.replace(repository_path, unavailable_path), encoding="utf-8"
+    )
+    schema["properties"]["source"]["properties"]["repositoryPath"][
+        "const"
+    ] = unavailable_path
+    schema_path.write_text(json.dumps(schema, indent=2) + "\n", encoding="utf-8")
+
+
 def test_structural_validation_separates_mechanical_gate_from_semantic_quality(tmp_path: Path):
     from evolution_harness.assurance import structural_validate
     from evolution_harness.catalog import build_all_catalogs
@@ -50,6 +70,21 @@ def test_structural_validation_separates_mechanical_gate_from_semantic_quality(t
     assert report["semanticGate"] == "NOT_ASSERTED_BY_CI"
     assert report["issues"] == []
     assert report["integrationCount"] == 2
+
+
+def test_structural_validation_without_generated_check_ignores_unavailable_pack_source(
+    tmp_path: Path,
+):
+    from evolution_harness.assurance import structural_validate
+
+    root, _ = _copy_repo(tmp_path)
+    _make_external_pack_source_unavailable(root, tmp_path)
+
+    report = structural_validate(root, check_generated=False)
+
+    assert report["structuralGate"] == "PASS"
+    assert report["issues"] == []
+    assert report["capabilityCount"] == 10
 
 
 def test_structural_validation_detects_generated_registry_drift(tmp_path: Path):
@@ -93,6 +128,33 @@ def _run_module(root: Path, module: str, *args: str) -> subprocess.CompletedProc
     source_src = Path(__file__).parents[1] / "src"
     env["PYTHONPATH"] = str(source_src)
     return subprocess.run([sys.executable, "-m", module, "--repository-root", str(root), *args], text=True, capture_output=True, env=env)
+
+
+def test_validate_cli_reports_unavailable_pack_as_generated_failure(tmp_path: Path):
+    root, _ = _copy_repo(tmp_path)
+    _make_external_pack_source_unavailable(root, tmp_path)
+
+    result = _run_module(
+        root,
+        "evolution_harness.cli",
+        "validate",
+        "--check-generated",
+        "--format",
+        "json",
+    )
+
+    assert result.returncode == 1, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["ok"] is False
+    report = payload["data"]
+    assert report["structuralGate"] == "FAIL"
+    assert report["capabilityCount"] == 10
+    assert any(
+        issue["code"] == "GENERATED_CHECK_FAILED"
+        and "capability pack source root is unavailable" in issue["message"]
+        for issue in report["issues"]
+    )
+    assert all(issue["code"] != "ENGINEERING_INVALID" for issue in report["issues"])
 
 
 def test_harness_cli_validate_and_resolve_json(tmp_path: Path):

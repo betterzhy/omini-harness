@@ -15,17 +15,29 @@
   ],
   "properties": {
     "schemaVersion": {"const": "capability-pack-registration/v1"},
-    "registrationId": {"const": "pack:web-high-fidelity"},
-    "capabilityId": {"const": "workflow:web-high-fidelity:reference-driven-visual-fidelity"},
-    "packVersion": {"const": "2.0.0"},
-    "status": {"const": "ACTIVE"},
+    "registrationId": {
+      "type": "string",
+      "pattern": "^pack:[a-z0-9][a-z0-9._-]*$"
+    },
+    "capabilityId": {
+      "type": "string",
+      "pattern": "^(principle|framework|skill|workflow):[a-z0-9][a-z0-9._-]*:[a-z0-9][a-z0-9._-]*$"
+    },
+    "packVersion": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$"
+    },
+    "status": {"enum": ["ACTIVE", "INACTIVE"]},
     "distributionStatus": {"const": "LOCAL_ONLY"},
     "source": {
       "type": "object",
       "required": ["kind", "repositoryId", "repositoryPath", "commit", "tree"],
       "properties": {
         "kind": {"const": "LOCAL_GIT"},
-        "repositoryId": {"const": "web-high-fidelity"},
+        "repositoryId": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9._-]*$"
+        },
         "repositoryPath": {
           "type": "string",
           "pattern": "^/(?:[^/]+/)*[^/]+$"
@@ -34,6 +46,30 @@
         "tree": {"type": "string", "pattern": "^[0-9a-f]{40}$"}
       },
       "additionalProperties": false
+    },
+    "contentDeclaration": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["kind", "path"],
+          "properties": {
+            "kind": {"const": "SOURCE_TRACKED_MANIFEST"},
+            "path": {"const": "capability-pack.yaml"}
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["kind", "manifest"],
+          "properties": {
+            "kind": {"const": "HARNESS_DECLARED_MANIFEST"},
+            "manifest": {
+              "$ref": "https://agent-evolution.local/core/schemas/capability-pack-manifest.schema.json"
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
     },
     "resolvedContentDigest": {
       "type": "string",

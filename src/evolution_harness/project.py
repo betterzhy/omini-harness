@@ -163,7 +163,7 @@ def _canonical_registration_identity_record(
 ) -> dict[str, Any]:
     source = registration["source"]
     validator = registration["validator"]
-    return {
+    identity = {
         "schemaVersion": registration["schemaVersion"],
         "registrationId": registration["registrationId"],
         "capabilityId": registration["capabilityId"],
@@ -184,6 +184,9 @@ def _canonical_registration_identity_record(
             "argumentsContract": validator["argumentsContract"],
         },
     }
+    if "contentDeclaration" in registration:
+        identity["contentDeclaration"] = registration["contentDeclaration"]
+    return identity
 
 
 def _registration_fingerprint(registration: dict[str, Any]) -> str:
@@ -337,7 +340,12 @@ def verify_capability_lock(
             try:
                 source = _source_root(registration["source"]["repositoryPath"])
                 commit, _ = _require_fixed_git_identity(source, registration)
-                manifest = _load_manifest(root, source, _tree_entries(source, commit))
+                manifest = _load_manifest(
+                    root,
+                    source,
+                    _tree_entries(source, commit),
+                    registration,
+                )
             except (KeyError, ValueError) as exc:
                 raise ValueError(
                     f"external capability pack lock registration drift: {capability_id}"

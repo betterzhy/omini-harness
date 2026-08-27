@@ -187,25 +187,57 @@ def _entry_by_path(
     return matches[0]
 
 
+def _manifest_from_registration(
+    source: Path,
+    entries: list[tuple[str, str, str, str]],
+    registration: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    declaration = registration.get("contentDeclaration") if registration else None
+    if declaration and declaration["kind"] == "HARNESS_DECLARED_MANIFEST":
+        manifest = declaration["manifest"]
+        if not isinstance(manifest, dict):
+            raise ValueError("capability pack declared manifest is invalid")
+    else:
+        manifest_path = (
+            declaration["path"]
+            if declaration and declaration["kind"] == "SOURCE_TRACKED_MANIFEST"
+            else "capability-pack.yaml"
+        )
+        _, mode, object_type, object_id = _entry_by_path(entries, manifest_path)
+        if mode not in {"100644", "100755"} or object_type != "blob":
+            raise ValueError("capability pack manifest is not a tracked regular file")
+        try:
+            manifest = yaml.safe_load(_blob(source, object_id).decode("utf-8", "strict"))
+        except (UnicodeDecodeError, yaml.YAMLError) as exc:
+            raise ValueError("capability pack manifest is invalid YAML") from exc
+        if not isinstance(manifest, dict):
+            raise ValueError("capability pack manifest is invalid YAML")
+    return manifest
+
+
 def _load_manifest(
     repository_root: Path,
     source: Path,
     entries: list[tuple[str, str, str, str]],
+    registration: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    _, mode, object_type, object_id = _entry_by_path(entries, "capability-pack.yaml")
-    if mode not in {"100644", "100755"} or object_type != "blob":
-        raise ValueError("capability pack manifest is not a tracked regular file")
-    try:
-        manifest = yaml.safe_load(_blob(source, object_id).decode("utf-8", "strict"))
-    except (UnicodeDecodeError, yaml.YAMLError) as exc:
-        raise ValueError("capability pack manifest is invalid YAML") from exc
-    if not isinstance(manifest, dict):
-        raise ValueError("capability pack manifest is invalid YAML")
+    manifest = _manifest_from_registration(source, entries, registration)
     try:
         SchemaStore(repository_root).validate(_MANIFEST_SCHEMA, manifest)
     except SchemaValidationError as exc:
         raise ValueError(f"capability pack manifest schema is invalid: {exc}") from exc
     return manifest
+
+
+def _tracked_manifest_path(registration: Mapping[str, Any] | None) -> str | None:
+    if registration is None:
+        return "capability-pack.yaml"
+    declaration = registration.get("contentDeclaration")
+    if declaration and declaration["kind"] == "HARNESS_DECLARED_MANIFEST":
+        return None
+    if declaration and declaration["kind"] == "SOURCE_TRACKED_MANIFEST":
+        return declaration["path"]
+    return "capability-pack.yaml"
 
 
 def _validate_manifest_identity(
@@ -232,14 +264,17 @@ def _validate_manifest_identity(
 
 
 def _selected_entries(
-    entries: list[tuple[str, str, str, str]], manifest: Mapping[str, Any]
+    entries: list[tuple[str, str, str, str]],
+    manifest: Mapping[str, Any],
+    *,
+    tracked_manifest_path: str | None = "capability-pack.yaml",
 ) -> list[tuple[str, str, str, str]]:
     roots = [_safe_relative_path(value) for value in manifest["contentRoots"]]
     excluded = [_safe_relative_path(value) for value in manifest["excludedContentRoots"]]
     selected: list[tuple[str, str, str, str]] = []
     for entry in entries:
         relative_path = entry[0]
-        explicit = relative_path in {"VERSION", "capability-pack.yaml"}
+        explicit = relative_path == "VERSION" or relative_path == tracked_manifest_path
         active = any(_is_under(relative_path, root) for root in roots) and not any(
             _is_under(relative_path, root) for root in excluded
         )
@@ -248,7 +283,10 @@ def _selected_entries(
     selected.sort(key=lambda entry: entry[0].encode("utf-8"))
 
     selected_paths = {entry[0] for entry in selected}
-    for required in ["VERSION", "capability-pack.yaml", manifest["skillPath"]]:
+    required_paths = ["VERSION", manifest["skillPath"]]
+    if tracked_manifest_path is not None:
+        required_paths.append(tracked_manifest_path)
+    for required in required_paths:
         if required not in selected_paths:
             raise ValueError(f"capability pack required active content is unavailable: {required}")
     for root in roots:
@@ -454,9 +492,13 @@ def _validate_registration(repository_root: Path, registration: dict[str, Any]) 
     source = _source_root(registration["source"]["repositoryPath"])
     commit, tree = _require_fixed_git_identity(source, registration)
     entries = _tree_entries(source, commit)
-    manifest = _load_manifest(repository_root, source, entries)
+    manifest = _load_manifest(repository_root, source, entries, registration)
     _validate_manifest_identity(registration, manifest)
-    selected = _selected_entries(entries, manifest)
+    selected = _selected_entries(
+        entries,
+        manifest,
+        tracked_manifest_path=_tracked_manifest_path(registration),
+    )
     _require_no_hidden_index_flags(source)
     _require_clean_source(source, manifest)
     content_digest = _digest_entries(source, selected)
@@ -516,6 +558,18 @@ def _reject_duplicate_active_ids(entries: list[dict[str, Any]]) -> None:
         registration_ids.add(registration_id)
 
 
+def _canonical_registry_entry(entry: Mapping[str, Any]) -> dict[str, Any]:
+    source = entry["source"]
+    return {
+        **entry,
+        "source": {
+            key: value
+            for key, value in source.items()
+            if key != "repositoryPath"
+        },
+    }
+
+
 def build_capability_pack_registry(
     repository_root: Path, *, write: bool = False
 ) -> dict[str, Any]:
@@ -524,9 +578,11 @@ def build_capability_pack_registry(
     entries = [_validate_registration(root, item) for item in registrations]
     _reject_duplicate_active_ids(entries)
     entries.sort(key=lambda entry: entry["registrationId"])
+    canonical_entries = [_canonical_registry_entry(entry) for entry in entries]
     result = {
         "schemaVersion": "capability-pack-registry/v1",
-        "sourceRevision": "content-sha256:" + sha256_bytes(canonical_json_bytes(entries)),
+        "sourceRevision": "content-sha256:"
+        + sha256_bytes(canonical_json_bytes(canonical_entries)),
         "entries": entries,
     }
     if write:
@@ -563,11 +619,20 @@ def _registration_record(registration: Mapping[str, Any]) -> dict[str, Any]:
         "resolvedContentDigest",
         "validator",
     )
-    allowed = set(required) | {"sourceKind", "registrationFingerprint", "manifest"}
+    optional = ("contentDeclaration",)
+    allowed = set(required) | set(optional) | {
+        "sourceKind",
+        "registrationFingerprint",
+        "manifest",
+    }
     if set(registration) != allowed:
         raise ValueError("capability pack registration identity is incomplete")
     try:
-        return {key: registration[key] for key in required}
+        return {
+            key: registration[key]
+            for key in required + optional
+            if key in registration
+        }
     except KeyError as exc:
         raise ValueError("capability pack registration identity is incomplete") from exc
 
@@ -584,17 +649,15 @@ def read_registered_pack_blob(
     source = _source_root(record["source"]["repositoryPath"])
     commit, tree = _require_fixed_git_identity(source, record)
     entries = _tree_entries(source, commit)
-    manifest_entry = _entry_by_path(entries, "capability-pack.yaml")
-    if manifest_entry[1] not in {"100644", "100755"} or manifest_entry[2] != "blob":
-        raise ValueError("capability pack manifest is not a tracked regular file")
-    try:
-        manifest = yaml.safe_load(_blob(source, manifest_entry[3]).decode("utf-8", "strict"))
-    except (UnicodeDecodeError, yaml.YAMLError) as exc:
-        raise ValueError("capability pack manifest is invalid YAML") from exc
-    if not isinstance(manifest, dict) or manifest != registration.get("manifest"):
+    manifest = _manifest_from_registration(source, entries, record)
+    if manifest != registration.get("manifest"):
         raise ValueError("capability pack locked manifest provenance mismatch")
     _validate_manifest_identity(record, manifest)
-    selected = _selected_entries(entries, manifest)
+    selected = _selected_entries(
+        entries,
+        manifest,
+        tracked_manifest_path=_tracked_manifest_path(record),
+    )
     if _digest_entries(source, selected) != record["resolvedContentDigest"]:
         raise ValueError("capability pack content identity mismatch")
 

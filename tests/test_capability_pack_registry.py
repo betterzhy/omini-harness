@@ -5,6 +5,7 @@ import json
 import os
 import shutil
 import subprocess
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
@@ -103,10 +104,17 @@ def _pack_fixture(tmp_path: Path) -> tuple[Path, str, str]:
     return source, commit, tree
 
 
-def _selected_paths(source: Path, manifest: dict[str, Any]) -> list[str]:
+def _selected_paths(
+    source: Path,
+    manifest: dict[str, Any],
+    *,
+    include_tracked_manifest: bool = True,
+) -> list[str]:
     tracked = _git(source, "ls-files", "-z").split("\0")
     excluded = tuple(manifest["excludedContentRoots"])
-    selected = {"VERSION", "capability-pack.yaml"}
+    selected = {"VERSION"}
+    if include_tracked_manifest:
+        selected.add("capability-pack.yaml")
     for relative in tracked:
         if not relative:
             continue
@@ -120,9 +128,18 @@ def _selected_paths(source: Path, manifest: dict[str, Any]) -> list[str]:
     return sorted(selected, key=lambda value: value.encode("utf-8"))
 
 
-def _expected_content_digest(source: Path, manifest: dict[str, Any]) -> str:
+def _expected_content_digest(
+    source: Path,
+    manifest: dict[str, Any],
+    *,
+    include_tracked_manifest: bool = True,
+) -> str:
     digest = hashlib.sha256()
-    for relative in _selected_paths(source, manifest):
+    for relative in _selected_paths(
+        source,
+        manifest,
+        include_tracked_manifest=include_tracked_manifest,
+    ):
         stage = _git(source, "ls-files", "--stage", "--", relative).split()
         mode = stage[0].encode("ascii")
         blob = (source / relative).read_bytes()
@@ -163,6 +180,79 @@ def _registration(source: Path, commit: str, tree: str) -> dict[str, Any]:
             "argumentsContract": "CANDIDATE_COMMIT_TREE",
         },
     }
+
+
+def _declared_manifest_registration(
+    source: Path,
+    commit: str,
+    tree: str,
+) -> dict[str, Any]:
+    manifest = _manifest()
+    manifest.update(
+        {
+            "projectPackName": "java-engineering-standard",
+            "skillName": "java-engineering-standard",
+            "displayName": "Java Engineering Capability Pack",
+            "capabilityId": "framework:java:java-engineering-standard",
+            "version": "0.4.0",
+            "contentRoots": ["docs", "skills"],
+            "skillPath": "skills/java-engineering-standard/SKILL.md",
+        }
+    )
+    return {
+        "schemaVersion": "capability-pack-registration/v1",
+        "registrationId": "pack:java-engineering-standard",
+        "capabilityId": manifest["capabilityId"],
+        "packVersion": manifest["version"],
+        "status": "ACTIVE",
+        "distributionStatus": "LOCAL_ONLY",
+        "source": {
+            "kind": "LOCAL_GIT",
+            "repositoryId": manifest["projectPackName"],
+            "repositoryPath": str(source),
+            "commit": commit,
+            "tree": tree,
+        },
+        "contentDeclaration": {
+            "kind": "HARNESS_DECLARED_MANIFEST",
+            "manifest": manifest,
+        },
+        "resolvedContentDigest": _expected_content_digest(
+            source,
+            manifest,
+            include_tracked_manifest=False,
+        ),
+        "validator": {
+            "kind": "FIXED_CANDIDATE_GATE",
+            "relativePath": "scripts/verify-capability-pack",
+            "sha256": "sha256:"
+            + hashlib.sha256(
+                (source / "scripts/verify-capability-pack").read_bytes()
+            ).hexdigest(),
+            "argumentsContract": "CANDIDATE_COMMIT_TREE",
+        },
+    }
+
+
+def _manifestless_pack_fixture(tmp_path: Path) -> tuple[Path, str, str]:
+    source = tmp_path / "java-pack"
+    source.mkdir()
+    _write_valid_pack(source)
+    (source / "capability-pack.yaml").unlink()
+    web_skill = source / "skills/web-high-fidelity"
+    java_skill = source / "skills/java-engineering-standard"
+    web_skill.rename(java_skill)
+    (source / "VERSION").write_text("0.4.0\n", encoding="utf-8")
+    _git(source, "init", "-q")
+    _git(source, "config", "user.name", "Pack Test")
+    _git(source, "config", "user.email", "pack-test@example.invalid")
+    _git(source, "add", "-A")
+    _git(source, "commit", "-qm", "test: manifestless pack fixture")
+    return (
+        source,
+        _git(source, "rev-parse", "HEAD"),
+        _git(source, "rev-parse", "HEAD^{tree}"),
+    )
 
 
 def _write_test_schemas(root: Path, _source: Path) -> None:
@@ -238,6 +328,64 @@ def test_registry_entry_binds_immutable_source_and_validator_identity(tmp_path: 
     assert entry["resolvedContentDigest"] == FIXTURE_CONTENT_DIGEST
     assert entry["validator"]["sha256"].startswith("sha256:")
     assert not (root / "generated/registries/capability-pack-registry.json").exists()
+
+
+def test_registry_accepts_harness_declared_manifest_for_fixed_manifestless_pack(
+    tmp_path: Path,
+):
+    source, commit, tree = _manifestless_pack_fixture(tmp_path)
+    root = tmp_path / "harness"
+    _write_test_schemas(root, source)
+    registration = _declared_manifest_registration(source, commit, tree)
+    _write_registrations(root, [registration])
+
+    registry = build_capability_pack_registry(root, write=False)
+
+    assert registry["entries"] == [registration]
+
+
+def test_registry_rejects_harness_declared_manifest_identity_drift(tmp_path: Path):
+    source, commit, tree = _manifestless_pack_fixture(tmp_path)
+    root = tmp_path / "harness"
+    _write_test_schemas(root, source)
+    registration = _declared_manifest_registration(source, commit, tree)
+    registration["contentDeclaration"]["manifest"]["version"] = "0.4.1"
+    _write_registrations(root, [registration])
+
+    with pytest.raises(ValueError, match="capability pack manifest identity mismatch"):
+        build_capability_pack_registry(root, write=False)
+
+
+def test_registry_canonical_revision_excludes_relocated_discovery_locator(
+    tmp_path: Path,
+):
+    source, commit, tree = _manifestless_pack_fixture(tmp_path)
+    root = tmp_path / "harness"
+    _write_test_schemas(root, source)
+    registration = _declared_manifest_registration(source, commit, tree)
+    _write_registrations(root, [registration])
+    before = build_capability_pack_registry(root, write=False)
+
+    relocated = tmp_path / "java-pack-relocated"
+    _git(tmp_path, "clone", "--quiet", "--no-hardlinks", str(source), str(relocated))
+    _git(relocated, "checkout", "--quiet", "--detach", commit)
+    registration["source"]["repositoryPath"] = str(relocated)
+    _write_registrations(root, [registration])
+
+    after = build_capability_pack_registry(root, write=False)
+
+    assert after["sourceRevision"] == before["sourceRevision"]
+
+
+def test_registration_fingerprint_binds_harness_declared_manifest(tmp_path: Path):
+    from evolution_harness.project import _registration_fingerprint
+
+    source, commit, tree = _manifestless_pack_fixture(tmp_path)
+    registration = _declared_manifest_registration(source, commit, tree)
+    changed = deepcopy(registration)
+    changed["contentDeclaration"]["manifest"]["displayName"] = "Changed"
+
+    assert _registration_fingerprint(changed) != _registration_fingerprint(registration)
 
 
 def test_registry_write_materializes_only_the_external_registry_projection(tmp_path: Path):

@@ -69,15 +69,18 @@ def test_structural_validation_separates_mechanical_gate_from_semantic_quality(t
     assert report["structuralGate"] == "PASS"
     assert report["semanticGate"] == "NOT_ASSERTED_BY_CI"
     assert report["issues"] == []
-    assert report["integrationCount"] == 2
+    assert report["integrationCount"] == 3
 
 
-def test_structural_validation_without_generated_check_ignores_unavailable_pack_source(
+def test_internal_only_structural_validation_without_generated_check_ignores_unavailable_pack_source(
     tmp_path: Path,
 ):
     from evolution_harness.assurance import structural_validate
 
     root, _ = _copy_repo(tmp_path)
+    # This fixture verifies generic internal-only assurance.  The external
+    # Cognitura sidecar has its own Pack-source validation contract.
+    shutil.rmtree(root / "integrations" / "cognitura-shadow")
     _make_external_pack_source_unavailable(root, tmp_path)
 
     report = structural_validate(root, check_generated=False)

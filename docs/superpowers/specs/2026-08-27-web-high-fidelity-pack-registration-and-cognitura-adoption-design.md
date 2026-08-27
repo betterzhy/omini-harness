@@ -661,3 +661,40 @@ The registration-and-adoption Slice is complete only when all are true:
 Completion does not mean a Cognitura page was implemented or verified, the Skill
 was installed globally, or any change was pushed, published, deployed, merged to
 another branch, or released.
+
+## 19. Lean execution and Gate budget
+
+This Slice must not repeat the governance-heavy pattern seen in earlier project
+work. The implementation plan and execution are constrained as follows:
+
+- Maintain one implementation plan with two phase checklists. Do not create a
+  second design, task-card set, stage model, adoption state machine, acceptance
+  dossier, or duplicate evidence ledger.
+- Treat Pack manifest, external registry, exact lock, and runtime projection as
+  implementation components of Candidate A, not as four separately governed
+  candidates.
+- During RED-to-GREEN, run only the smallest tests that can disprove the current
+  change. Do not run the full Harness suite after every Schema, loader, resolver,
+  or projection edit.
+- Run the full Harness regression, generated-artifact check, diff check, and one
+  `deep_reviewer / xhigh` review only after Candidate A is stable.
+- Candidate B runs only the Harness integration tests and Cognitura validators
+  directly affected by registration, binding, managed Skill, and concise
+  `AGENTS.md` routing. Do not replay unrelated Wave 0, Wave 1, Wave 2, backend,
+  browser, or page gates unless live Cognitura Authority explicitly makes one a
+  dependency of the adoption task.
+- Candidate B receives one final independent review. Do not review the sidecar,
+  project pointer, binding migration, and managed Skill as separate candidates.
+- Reuse valid evidence for the same tree. Repeat a full Gate or review only when
+  Candidate tree, WriteSet, risk, environment, Authority, or a relevant finding
+  changes.
+- Do not generalize for hypothetical future Packs. Any registry field, recovery
+  mechanism, lifecycle state, CLI surface, or projection feature not required by
+  the Web Pack plus Cognitura Pilot is deferred.
+- Do not build automatic apply, automatic upgrade, cross-host distribution,
+  publication, central approval, or project-completion governance in this Slice.
+- If a required change expands into those deferred areas, stop and split the
+  future capability instead of enlarging the current candidate.
+
+The goal is one reusable external-Pack path proven by one real consumer, not a
+complete plugin platform.

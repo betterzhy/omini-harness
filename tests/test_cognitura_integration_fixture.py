@@ -8,6 +8,8 @@ from pathlib import Path
 import pytest
 import yaml
 
+from capability_pack_test_support import retain_web_registration_fixture
+
 
 WEB_CAPABILITY_ID = "workflow:web-high-fidelity:reference-driven-visual-fidelity"
 COGNITURA_SOURCE_REPOSITORY = Path("/Users/yuzhuangzhuang/Projects/cognitura")
@@ -72,6 +74,7 @@ def _copy_harness_fixture(tmp_path: Path) -> Path:
     root = tmp_path / "harness"
     for name in ["core", "design", "runtime"]:
         shutil.copytree(repository / name, root / name)
+    retain_web_registration_fixture(root)
     integration = root / "integrations/cognitura-shadow"
     shutil.copytree(repository / "integrations/cognitura-shadow", integration)
     return root

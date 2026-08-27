@@ -367,3 +367,27 @@ def test_integration_install_cli_separates_live_authority_source_from_disposable
         ),
     }
     assert list(target.iterdir()) == []
+
+
+def test_cognitura_shadow_committed_projection_binds_only_external_web_pack():
+    from evolution_harness.project import verify_capability_lock
+    from evolution_harness.schema import SchemaStore
+
+    root = Path(__file__).parents[1]
+    control = root / "integrations/cognitura-shadow/control-plane"
+    lock, _ = verify_capability_lock(root, control)
+    manifest = json.loads(
+        (root / "generated/projections/codex/cognitura-shadow/projection-manifest.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    SchemaStore(root).validate("core/schemas/runtime-projection-manifest.schema.json", manifest)
+
+    assert manifest["capabilityLockFingerprint"] == lock["lockFingerprint"]
+    assert [item["id"] for item in manifest["sourceCapabilities"]] == [
+        "workflow:web-high-fidelity:reference-driven-visual-fidelity"
+    ]
+    assert manifest["sourceCapabilities"][0]["sourceKind"] == "EXTERNAL_CAPABILITY_PACK"
+    assert [item["path"] for item in manifest["generatedSkills"]] == [
+        "skills/web-high-fidelity/SKILL.md"
+    ]

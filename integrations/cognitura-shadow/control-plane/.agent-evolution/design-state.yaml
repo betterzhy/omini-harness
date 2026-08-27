@@ -1,0 +1,30 @@
+schemaVersion: project-design-state/v1
+project: cognitura-shadow
+currentStage: CALIBRATION
+topics:
+  - topicId: web-pack-adoption-preparation
+    status: IN_PROGRESS
+    scope:
+      domain: cognitura
+      concern: read-only-capability-adoption-preparation
+baselines:
+  - docs/task-cards/wave-2/README.md
+  - docs/engineering/cognitura-high-fidelity-harness-binding.md
+assumptions: []
+openDecisions:
+  - decision://cognitura/web-pack-project-adoption-not-authorized
+  - decision://cognitura/page-implementation-not-authorized
+  - decision://cognitura/real-page-pilot-not-authorized
+nextTopicCandidates: []
+projectAuthorityReferences:
+  - docs/task-cards/wave-2/README.md
+  - docs/engineering/cognitura-high-fidelity-harness-binding.md
+protectedDecisions:
+  - W2-D05 is the only active Wave 2 task and authorizes fixed design review only
+  - Business implementation and page implementation remain unauthorized
+  - A Pack result cannot authorize a real-page Pilot
+projectConstraints:
+  - reference: docs/task-cards/wave-2/README.md#w2-d04-close-and-w2-d05-release
+    conflictType: PROJECT_AUTHORITY_OVERRIDES_PACK_RESULT
+    conflictsWithCapabilities:
+      - workflow:web-high-fidelity:reference-driven-visual-fidelity

@@ -1,0 +1,18 @@
+schemaVersion: project-integration-scenario/v1
+id: cognitura-locked-visual-review
+intent: visual-review
+topic: web-pack-adoption-preparation
+requestedOutput: read-only visual review findings from the locked Web Pack
+runtime: CODEX
+expected:
+  authorityGate: PASS
+  topicGuard: OPEN_OR_IN_PROGRESS
+  facts:
+    task.wave2.active: W2-D05
+    permission.business-implementation: DENY
+    permission.page-implementation: DENY
+    permission.real-page-pilot: DENY
+  selectedCapabilities:
+    - workflow:web-high-fidelity:reference-driven-visual-fidelity
+  conflictResolutionRules:
+    - PROJECT_TRUTH_WINS

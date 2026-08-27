@@ -1,0 +1,10 @@
+schemaVersion: project-integration/v1
+id: cognitura-shadow
+projectId: cognitura-shadow
+sourceAccess: READ_ONLY
+controlPlanePath: control-plane
+authorityMapPath: authority-map.yaml
+runtime: CODEX
+excludedPaths:
+  - .git/**
+  - .idea/**

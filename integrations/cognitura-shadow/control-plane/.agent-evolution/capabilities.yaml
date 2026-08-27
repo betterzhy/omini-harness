@@ -1,0 +1,6 @@
+schemaVersion: project-capability-binding/v1
+profiles: []
+capabilities:
+  - workflow:web-high-fidelity:reference-driven-visual-fidelity
+extensions: []
+disabledCapabilities: []

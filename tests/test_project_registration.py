@@ -429,3 +429,35 @@ def test_registered_cli_inspect_preserves_excluded_path_rejection(tmp_path: Path
 
     assert result.returncode == 1, result.stderr
     assert "authority path is excluded" in json.loads(result.stdout)["data"]["message"]
+
+
+def test_cognitura_registration_pointer_accepts_only_exact_read_only_sidecar_lock(
+    tmp_path: Path,
+):
+    from evolution_harness.project import load_capability_lock
+    from evolution_harness.registration import load_project_registration
+
+    repository = Path(__file__).parents[1]
+    source = tmp_path / "cognitura-source"
+    source.mkdir()
+    lock = load_capability_lock(
+        repository,
+        repository / "integrations/cognitura-shadow/control-plane",
+    )
+    registration = {
+        "schemaVersion": "project-harness-registration/v1",
+        "harnessId": "agent-evolution-harness",
+        "integrationId": "cognitura-shadow",
+        "integrationPath": "integrations/cognitura-shadow",
+        "sourceRoot": "SELF",
+        "sourceAccess": "READ_ONLY",
+        "runtime": "CODEX",
+        "capabilityLockFingerprint": lock["lockFingerprint"],
+    }
+    _write_registration(source, registration)
+
+    loaded = load_project_registration(repository, source)
+
+    assert loaded["integrationRoot"] == repository / "integrations/cognitura-shadow"
+    assert loaded["registration"]["capabilityLockFingerprint"] == lock["lockFingerprint"]
+    assert loaded["integration"]["config"]["sourceAccess"] == "READ_ONLY"

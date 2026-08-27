@@ -1,0 +1,21 @@
+schemaVersion: capability-lock/v2
+project: cognitura-shadow
+sourceHarnessRevision: content-sha256:e956f3b93096b51f88436fe886c18b5d7ba4c6544df51f4b2bc449a048e1e6ea
+disabledCapabilities: []
+capabilities:
+- capabilityId: workflow:web-high-fidelity:reference-driven-visual-fidelity
+  resolvedVersion: 2.0.0
+  contentHash: 482496a23e0957e51f53402346ef1c5d8832029f05654d0a40e95a2d4478825c
+  sourceKind: EXTERNAL_CAPABILITY_PACK
+  sourceRegistrationId: pack:web-high-fidelity
+  sourceCommit: ee8caec40136ea1ad391bcbc8956baa66f08abfe
+  sourceTree: f05cf62df34f72079fec10f5e0d67049cb1aa9c4
+  resolvedContentDigest: sha256:482496a23e0957e51f53402346ef1c5d8832029f05654d0a40e95a2d4478825c
+  validatorIdentity:
+    relativePath: scripts/verify-capability-pack
+    sha256: sha256:9bea4c823ce234297433e671629e269db2028b90bc05a749900bb909566fc30c
+  registrationFingerprint: sha256:ebba905a4bb3f0af5215c4fcef2bffc9a0646ae2427f51f05bf2df06cb65dde7
+  sourceHarnessRevision: content-sha256:e956f3b93096b51f88436fe886c18b5d7ba4c6544df51f4b2bc449a048e1e6ea
+  resolvedBecause:
+  - explicit-binding
+lockFingerprint: sha256:9d70ffc6d7176c85ee3b8c860f12a44b2ec3095b550fc964243e42613ed7f0cc

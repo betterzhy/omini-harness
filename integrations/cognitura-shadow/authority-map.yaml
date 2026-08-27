@@ -1,0 +1,61 @@
+schemaVersion: project-authority-map/v1
+authorities:
+  - id: wave2-canonical-index
+    path: docs/task-cards/wave-2/README.md
+    format: MARKDOWN_KV
+    role: CANONICAL
+    required: true
+    owns:
+      - task.wave2.active
+      - permission.business-implementation
+      - permission.page-implementation
+    selectors:
+      task.wave2.active:
+        key: ActiveTaskCard
+        required: true
+      permission.business-implementation:
+        key: Wave2BusinessImplementation
+        required: true
+        normalization:
+          rules:
+            - operator: EXACT
+              expected: NOT_AUTHORIZED
+              value: DENY
+            - operator: EXACT
+              expected: AUTHORIZED
+              value: ALLOW
+          default: UNKNOWN
+      permission.page-implementation:
+        key: Wave2BusinessImplementation
+        required: true
+        normalization:
+          rules:
+            - operator: EXACT
+              expected: NOT_AUTHORIZED
+              value: DENY
+          default: UNKNOWN
+  - id: frozen-legacy-visual-binding
+    path: docs/engineering/cognitura-high-fidelity-harness-binding.md
+    format: MARKDOWN_KV
+    role: SPECIALIZED
+    required: true
+    owns:
+      - permission.real-page-pilot
+    selectors:
+      permission.real-page-pilot:
+        key: REAL_PAGE_PILOT
+        required: true
+        normalization:
+          rules:
+            - operator: EXACT
+              expected: NOT_AUTHORIZED
+              value: DENY
+            - operator: EXACT
+              expected: AUTHORIZED
+              value: ALLOW
+          default: UNKNOWN
+requiredFacts:
+  - task.wave2.active
+  - permission.business-implementation
+  - permission.page-implementation
+  - permission.real-page-pilot

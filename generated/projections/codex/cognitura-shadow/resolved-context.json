@@ -1,0 +1,117 @@
+{
+  "authorityConflicts": [],
+  "authorityFacts": {
+    "permission.business-implementation": {
+      "normalizedValue": "DENY",
+      "owner": "wave2-canonical-index",
+      "rawValue": "NOT_AUTHORIZED",
+      "sourcePath": "docs/task-cards/wave-2/README.md"
+    },
+    "permission.page-implementation": {
+      "normalizedValue": "DENY",
+      "owner": "wave2-canonical-index",
+      "rawValue": "NOT_AUTHORIZED",
+      "sourcePath": "docs/task-cards/wave-2/README.md"
+    },
+    "permission.real-page-pilot": {
+      "normalizedValue": "DENY",
+      "owner": "frozen-legacy-visual-binding",
+      "rawValue": "NOT_AUTHORIZED",
+      "sourcePath": "docs/engineering/cognitura-high-fidelity-harness-binding.md"
+    },
+    "task.wave2.active": {
+      "normalizedValue": "W2-D05",
+      "owner": "wave2-canonical-index",
+      "rawValue": "W2-D05",
+      "sourcePath": "docs/task-cards/wave-2/README.md"
+    }
+  },
+  "authorityGate": "PASS",
+  "authorityPaths": [
+    {
+      "id": "frozen-legacy-visual-binding",
+      "path": "docs/engineering/cognitura-high-fidelity-harness-binding.md",
+      "role": "SPECIALIZED",
+      "sha256": "f35303a75ce26d157120119b0370a68a05f6fc16167c36e84933d9c1659bb044"
+    },
+    {
+      "id": "wave2-canonical-index",
+      "path": "docs/task-cards/wave-2/README.md",
+      "role": "CANONICAL",
+      "sha256": "be6b51866662b8cdeecb117aef358f4be48c5ea040e64eb7c3458a09c68c44b6"
+    }
+  ],
+  "authoritySnapshotFingerprint": "sha256:dcf3c8ded77b36325871a62918ece59d5f52f1e855e4fbeb090fbf60604327d0",
+  "authoritySourceRevision": {
+    "authoritySetDigest": "sha256:0c325ff1308f998b2a7c147dfd5db697e4a179f38a18818b35cfb7a4510c5cb9",
+    "authoritySetStatus": "CLEAN_FOR_AUTHORITY_SET",
+    "head": "a14206d5171b776b6fe14dbb0feca582d982a393",
+    "kind": "GIT",
+    "tree": "cf439dd31078c734cbf64ecfbed682507399b0f7"
+  },
+  "capabilityLockFingerprint": "sha256:9d70ffc6d7176c85ee3b8c860f12a44b2ec3095b550fc964243e42613ed7f0cc",
+  "closedTopics": [],
+  "conflictSignals": [
+    {
+      "conflictType": "PROJECT_AUTHORITY_OVERRIDES_PACK_RESULT",
+      "projectReference": "docs/task-cards/wave-2/README.md#w2-d04-close-and-w2-d05-release",
+      "resolutionRule": "PROJECT_TRUTH_WINS",
+      "reviewRecommended": true,
+      "sharedCapability": "workflow:web-high-fidelity:reference-driven-visual-fidelity"
+    }
+  ],
+  "explain": {
+    "excluded": [],
+    "selected": [
+      {
+        "contentHash": "482496a23e0957e51f53402346ef1c5d8832029f05654d0a40e95a2d4478825c",
+        "id": "workflow:web-high-fidelity:reference-driven-visual-fidelity",
+        "kind": "WORKFLOW",
+        "selectedBecause": [
+          "explicit-binding"
+        ],
+        "sourceKind": "EXTERNAL_CAPABILITY_PACK",
+        "sourceRegistrationId": "pack:web-high-fidelity",
+        "version": "2.0.0"
+      }
+    ]
+  },
+  "humanGates": [],
+  "intent": "visual-review",
+  "project": "cognitura-shadow",
+  "projectAuthorityReferences": [
+    "docs/task-cards/wave-2/README.md",
+    "docs/engineering/cognitura-high-fidelity-harness-binding.md"
+  ],
+  "projectBindingHash": "7afcd26fe7a3ddebbba5247d31eb1b7bea3797113e80e084aae686c317bd816a",
+  "projectStateHash": "397eeb33103fe296eb536af2515a16b335a074c301c11787579a9996b5ab0797",
+  "protectedDecisions": [
+    "W2-D05 is the only active Wave 2 task and authorizes fixed design review only",
+    "Business implementation and page implementation remain unauthorized",
+    "A Pack result cannot authorize a real-page Pilot"
+  ],
+  "reopenSignal": null,
+  "requestedOutput": "read-only visual review findings",
+  "requiredSelfReview": [],
+  "resolutionId": "resolution:79a0920d7917237466c3acdf",
+  "runtime": "CODEX",
+  "schemaVersion": "resolved-design-context/v1",
+  "selectedCapabilities": [
+    {
+      "contentHash": "482496a23e0957e51f53402346ef1c5d8832029f05654d0a40e95a2d4478825c",
+      "id": "workflow:web-high-fidelity:reference-driven-visual-fidelity",
+      "kind": "WORKFLOW",
+      "selectedBecause": [
+        "explicit-binding"
+      ],
+      "sourceKind": "EXTERNAL_CAPABILITY_PACK",
+      "sourceRegistrationId": "pack:web-high-fidelity",
+      "version": "2.0.0"
+    }
+  ],
+  "semanticSelectionCandidates": [],
+  "stage": "CALIBRATION",
+  "topic": "web-pack-adoption-preparation",
+  "topicGuard": "OPEN_OR_IN_PROGRESS",
+  "workflowStage": null
+}

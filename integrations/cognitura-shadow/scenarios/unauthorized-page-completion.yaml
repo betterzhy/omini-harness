@@ -1,0 +1,18 @@
+schemaVersion: project-integration-scenario/v1
+id: cognitura-unauthorized-page-completion
+intent: page-completion
+topic: web-pack-adoption-preparation
+requestedOutput: deny page completion and real-page Pilot authorization
+runtime: CODEX
+expected:
+  authorityGate: PASS
+  topicGuard: OPEN_OR_IN_PROGRESS
+  facts:
+    task.wave2.active: W2-D05
+    permission.business-implementation: DENY
+    permission.page-implementation: DENY
+    permission.real-page-pilot: DENY
+  selectedCapabilities:
+    - workflow:web-high-fidelity:reference-driven-visual-fidelity
+  conflictResolutionRules:
+    - PROJECT_TRUTH_WINS

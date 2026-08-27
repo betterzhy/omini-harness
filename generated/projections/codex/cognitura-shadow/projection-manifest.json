@@ -1,0 +1,82 @@
+{
+  "authorityGate": "PASS",
+  "authoritySnapshotFingerprint": "sha256:dcf3c8ded77b36325871a62918ece59d5f52f1e855e4fbeb090fbf60604327d0",
+  "authoritySourceRevision": {
+    "authoritySetDigest": "sha256:0c325ff1308f998b2a7c147dfd5db697e4a179f38a18818b35cfb7a4510c5cb9",
+    "authoritySetStatus": "CLEAN_FOR_AUTHORITY_SET",
+    "head": "a14206d5171b776b6fe14dbb0feca582d982a393",
+    "kind": "GIT",
+    "tree": "cf439dd31078c734cbf64ecfbed682507399b0f7"
+  },
+  "capabilityLockFingerprint": "sha256:9d70ffc6d7176c85ee3b8c860f12a44b2ec3095b550fc964243e42613ed7f0cc",
+  "generatedFiles": [
+    {
+      "path": "discussion-contract.md",
+      "sha256": "bc2e1a3a740511f5e57cb23310667845123810730072dd753aedd88e3db4d467"
+    },
+    {
+      "path": "repository-guidance.md",
+      "sha256": "07746167936eb39d12a8d465beaf8355744bd7eebbe5895db81fd76c41acfe54"
+    },
+    {
+      "path": "resolved-context.json",
+      "sha256": "86470d034a825a653b94753c8d34ec15c2c41e1fd0f74a2e2808be9260715e97"
+    },
+    {
+      "path": "resolved-task-context.md",
+      "sha256": "aeb94d7af80d28b8859708ccf01b168df9ea2fa315b2480da8883cbf26a5b14c"
+    },
+    {
+      "path": "skills/web-high-fidelity/SKILL.md",
+      "sha256": "f509c416aaa045a9f9998fe8b42a53ffedc27b4aae5edf2f9cc7c3b9c60d1e49"
+    }
+  ],
+  "generatedSkills": [
+    {
+      "contentHash": "482496a23e0957e51f53402346ef1c5d8832029f05654d0a40e95a2d4478825c",
+      "id": "workflow:web-high-fidelity:reference-driven-visual-fidelity",
+      "path": "skills/web-high-fidelity/SKILL.md",
+      "registrationFingerprint": "sha256:ebba905a4bb3f0af5215c4fcef2bffc9a0646ae2427f51f05bf2df06cb65dde7",
+      "resolvedContentDigest": "sha256:482496a23e0957e51f53402346ef1c5d8832029f05654d0a40e95a2d4478825c",
+      "skillBlobSha256": "sha256:f509c416aaa045a9f9998fe8b42a53ffedc27b4aae5edf2f9cc7c3b9c60d1e49",
+      "skillProjectionVersion": "agent-skill-projection/1",
+      "sourceCommit": "ee8caec40136ea1ad391bcbc8956baa66f08abfe",
+      "sourceKind": "EXTERNAL_CAPABILITY_PACK",
+      "sourceRegistrationId": "pack:web-high-fidelity",
+      "sourceSkillPath": "skills/web-high-fidelity/SKILL.md",
+      "sourceTree": "f05cf62df34f72079fec10f5e0d67049cb1aa9c4",
+      "validatorIdentity": {
+        "relativePath": "scripts/verify-capability-pack",
+        "sha256": "sha256:9bea4c823ce234297433e671629e269db2028b90bc05a749900bb909566fc30c"
+      },
+      "version": "2.0.0"
+    }
+  ],
+  "omittedReferences": [],
+  "project": "cognitura-shadow",
+  "projectBindingHash": "7afcd26fe7a3ddebbba5247d31eb1b7bea3797113e80e084aae686c317bd816a",
+  "projectStateHash": "397eeb33103fe296eb536af2515a16b335a074c301c11787579a9996b5ab0797",
+  "projectionType": "CODEX_REPOSITORY_PACK",
+  "projectionVersion": "codex-project-pack/1",
+  "runtime": "CODEX",
+  "schemaVersion": "runtime-projection-manifest/v1",
+  "sourceCapabilities": [
+    {
+      "contentHash": "482496a23e0957e51f53402346ef1c5d8832029f05654d0a40e95a2d4478825c",
+      "id": "workflow:web-high-fidelity:reference-driven-visual-fidelity",
+      "kind": "WORKFLOW",
+      "registrationFingerprint": "sha256:ebba905a4bb3f0af5215c4fcef2bffc9a0646ae2427f51f05bf2df06cb65dde7",
+      "resolvedContentDigest": "sha256:482496a23e0957e51f53402346ef1c5d8832029f05654d0a40e95a2d4478825c",
+      "sourceCommit": "ee8caec40136ea1ad391bcbc8956baa66f08abfe",
+      "sourceKind": "EXTERNAL_CAPABILITY_PACK",
+      "sourceRegistrationId": "pack:web-high-fidelity",
+      "sourceTree": "f05cf62df34f72079fec10f5e0d67049cb1aa9c4",
+      "validatorIdentity": {
+        "relativePath": "scripts/verify-capability-pack",
+        "sha256": "sha256:9bea4c823ce234297433e671629e269db2028b90bc05a749900bb909566fc30c"
+      },
+      "version": "2.0.0"
+    }
+  ],
+  "sourceResolutionId": "resolution:79a0920d7917237466c3acdf"
+}

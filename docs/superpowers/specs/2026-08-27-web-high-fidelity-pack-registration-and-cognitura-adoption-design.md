@@ -369,16 +369,21 @@ After the sidecar candidate passes, Cognitura receives:
 ```text
 .agent-evolution/registration.yaml
 .agents/skills/web-high-fidelity/SKILL.md
-docs/engineering/cognitura-high-fidelity-harness-binding.md
+docs/engineering/cognitura-web-high-fidelity-capability-pack-v2-adoption.md
 AGENTS.md
 ```
 
-The existing binding path is retained to preserve links, but its active content
-is rewritten as a Capability Pack adoption record. The legacy v1 text moves to:
+The existing
+`docs/engineering/cognitura-high-fidelity-harness-binding.md` remains
+byte-for-byte unchanged. Cognitura's post-Wave-1 successor verifier treats that
+file and its historical AGENTS projection as fixed history; rewriting or moving
+it would fail `POST_W1_SUCCESSOR_INVALID:binding drift`. The new v2 record
+declares that it supersedes the old binding for current execution without
+rewriting historical evidence.
 
-```text
-docs/history/high-fidelity/cognitura-high-fidelity-harness-v1-binding.md
-```
+An adoption-specific R2 Authority must explicitly permit the new record, the
+minimal AGENTS routing change, and the corresponding successor-verifier
+transition. Candidate B cannot begin while W2-D05 remains the only READY card.
 
 The new active record contains:
 
@@ -390,9 +395,11 @@ The new active record contains:
 - `TARGET_PROJECT_AUTHORITY_PREVAILS`;
 - `REAL_PAGE_PILOT=NOT_AUTHORIZED` until a separate page task exists.
 
-It must not contain the retired active terms `PROJECT_BINDING`, `HF3`,
-`LANDING_MODE=THIN_BINDING`, or `MANIFEST.sha256`. Historical files may preserve
-them and must not be treated as active execution surfaces.
+The new record must not contain the retired active terms `PROJECT_BINDING`,
+`HF3`, `LANDING_MODE=THIN_BINDING`, or `MANIFEST.sha256`. The exact frozen legacy
+binding may preserve them, but current AGENTS routing, project registration,
+locks, projections, and validators must not treat that file as the v2 execution
+entrypoint.
 
 HF0/HF1/HF2 remain task-level applicability profiles, not permanent project
 status. Registering the Pack does not classify every Cognitura task as HF2.
@@ -477,10 +484,12 @@ Authority outside W2-D05's fixed WriteSet.
 
 1. Freeze `cognitura-shadow` and its exact project lock.
 2. Generate and verify the Cognitura runtime projection plan.
-3. Migrate the legacy binding and add the repository registration plus managed
-   Skill on an isolated Cognitura worktree.
-4. Run Harness integration scenarios and all directly affected Cognitura gates.
-5. Fix Candidate/Parent/Tree and perform the Cognitura-required independent
+3. Preserve the legacy binding byte-for-byte, add the v2 adoption record, and
+   make the explicitly authorized successor-verifier and AGENTS routing change.
+4. Add the repository registration plus managed Skill on an isolated Cognitura
+   worktree.
+5. Run Harness integration scenarios and all directly affected Cognitura gates.
+6. Fix Candidate/Parent/Tree and perform the Cognitura-required independent
    `deep_reviewer / xhigh` Gate.
 
 No remote push, deployment, publication, global Skill installation, baseline
@@ -558,11 +567,14 @@ otherwise.
 - Create `.agent-evolution/registration.yaml`.
 - Create `.agents/skills/web-high-fidelity/SKILL.md` from the verified projection.
 - Create
-  `docs/history/high-fidelity/cognitura-high-fidelity-harness-v1-binding.md`.
-- Modify `docs/engineering/cognitura-high-fidelity-harness-binding.md`.
+  `docs/engineering/cognitura-web-high-fidelity-capability-pack-v2-adoption.md`.
 - Modify `AGENTS.md` with one concise capability-routing rule.
-- Modify the smallest existing Cognitura validator/test surface that owns this
-  binding, registration, and managed Skill integrity.
+- Modify `scripts/verify-wave1-implementation-cards` only where it owns the
+  post-Wave-1 successor allowlist and fixed-history checks.
+- Modify `tests/task-cards/verify-wave1-implementation-cards.sh` with exact
+  positive and mutation coverage for the authorized v2 transition.
+- Preserve
+  `docs/engineering/cognitura-high-fidelity-harness-binding.md` byte-for-byte.
 
 No product source under `web/`, backend source, task-card state, visual baseline,
 reference image, package file, lockfile, CI workflow, or database asset is in the
@@ -617,6 +629,8 @@ Stop before the affected write if any of the following is true:
 - Cognitura still has `.idea/` or other unattributable state at adoption start;
 - W2-D05 remains the only applicable Cognitura Authority and no separate
   adoption task has been approved;
+- the adoption Authority does not explicitly permit the new v2 record, concise
+  AGENTS route, and post-Wave-1 successor-verifier transition;
 - version `2.0.0` conflicts with a newly discovered formal consumer contract;
 - the external lock requires changing existing internal lock bytes;
 - source or validator identity cannot be reproduced locally;
@@ -636,9 +650,11 @@ unchanged.
 After a local Cognitura adoption commit, rollback is a normal revert that:
 
 1. removes the project registration pointer and managed Skill;
-2. restores the active legacy-binding predecessor from Git history;
+2. removes the v2 adoption record and restores the predecessor AGENTS and
+   successor-verifier bytes;
 3. removes the Cognitura sidecar registration from future resolution;
-4. leaves Pack source history, Cognitura product code, baselines, and evidence
+4. leaves the immutable legacy binding, Pack source history, Cognitura product
+   code, baselines, and evidence
    untouched.
 
 Rollback does not rewrite Git history or delete user worktrees.
@@ -654,7 +670,10 @@ The registration-and-adoption Slice is complete only when all are true:
 - Cognitura has an exact v2 project lock through `cognitura-shadow`;
 - Cognitura's registration fingerprint matches that sidecar lock;
 - the managed Skill bytes match the locked Pack source;
-- retired v1 terms appear only in history/migration material;
+- the legacy v1 binding remains byte-for-byte identical to its fixed historical
+  identity;
+- retired v1 terms do not appear in the v2 record, current AGENTS routing,
+  project registration, lock, or projection;
 - both fixed candidates receive the required independent GO;
 - every affected worktree is clean.
 

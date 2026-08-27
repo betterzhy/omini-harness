@@ -457,8 +457,8 @@ does not imply project adoption.
 Run:
 
 ```bash
-.venv/bin/harness registry build --check --json
-.venv/bin/harness validate --check-generated --json
+PATH="$PWD/.venv/bin:$PATH" ./harness registry build --check --format json
+PATH="$PWD/.venv/bin:$PATH" ./harness validate --check-generated --format json
 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 .venv/bin/pytest -q \
   tests/test_registry_catalog_compat.py \
   tests/test_assurance_cli.py
@@ -844,7 +844,7 @@ PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 .venv/bin/pytest -q \
   tests/test_cognitura_integration_fixture.py \
   tests/test_integration_e2e.py \
   tests/test_project_registration.py
-.venv/bin/harness validate --check-generated --json
+PATH="$PWD/.venv/bin:$PATH" ./harness validate --check-generated --format json
 git diff --check
 git add integrations/cognitura-shadow \
   generated/projections/codex/cognitura-shadow \
@@ -891,7 +891,7 @@ existing complete Harness regression and generated-output check once:
 
 ```bash
 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 .venv/bin/pytest -q
-.venv/bin/harness validate --check-generated --json
+PATH="$PWD/.venv/bin:$PATH" ./harness validate --check-generated --format json
 git diff --check
 ```
 

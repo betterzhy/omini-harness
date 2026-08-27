@@ -49,7 +49,7 @@
     "kind": "GIT",
     "tree": "cf439dd31078c734cbf64ecfbed682507399b0f7"
   },
-  "capabilityLockFingerprint": "sha256:9d70ffc6d7176c85ee3b8c860f12a44b2ec3095b550fc964243e42613ed7f0cc",
+  "capabilityLockFingerprint": "sha256:ed934c02e9298ed764ede5925482fe1a61b3a2982f1c2054c0c4e0ad913991ec",
   "closedTopics": [],
   "conflictSignals": [
     {
@@ -64,7 +64,7 @@
     "excluded": [],
     "selected": [
       {
-        "contentHash": "482496a23e0957e51f53402346ef1c5d8832029f05654d0a40e95a2d4478825c",
+        "contentHash": "9f2ffe458a32b75562107f7991b6b9cacc7630d8ec3e952a7abb409b8b54b8e1",
         "id": "workflow:web-high-fidelity:reference-driven-visual-fidelity",
         "kind": "WORKFLOW",
         "selectedBecause": [
@@ -93,12 +93,12 @@
   "reopenSignal": null,
   "requestedOutput": "read-only visual review findings",
   "requiredSelfReview": [],
-  "resolutionId": "resolution:79a0920d7917237466c3acdf",
+  "resolutionId": "resolution:7cfee0d5665a8df216b29d0b",
   "runtime": "CODEX",
   "schemaVersion": "resolved-design-context/v1",
   "selectedCapabilities": [
     {
-      "contentHash": "482496a23e0957e51f53402346ef1c5d8832029f05654d0a40e95a2d4478825c",
+      "contentHash": "9f2ffe458a32b75562107f7991b6b9cacc7630d8ec3e952a7abb409b8b54b8e1",
       "id": "workflow:web-high-fidelity:reference-driven-visual-fidelity",
       "kind": "WORKFLOW",
       "selectedBecause": [

@@ -92,7 +92,7 @@ def test_resolver_selects_locked_external_pack_from_verified_registration(tmp_pa
         "id": EXTERNAL_CAPABILITY_ID,
         "kind": "WORKFLOW",
         "version": "2.0.0",
-        "contentHash": "482496a23e0957e51f53402346ef1c5d8832029f05654d0a40e95a2d4478825c",
+        "contentHash": "9f2ffe458a32b75562107f7991b6b9cacc7630d8ec3e952a7abb409b8b54b8e1",
         "sourceKind": "EXTERNAL_CAPABILITY_PACK",
         "sourceRegistrationId": "pack:web-high-fidelity",
         "selectedBecause": ["explicit-binding"],

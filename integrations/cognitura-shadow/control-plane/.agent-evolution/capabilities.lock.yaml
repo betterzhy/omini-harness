@@ -1,21 +1,21 @@
 schemaVersion: capability-lock/v2
 project: cognitura-shadow
-sourceHarnessRevision: content-sha256:e956f3b93096b51f88436fe886c18b5d7ba4c6544df51f4b2bc449a048e1e6ea
+sourceHarnessRevision: content-sha256:7792e2ce0d25533bd69e305cbf930b8666c3e3e60000808d7815bfc312f50745
 disabledCapabilities: []
 capabilities:
 - capabilityId: workflow:web-high-fidelity:reference-driven-visual-fidelity
   resolvedVersion: 2.0.0
-  contentHash: 482496a23e0957e51f53402346ef1c5d8832029f05654d0a40e95a2d4478825c
+  contentHash: 9f2ffe458a32b75562107f7991b6b9cacc7630d8ec3e952a7abb409b8b54b8e1
   sourceKind: EXTERNAL_CAPABILITY_PACK
   sourceRegistrationId: pack:web-high-fidelity
-  sourceCommit: ee8caec40136ea1ad391bcbc8956baa66f08abfe
-  sourceTree: f05cf62df34f72079fec10f5e0d67049cb1aa9c4
-  resolvedContentDigest: sha256:482496a23e0957e51f53402346ef1c5d8832029f05654d0a40e95a2d4478825c
+  sourceCommit: ed1eb420e39c47a75341df48249cc22477e62938
+  sourceTree: 12b9473a9ea4569d192f270d3eb003959ae40877
+  resolvedContentDigest: sha256:9f2ffe458a32b75562107f7991b6b9cacc7630d8ec3e952a7abb409b8b54b8e1
   validatorIdentity:
     relativePath: scripts/verify-capability-pack
-    sha256: sha256:9bea4c823ce234297433e671629e269db2028b90bc05a749900bb909566fc30c
-  registrationFingerprint: sha256:ebba905a4bb3f0af5215c4fcef2bffc9a0646ae2427f51f05bf2df06cb65dde7
-  sourceHarnessRevision: content-sha256:e956f3b93096b51f88436fe886c18b5d7ba4c6544df51f4b2bc449a048e1e6ea
+    sha256: sha256:f0a09d48e3a296bb67565a6f0a5edc46c6a7dcf72c8e48f32a6f80a9c0823d94
+  registrationFingerprint: sha256:c237661408193fbf837af75ffbb8cbf760ca5a80f9b5e8bcb9ce1b847cd84ed6
+  sourceHarnessRevision: content-sha256:7792e2ce0d25533bd69e305cbf930b8666c3e3e60000808d7815bfc312f50745
   resolvedBecause:
   - explicit-binding
-lockFingerprint: sha256:9d70ffc6d7176c85ee3b8c860f12a44b2ec3095b550fc964243e42613ed7f0cc
+lockFingerprint: sha256:ed934c02e9298ed764ede5925482fe1a61b3a2982f1c2054c0c4e0ad913991ec

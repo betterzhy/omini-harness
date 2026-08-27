@@ -165,7 +165,7 @@ def _registration(source: Path, commit: str, tree: str) -> dict[str, Any]:
     }
 
 
-def _write_test_schemas(root: Path, source: Path) -> None:
+def _write_test_schemas(root: Path, _source: Path) -> None:
     repository = Path(__file__).parents[1]
     destination = root / "core/schemas"
     destination.mkdir(parents=True)
@@ -174,14 +174,6 @@ def _write_test_schemas(root: Path, source: Path) -> None:
         "capability-pack-registration.schema.json",
     ]:
         shutil.copy2(repository / "core/schemas" / name, destination / name)
-    registration_schema_path = destination / "capability-pack-registration.schema.json"
-    registration_schema = json.loads(registration_schema_path.read_text(encoding="utf-8"))
-    registration_schema["properties"]["source"]["properties"]["repositoryPath"]["const"] = str(
-        source
-    )
-    registration_schema_path.write_text(
-        json.dumps(registration_schema, indent=2) + "\n", encoding="utf-8"
-    )
 
 
 def _write_registrations(root: Path, registrations: list[dict[str, Any]]) -> None:
@@ -511,12 +503,28 @@ def test_registry_rejects_source_root_symlink(tmp_path: Path):
     entry = _registered_entry(root)
     entry["source"]["repositoryPath"] = str(alias)
     _write_registrations(root, [entry])
-    schema_path = root / "core/schemas/capability-pack-registration.schema.json"
-    schema = json.loads(schema_path.read_text(encoding="utf-8"))
-    schema["properties"]["source"]["properties"]["repositoryPath"]["const"] = str(alias)
-    schema_path.write_text(json.dumps(schema, indent=2) + "\n", encoding="utf-8")
 
     with pytest.raises(ValueError, match="capability pack source root must not be a symlink"):
+        build_capability_pack_registry(root, write=False)
+
+
+def test_registry_rejects_relative_source_root(tmp_path: Path):
+    root, _, _, _ = _harness_with_pack(tmp_path)
+    entry = _registered_entry(root)
+    entry["source"]["repositoryPath"] = "relative/pack"
+    _write_registrations(root, [entry])
+
+    with pytest.raises(ValueError, match="registration schema is invalid"):
+        build_capability_pack_registry(root, write=False)
+
+
+def test_registry_rejects_non_normalized_absolute_source_root(tmp_path: Path):
+    root, source, _, _ = _harness_with_pack(tmp_path)
+    entry = _registered_entry(root)
+    entry["source"]["repositoryPath"] = str(source.parent / "." / source.name / ".." / source.name)
+    _write_registrations(root, [entry])
+
+    with pytest.raises(ValueError, match="source root must not be a symlink or alias"):
         build_capability_pack_registry(root, write=False)
 
 

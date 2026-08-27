@@ -27,7 +27,8 @@
         "kind": {"const": "LOCAL_GIT"},
         "repositoryId": {"const": "web-high-fidelity"},
         "repositoryPath": {
-          "const": "/Users/yuzhuangzhuang/Projects/web-high-fidelity/.worktrees/web-high-fidelity-pack-v2-registration"
+          "type": "string",
+          "pattern": "^/(?:[^/]+/)*[^/]+$"
         },
         "commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
         "tree": {"type": "string", "pattern": "^[0-9a-f]{40}$"}

@@ -38,7 +38,7 @@
 
 ## Expected Outputs
 - read-only visual review findings
-- workflow:web-high-fidelity:reference-driven-visual-fidelity@2.0.0 (482496a23e09)
+- workflow:web-high-fidelity:reference-driven-visual-fidelity@2.0.0 (9f2ffe458a32)
 
 ## Closure Criteria
 - stage-specific output accepted

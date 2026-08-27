@@ -1,6 +1,6 @@
 # Resolved Design Context
 
-- Resolution: `resolution:79a0920d7917237466c3acdf`
+- Resolution: `resolution:7cfee0d5665a8df216b29d0b`
 - Project: `cognitura-shadow`
 - Topic: `web-pack-adoption-preparation`
 - Stage: `CALIBRATION`
@@ -8,7 +8,7 @@
 - Topic Guard: `OPEN_OR_IN_PROGRESS`
 
 ## Selected Capabilities
-- `workflow:web-high-fidelity:reference-driven-visual-fidelity@2.0.0` hash `482496a23e0957e51f53402346ef1c5d8832029f05654d0a40e95a2d4478825c`
+- `workflow:web-high-fidelity:reference-driven-visual-fidelity@2.0.0` hash `9f2ffe458a32b75562107f7991b6b9cacc7630d8ec3e952a7abb409b8b54b8e1`
 
 ## Project Authority References
 - `docs/task-cards/wave-2/README.md`

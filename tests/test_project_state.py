@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -28,6 +30,40 @@ def _project_selecting_registered_pack(tmp_path: Path) -> tuple[Path, Path]:
     binding["capabilities"].append(EXTERNAL_CAPABILITY_ID)
     binding_path.write_text(yaml.safe_dump(binding, sort_keys=False), encoding="utf-8")
     return root, project
+
+
+def _git(repository: Path, *arguments: str) -> str:
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "GIT_CONFIG_GLOBAL": "/dev/null",
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_NO_LAZY_FETCH": "1",
+            "GIT_OPTIONAL_LOCKS": "0",
+            "GIT_TERMINAL_PROMPT": "0",
+        }
+    )
+    completed = subprocess.run(
+        ["git", "-C", str(repository), *arguments],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=environment,
+    )
+    return completed.stdout.strip()
+
+
+def _clone_fixed_pack(source: Path, destination: Path, commit: str) -> None:
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    _git(
+        destination.parent,
+        "clone",
+        "--quiet",
+        "--no-hardlinks",
+        str(source),
+        str(destination),
+    )
+    _git(destination, "checkout", "--quiet", "--detach", commit)
 
 
 def _add_internal_capability_version(
@@ -130,8 +166,17 @@ def test_external_pack_binding_generates_v2_exact_lock(tmp_path: Path):
         "relativePath": registration["validator"]["relativePath"],
         "sha256": registration["validator"]["sha256"],
     }
+    locator_free_registration = {
+        **registration,
+        "source": {
+            key: value
+            for key, value in registration["source"].items()
+            if key != "repositoryPath"
+        },
+    }
     assert item["registrationFingerprint"] == (
-        "sha256:" + sha256_bytes(canonical_json_bytes(registration))
+        "sha256:"
+        + sha256_bytes(canonical_json_bytes(locator_free_registration))
     )
     verified_result = verify_capability_lock(root, project)
     assert isinstance(verified_result, tuple) and len(verified_result) == 2
@@ -147,6 +192,76 @@ def test_external_pack_binding_generates_v2_exact_lock(tmp_path: Path):
         item["sourceKind"] == "HARNESS_CANONICAL"
         for item in lock["capabilities"]
         if item["capabilityId"] != EXTERNAL_CAPABILITY_ID
+    )
+
+
+def test_external_pack_locator_relocation_preserves_existing_v2_lock_identity(
+    tmp_path: Path,
+):
+    from evolution_harness.project import build_capability_lock, verify_capability_lock
+
+    root, project = _project_selecting_registered_pack(tmp_path)
+    registration_path = root / "core/registries/capability-packs.yaml"
+    registrations = yaml.safe_load(registration_path.read_text(encoding="utf-8"))
+    source = registrations[0]["source"]
+    fixed_commit = source["commit"]
+    fixed_tree = source["tree"]
+
+    first_checkout = tmp_path / "pack-first-checkout"
+    _clone_fixed_pack(Path(source["repositoryPath"]), first_checkout, fixed_commit)
+    source["repositoryPath"] = str(first_checkout)
+    registration_path.write_text(
+        yaml.safe_dump(registrations, sort_keys=False), encoding="utf-8"
+    )
+    schema_path = root / "core/schemas/capability-pack-registration.schema.json"
+    schema = json.loads(schema_path.read_text(encoding="utf-8"))
+    locator_schema = schema["properties"]["source"]["properties"]["repositoryPath"]
+    if "const" in locator_schema:
+        locator_schema["const"] = str(first_checkout)
+        schema_path.write_text(json.dumps(schema, indent=2) + "\n", encoding="utf-8")
+
+    assert _git(first_checkout, "rev-parse", "HEAD") == fixed_commit
+    assert _git(first_checkout, "rev-parse", "HEAD^{tree}") == fixed_tree
+    assert _git(first_checkout, "status", "--porcelain=v1", "--untracked-files=all") == ""
+    before = build_capability_lock(root, project, write=True)
+    before_external = next(
+        item
+        for item in before["capabilities"]
+        if item["sourceKind"] == "EXTERNAL_CAPABILITY_PACK"
+    )
+
+    relocated_checkout = tmp_path / "pack-relocated-checkout"
+    _clone_fixed_pack(first_checkout, relocated_checkout, fixed_commit)
+    assert not relocated_checkout.is_symlink()
+    assert relocated_checkout.resolve(strict=True) == relocated_checkout
+    assert _git(relocated_checkout, "rev-parse", "HEAD") == fixed_commit
+    assert _git(relocated_checkout, "rev-parse", "HEAD^{tree}") == fixed_tree
+    assert _git(
+        relocated_checkout, "status", "--porcelain=v1", "--untracked-files=all"
+    ) == ""
+
+    registrations[0]["source"]["repositoryPath"] = str(relocated_checkout)
+    registration_path.write_text(
+        yaml.safe_dump(registrations, sort_keys=False), encoding="utf-8"
+    )
+
+    rebuilt = build_capability_lock(root, project, write=False)
+    verified_lock, verified = verify_capability_lock(root, project)
+    after_external = next(
+        item
+        for item in rebuilt["capabilities"]
+        if item["sourceKind"] == "EXTERNAL_CAPABILITY_PACK"
+    )
+
+    assert rebuilt == before
+    assert verified_lock == before
+    assert after_external["registrationFingerprint"] == before_external[
+        "registrationFingerprint"
+    ]
+    assert rebuilt["sourceHarnessRevision"] == before["sourceHarnessRevision"]
+    assert rebuilt["lockFingerprint"] == before["lockFingerprint"]
+    assert verified[EXTERNAL_CAPABILITY_ID]["source"]["repositoryPath"] == str(
+        relocated_checkout
     )
 
 

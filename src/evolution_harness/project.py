@@ -158,7 +158,43 @@ def capability_lock_source_revision(capabilities: list[dict[str, Any]]) -> str:
     return "content-sha256:" + sha256_bytes(canonical_json_bytes(sources))
 
 
+def _canonical_registration_identity_record(
+    registration: dict[str, Any],
+) -> dict[str, Any]:
+    source = registration["source"]
+    validator = registration["validator"]
+    return {
+        "schemaVersion": registration["schemaVersion"],
+        "registrationId": registration["registrationId"],
+        "capabilityId": registration["capabilityId"],
+        "packVersion": registration["packVersion"],
+        "status": registration["status"],
+        "distributionStatus": registration["distributionStatus"],
+        "source": {
+            "kind": source["kind"],
+            "repositoryId": source["repositoryId"],
+            "commit": source["commit"],
+            "tree": source["tree"],
+        },
+        "resolvedContentDigest": registration["resolvedContentDigest"],
+        "validator": {
+            "kind": validator["kind"],
+            "relativePath": validator["relativePath"],
+            "sha256": validator["sha256"],
+            "argumentsContract": validator["argumentsContract"],
+        },
+    }
+
+
 def _registration_fingerprint(registration: dict[str, Any]) -> str:
+    identity = _canonical_registration_identity_record(registration)
+    return "sha256:" + sha256_bytes(canonical_json_bytes(identity))
+
+
+def _locator_bound_blob_access_fingerprint(registration: dict[str, Any]) -> str:
+    # read_registered_pack_blob independently revalidates the live locator-bound
+    # record. This compatibility fingerprint is ephemeral and never enters the
+    # project lock, source revision, resolved context, or projection identity.
     return "sha256:" + sha256_bytes(canonical_json_bytes(registration))
 
 
@@ -309,7 +345,9 @@ def verify_capability_lock(
             verified[capability_id] = {
                 **registration,
                 "sourceKind": "EXTERNAL_CAPABILITY_PACK",
-                "registrationFingerprint": _registration_fingerprint(registration),
+                "registrationFingerprint": _locator_bound_blob_access_fingerprint(
+                    registration
+                ),
                 "manifest": manifest,
             }
             continue

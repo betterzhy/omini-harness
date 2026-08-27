@@ -7,6 +7,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import yaml
+
 
 def _copy_repo(tmp_path: Path) -> tuple[Path, Path]:
     source = Path(__file__).parents[1]
@@ -31,23 +33,16 @@ def _copy_repo(tmp_path: Path) -> tuple[Path, Path]:
 
 
 def _make_external_pack_source_unavailable(root: Path, tmp_path: Path) -> None:
-    schema_path = root / "core/schemas/capability-pack-registration.schema.json"
-    schema = json.loads(schema_path.read_text(encoding="utf-8"))
-    repository_path = schema["properties"]["source"]["properties"][
-        "repositoryPath"
-    ]["const"]
-    unavailable_path = str(tmp_path / "unavailable-pack")
-
     registration_path = root / "core/registries/capability-packs.yaml"
     registration = registration_path.read_text(encoding="utf-8")
+    registrations = yaml.safe_load(registration)
+    repository_path = registrations[0]["source"]["repositoryPath"]
+    unavailable_path = str(tmp_path / "unavailable-pack")
+
     assert repository_path in registration
     registration_path.write_text(
         registration.replace(repository_path, unavailable_path), encoding="utf-8"
     )
-    schema["properties"]["source"]["properties"]["repositoryPath"][
-        "const"
-    ] = unavailable_path
-    schema_path.write_text(json.dumps(schema, indent=2) + "\n", encoding="utf-8")
 
 
 def test_structural_validation_separates_mechanical_gate_from_semantic_quality(tmp_path: Path):
@@ -107,14 +102,12 @@ def test_structural_validation_detects_generated_registry_drift(tmp_path: Path):
 
 def test_structural_validation_detects_capability_pack_registry_drift(tmp_path: Path):
     from evolution_harness.assurance import structural_validate
-    from evolution_harness.capability_pack_registry import build_capability_pack_registry
     from evolution_harness.catalog import build_all_catalogs
     from evolution_harness.registry import build_all_registries
 
     root, _ = _copy_repo(tmp_path)
     build_all_registries(root, write=True)
     build_all_catalogs(root, write=True)
-    build_capability_pack_registry(root, write=True)
     structural_validate(root, check_generated=False)
     generated = root / "generated/registries/capability-pack-registry.json"
     generated.write_text("{}\n", encoding="utf-8")

@@ -473,23 +473,26 @@ Use two stable candidates rather than one cross-repository mega-candidate.
 1. Freeze `web-high-fidelity` v2.0.0 manifest and source Gate.
 2. Freeze the Harness Registry/Schema/Builder/Lock/Resolver/Projection changes.
 3. Register and lock the exact Pack candidate.
-4. Run Pack Gate, Harness focused tests, full Harness regression, generated
+4. Create the read-only `cognitura-shadow`, its exact project lock, bounded
+   scenarios, and verified runtime projection plan without writing Cognitura.
+5. Run Pack Gate, Harness focused tests, full Harness regression, generated
    artifact check, `git diff --check`, and one `deep_reviewer / xhigh` review.
-5. Stop on P0/P1. Judge P2 against the first Cognitura Pilot.
+6. Stop on P0/P1. Judge P2 against the first Cognitura Pilot.
 
 ### Candidate B: Cognitura adoption
 
 Start only after Cognitura has a clean approved base and an adoption-specific
 Authority outside W2-D05's fixed WriteSet.
 
-1. Freeze `cognitura-shadow` and its exact project lock.
-2. Generate and verify the Cognitura runtime projection plan.
-3. Preserve the legacy binding byte-for-byte, add the v2 adoption record, and
+1. Revalidate the fixed Candidate A sidecar, project lock, and runtime projection
+   plan without changing the Harness tree.
+2. Preserve the legacy binding byte-for-byte, add the v2 adoption record, and
    make the explicitly authorized successor-verifier and AGENTS routing change.
-4. Add the repository registration plus managed Skill on an isolated Cognitura
+3. Add the repository registration plus managed Skill on an isolated Cognitura
    worktree.
-5. Run Harness integration scenarios and all directly affected Cognitura gates.
-6. Fix Candidate/Parent/Tree and perform the Cognitura-required independent
+4. Run the fixed Harness registration check plus all directly affected Cognitura
+   gates.
+5. Fix Candidate/Parent/Tree and perform the Cognitura-required independent
    `deep_reviewer / xhigh` Gate.
 
 No remote push, deployment, publication, global Skill installation, baseline
@@ -546,7 +549,7 @@ unchanged unless RED tests prove a registration-interface dependency.
 catalog bytes are outside Candidate A unless a failing compatibility test proves
 otherwise.
 
-### 14.3 `omini-harness` Candidate B sidecar
+### 14.3 `omini-harness` Candidate A sidecar
 
 - Create `integrations/cognitura-shadow/integration.yaml`.
 - Create `integrations/cognitura-shadow/authority-map.yaml`.
@@ -603,14 +606,14 @@ PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q
 git diff --check
 ```
 
-Candidate B must include, at minimum:
+Candidate B must include, at minimum, a read-only check against the fixed
+Candidate A Harness plus the Cognitura-focused gates:
 
 ```bash
 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q \
   tests/test_cognitura_integration_fixture.py \
   tests/test_integration_e2e.py \
   tests/test_project_registration.py
-PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q
 git diff --check
 ```
 
@@ -652,7 +655,9 @@ After a local Cognitura adoption commit, rollback is a normal revert that:
 1. removes the project registration pointer and managed Skill;
 2. removes the v2 adoption record and restores the predecessor AGENTS and
    successor-verifier bytes;
-3. removes the Cognitura sidecar registration from future resolution;
+3. leaves the inactive Harness-side source registration and sidecar intact for
+   later authorized adoption or explicit removal under a separate Harness
+   change;
 4. leaves the immutable legacy binding, Pack source history, Cognitura product
    code, baselines, and evidence
    untouched.
@@ -697,11 +702,15 @@ work. The implementation plan and execution are constrained as follows:
   or projection edit.
 - Run the full Harness regression, generated-artifact check, diff check, and one
   `deep_reviewer / xhigh` review only after Candidate A is stable.
-- Candidate B runs only the Harness integration tests and Cognitura validators
-  directly affected by registration, binding, managed Skill, and concise
-  `AGENTS.md` routing. Do not replay unrelated Wave 0, Wave 1, Wave 2, backend,
-  browser, or page gates unless live Cognitura Authority explicitly makes one a
-  dependency of the adoption task.
+- Candidate A includes the read-only Cognitura sidecar and projection plan so the
+  Harness receives one complete regression and one final review, not a second
+  Harness candidate for project onboarding.
+- Candidate B performs a read-only registration check against the fixed Harness
+  candidate and runs only Cognitura validators directly affected by
+  registration, binding, managed Skill, and concise `AGENTS.md` routing. Do not
+  replay unrelated Wave 0, Wave 1, Wave 2, backend, browser, or page gates unless
+  live Cognitura Authority explicitly makes one a dependency of the adoption
+  task.
 - Candidate B receives one final independent review. Do not review the sidecar,
   project pointer, binding migration, and managed Skill as separate candidates.
 - Reuse valid evidence for the same tree. Repeat a full Gate or review only when

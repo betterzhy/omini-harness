@@ -6,6 +6,15 @@
 
 **Architecture:** 扩展 Candidate A 的 external Pack Contract，使 Registry 可选择 source-tracked 或 Harness-declared manifest。两种模式共用 manifest Schema、Git object 内容选择、固定 Gate、locator-free fingerprint、v2 lock 与 projection 验证链。
 
+**审查修正 WriteSet：** 除各 Task 已列路径外，固定候选深审要求将 Java Skill 从单文件升级为
+45 文件自包含资源集，并固定 Java/Javac/Maven home 与只读离线 artifact closure。因此补充修改
+`core/schemas/{capability-lock,runtime-projection-manifest}.schema.json`、
+`src/evolution_harness/{resolver,projection,install}.py`、`tests/test_projection_install.py` 与生成投影
+目录。第二个 ACTIVE registration 暴露既有 Web-only 测试对完整 Registry 的隐式依赖，故
+`tests/capability_pack_test_support.py`、`tests/test_{assurance_cli,cognitura_integration_fixture,e2e,registry_catalog_compat}.py`
+仅做 fixture 隔离；`tests/test_{lock_enforcement,project_state,resolver,projection}.py` 对 lock 所引用
+registration 做选择性验证。该依赖链不改变 Java Pack、Cognitura 或任何真实项目。
+
 **Tech Stack:** Python 3.12、PyYAML、jsonschema、pytest、Git object plumbing、YAML/JSON deterministic generation。
 
 **Spec:** `docs/superpowers/specs/2026-08-27-java-engineering-standard-registration-design.md`

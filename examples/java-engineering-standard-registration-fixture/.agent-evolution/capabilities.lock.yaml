@@ -1,6 +1,6 @@
 schemaVersion: capability-lock/v2
 project: java-engineering-standard-registration-fixture
-sourceHarnessRevision: content-sha256:2954e6178592b415a84ca8454c15cd8f3d9328504880f8770f41e1ffc47a9f65
+sourceHarnessRevision: content-sha256:8375213ba71ed45472c3d62db84e5b3cf03ae991b75486cc86c1cfae325703fd
 disabledCapabilities: []
 capabilities:
 - capabilityId: framework:java:java-engineering-standard
@@ -25,10 +25,25 @@ capabilities:
       java:
         absolutePath: /Library/Java/JavaVirtualMachines/temurin-21.jdk/Contents/Home/bin/java
         sha256: sha256:1069d726eae63d510d2983a2a4c7869f14db200605685c98117d9a27aaa5270f
+      javac:
+        absolutePath: /Library/Java/JavaVirtualMachines/temurin-21.jdk/Contents/Home/bin/javac
+        sha256: sha256:68411beb17069d4a26f54fee148c2540251f42368f991d80a8087dcfa4c90a39
+      mvn:
+        absolutePath: /Users/yuzhuangzhuang/Projects/omini-harness/.worktrees/.capability-pack-cache/java-engineering-standard/home/.m2/wrapper/dists/apache-maven-3.9.16/56ba1f9f/bin/mvn
+        sha256: sha256:f9381d0cb98abaaf9592dae421eddc497e84ed9bfb723b84c111d1350863c3a2
+      javaHome:
+        absolutePath: /Library/Java/JavaVirtualMachines/temurin-21.jdk/Contents/Home
+        sha256: sha256:e230de581457766929ddc9a397c1e0f643ce2edf929c48105084fd81358bf574
+      mavenHome:
+        absolutePath: /Users/yuzhuangzhuang/Projects/omini-harness/.worktrees/.capability-pack-cache/java-engineering-standard/home/.m2/wrapper/dists/apache-maven-3.9.16/56ba1f9f
+        sha256: sha256:d65c0197fa8531e537737c950c5ab35bcf808e63001361186ac2ab6ff0c57f64
+      mavenRepository:
+        absolutePath: /Users/yuzhuangzhuang/Projects/omini-harness/.worktrees/.capability-pack-cache/java-engineering-standard/home/.m2/repository
+        sha256: sha256:8362290d699f9a80f19d3dba330cbe17277af46fbd9bab8519a7bb6266fb96cd
     gitHistoryContract: CANDIDATE_PARENT_TREE
     timeoutSeconds: 600
-  registrationFingerprint: sha256:1b9139139ac5933f0d5d0b050bb6952a05be13aeaf77250f751936bda529e403
-  sourceHarnessRevision: content-sha256:2954e6178592b415a84ca8454c15cd8f3d9328504880f8770f41e1ffc47a9f65
+  registrationFingerprint: sha256:0f65cd30ddbea6b2c446d0d59285872c87c34080204dc83f50e69d697d070541
+  sourceHarnessRevision: content-sha256:8375213ba71ed45472c3d62db84e5b3cf03ae991b75486cc86c1cfae325703fd
   resolvedBecause:
   - explicit-binding
-lockFingerprint: sha256:6dd7ee2f04a58c1fcef98110a4f83334a21a01307bf0038634d4bb11d0804c43
+lockFingerprint: sha256:8412f1abf468c3a770d7d729d2164e5463469cb81d63886ae7f5cb704c733eba

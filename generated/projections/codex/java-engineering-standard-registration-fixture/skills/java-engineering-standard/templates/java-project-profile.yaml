@@ -1,0 +1,13 @@
+schemaVersion: java-project-profile/v1
+standardVersion: 0.4.0
+project:
+  name: example-java-project
+  profileOwner: project-java-owner
+primaryProfile: modular-monolith
+additionalProfiles: []
+baselineId: java21-spring35-maven3
+moduleBoundariesPath: module-boundaries.yaml
+codeQualityPath: code-quality.yaml
+exceptionPaths: []
+outOfScope:
+  - deployment and release authorization

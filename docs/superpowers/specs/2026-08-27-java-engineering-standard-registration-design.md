@@ -132,14 +132,33 @@ Contract、实现与注册：
 
 测试：
 
+- `tests/capability_pack_test_support.py`
+- `tests/test_assurance_cli.py`
 - `tests/test_capability_pack_registry.py`
+- `tests/test_cognitura_integration_fixture.py`
+- `tests/test_e2e.py`
 - `tests/test_project_state.py`
 - `tests/test_lock_enforcement.py`
 - `tests/test_resolver.py`
 - `tests/test_projection.py`
+- `tests/test_projection_install.py`
+- `tests/test_registry_catalog_compat.py`
 - `tests/test_java_engineering_standard_registration_fixture.py`
 
-只有 failing test 能证明直接依赖时才扩大 WriteSet；扩大前必须记录依赖链。
+补充 Contract/运行时写集：
+
+- `core/schemas/capability-lock.schema.json`：lock 必须携带完整 validator/toolchain identity。
+- `core/schemas/runtime-projection-manifest.schema.json`：投影必须声明完整资源集与目录身份。
+- `src/evolution_harness/resolver.py`：外部 Framework 的 kind 必须来自 capability ID，而非 Web 特例。
+- `src/evolution_harness/projection.py`：原先单 `SKILL.md` 投影不能满足 Java Skill 的自包含引用。
+- `src/evolution_harness/install.py`：dry-run 必须覆盖完整 Skill 目录而非单文件。
+
+测试扩大依赖链：Harness 新增第二个 ACTIVE 外部 Pack 后，既有测试把完整 Registry 复制到
+临时仓库，或以 Web-only lock 触发全 Registry 校验，产生与被测语义无关的 Java locator/Gate
+依赖；因此 test support、Cognitura、CLI、E2E、catalog/lock/resolver/projection 测试必须显式
+隔离 fixture registration 或选择性校验 lock 引用的 registration。所有 45 个生成资源均落在
+既有 `generated/projections/.../**` 范围。目录级 Java/Maven/离线仓库身份及超时进程组负测
+直接位于 Registry 测试中，不新增外部采用面。
 
 ## 完成条件
 

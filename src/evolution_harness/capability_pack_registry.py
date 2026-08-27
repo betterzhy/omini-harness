@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import hashlib
+import os
+import signal
+import stat
 import subprocess
 import tempfile
 import unicodedata
@@ -78,6 +81,82 @@ def _run(
         raise ValueError(f"capability pack command failed: {arguments[0]}") from exc
 
 
+def _run_candidate_gate(
+    arguments: list[str],
+    *,
+    cwd: Path,
+    timeout: int,
+    environment: Mapping[str, str],
+) -> subprocess.CompletedProcess[bytes]:
+    try:
+        process = subprocess.Popen(
+            arguments,
+            cwd=cwd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=dict(environment),
+            start_new_session=True,
+        )
+    except OSError as exc:
+        raise ValueError("capability pack candidate Gate failed to start") from exc
+    try:
+        stdout, stderr = process.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired as exc:
+        os.killpg(process.pid, signal.SIGTERM)
+        try:
+            stdout, stderr = process.communicate(timeout=5)
+        except subprocess.TimeoutExpired:
+            os.killpg(process.pid, signal.SIGKILL)
+            stdout, stderr = process.communicate()
+        raise ValueError("capability pack candidate Gate timed out") from exc
+    return subprocess.CompletedProcess(arguments, process.returncode, stdout, stderr)
+
+
+def _directory_identity_digest(root: Path) -> str:
+    if (
+        not root.is_absolute()
+        or root.is_symlink()
+        or not root.is_dir()
+        or root.resolve(strict=True) != root
+    ):
+        raise ValueError("capability pack validator toolchain directory is unavailable or unsafe")
+    entries: list[dict[str, str]] = []
+    for path in sorted(root.rglob("*"), key=lambda item: item.relative_to(root).as_posix().encode("utf-8")):
+        relative = path.relative_to(root).as_posix()
+        before = path.lstat()
+        if stat.S_ISLNK(before.st_mode):
+            raise ValueError("capability pack validator toolchain directory contains symlink")
+        if stat.S_ISDIR(before.st_mode):
+            continue
+        if not stat.S_ISREG(before.st_mode):
+            raise ValueError("capability pack validator toolchain directory contains special file")
+        data = path.read_bytes()
+        after = path.lstat()
+        identity = (
+            before.st_dev,
+            before.st_ino,
+            before.st_mode,
+            before.st_size,
+            before.st_mtime_ns,
+        )
+        if identity != (
+            after.st_dev,
+            after.st_ino,
+            after.st_mode,
+            after.st_size,
+            after.st_mtime_ns,
+        ):
+            raise ValueError("capability pack validator toolchain directory changed during hashing")
+        entries.append(
+            {
+                "path": relative,
+                "mode": format(stat.S_IMODE(before.st_mode), "04o"),
+                "sha256": sha256_bytes(data),
+            }
+        )
+    return "sha256:" + sha256_bytes(canonical_json_bytes(entries))
+
+
 def _validator_toolchain_paths(registration: Mapping[str, Any]) -> list[Path]:
     validator = registration["validator"]
     contract = validator.get("environmentContract", "SANITIZED")
@@ -86,7 +165,7 @@ def _validator_toolchain_paths(registration: Mapping[str, Any]) -> list[Path]:
     if contract != "REGISTERED_TOOLCHAIN_OFFLINE_CACHE":
         raise ValueError("capability pack validator environment contract is unsupported")
     paths: list[Path] = []
-    for command in ("ruby", "rg", "java"):
+    for command in ("ruby", "rg", "java", "javac", "mvn"):
         identity = validator["toolchain"][command]
         path = Path(identity["absolutePath"])
         if not path.is_absolute() or not path.is_file() or path.name != command:
@@ -94,6 +173,25 @@ def _validator_toolchain_paths(registration: Mapping[str, Any]) -> list[Path]:
         if "sha256:" + sha256_bytes(path.read_bytes()) != identity["sha256"]:
             raise ValueError("capability pack validator toolchain identity mismatch")
         paths.append(path)
+    directories: dict[str, Path] = {}
+    for name in ("javaHome", "mavenHome", "mavenRepository"):
+        identity = validator["toolchain"][name]
+        path = Path(identity["absolutePath"])
+        if _directory_identity_digest(path) != identity["sha256"]:
+            raise ValueError("capability pack validator toolchain directory identity mismatch")
+        directories[name] = path
+    by_name = {path.name: path for path in paths}
+    if by_name["java"].parent.parent != directories["javaHome"] or (
+        by_name["javac"].parent.parent != directories["javaHome"]
+    ):
+        raise ValueError("capability pack validator Java home identity mismatch")
+    if by_name["mvn"].parent.parent != directories["mavenHome"]:
+        raise ValueError("capability pack validator Maven home identity mismatch")
+    repository = directories["mavenRepository"]
+    if repository.name != "repository" or repository.parent.name != ".m2":
+        raise ValueError("capability pack validator Maven repository identity mismatch")
+    if not directories["mavenHome"].is_relative_to(repository.parent):
+        raise ValueError("capability pack validator Maven home is outside registered cache")
     return paths
 
 
@@ -104,7 +202,9 @@ def _validator_environment(registration: Mapping[str, Any]) -> dict[str, str]:
         return environment
     if contract != "REGISTERED_TOOLCHAIN_OFFLINE_CACHE":
         raise ValueError("capability pack validator environment contract is unsupported")
-    host_home = Path.home()
+    toolchain = registration["validator"]["toolchain"]
+    maven_repository = Path(toolchain["mavenRepository"]["absolutePath"])
+    host_home = maven_repository.parent.parent
     if (
         not host_home.is_absolute()
         or host_home.is_symlink()
@@ -118,7 +218,7 @@ def _validator_environment(registration: Mapping[str, Any]) -> dict[str, str]:
     environment["PATH"] = ":".join(dict.fromkeys(path_entries))
     environment["HOME"] = str(host_home)
     java_path = next(path for path in toolchain_paths if path.name == "java")
-    environment["JAVA_HOME"] = str(java_path.parent.parent)
+    environment["JAVA_HOME"] = toolchain["javaHome"]["absolutePath"]
     environment["LANG"] = "en_US.UTF-8"
     environment["LC_ALL"] = "en_US.UTF-8"
     return environment
@@ -602,10 +702,9 @@ def _validate_registration(repository_root: Path, registration: dict[str, Any]) 
         if executed_validator_digest != registration["validator"]["sha256"]:
             raise ValueError("capability pack executed validator identity mismatch")
         _validator_toolchain_paths(registration)
-        completed = _run(
+        completed = _run_candidate_gate(
             ["bash", str(validator_path), commit, tree],
             cwd=checkout,
-            check=False,
             timeout=registration["validator"].get("timeoutSeconds", 300),
             environment=_validator_environment(registration),
         )
@@ -723,10 +822,9 @@ def _registration_record(registration: Mapping[str, Any]) -> dict[str, Any]:
         raise ValueError("capability pack registration identity is incomplete") from exc
 
 
-def read_registered_pack_blob(
-    registration: Mapping[str, Any], relative_path: str
-) -> bytes:
-    safe_path = validate_relative_pack_path(relative_path)
+def _registered_pack_snapshot(
+    registration: Mapping[str, Any],
+) -> tuple[dict[str, Any], Path, str, list[tuple[str, str, str, str]]]:
     record = _registration_record(registration)
     expected_fingerprint = "sha256:" + sha256_bytes(canonical_json_bytes(record))
     if registration.get("registrationFingerprint") != expected_fingerprint:
@@ -757,13 +855,36 @@ def read_registered_pack_blob(
 
     _require_no_hidden_index_flags(source)
     _require_clean_source(source, manifest)
-    _, mode, object_type, object_id = _entry_by_path(entries, safe_path)
-    if mode not in {"100644", "100755"} or object_type != "blob":
-        raise ValueError("capability pack requested path is not a tracked regular file")
-    data = _blob(source, object_id)
+    return record, source, tree, selected
+
+
+def _recheck_registered_pack_snapshot(
+    record: Mapping[str, Any], source: Path, tree: str, manifest: Mapping[str, Any]
+) -> None:
     _require_fixed_git_identity(source, record)
     _require_no_hidden_index_flags(source)
     _require_clean_source(source, manifest)
     if tree != record["source"]["tree"]:
         raise ValueError("capability pack source tree drift")
+
+
+def read_registered_pack_blob(
+    registration: Mapping[str, Any], relative_path: str
+) -> bytes:
+    safe_path = validate_relative_pack_path(relative_path)
+    record, source, tree, selected = _registered_pack_snapshot(registration)
+    _, mode, object_type, object_id = _entry_by_path(selected, safe_path)
+    if mode not in {"100644", "100755"} or object_type != "blob":
+        raise ValueError("capability pack requested path is not a tracked regular file")
+    data = _blob(source, object_id)
+    _recheck_registered_pack_snapshot(record, source, tree, registration["manifest"])
     return data
+
+
+def read_registered_pack_blobs(
+    registration: Mapping[str, Any],
+) -> dict[str, bytes]:
+    record, source, tree, selected = _registered_pack_snapshot(registration)
+    blobs = {relative: _blob(source, object_id) for relative, _, _, object_id in selected}
+    _recheck_registered_pack_snapshot(record, source, tree, registration["manifest"])
+    return blobs

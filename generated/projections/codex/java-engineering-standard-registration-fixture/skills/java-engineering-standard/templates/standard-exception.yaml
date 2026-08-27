@@ -1,0 +1,24 @@
+schemaVersion: 1
+standardVersion: 0.4.0
+policyPath: policies/exception-policy.yaml
+availability: prohibited-in-0.4.0
+exception:
+  exceptionId: __EXCEPTION_ID__
+  ruleId: __RULE_ID__
+  projectAndModule: __PROJECT_AND_MODULE__
+  owner: __OWNER__
+  approver: __APPROVER__
+  createdOn: __CREATED_DATE__
+  expiresOn: __EXPIRY_DATE__
+  status: proposed
+  exactScope: __EXACT_SCOPE_OR_WRITESET__
+  outOfScope: __OUT_OF_SCOPE__
+  reason: __REASON__
+  risk: __RISKS_AND_WORST_CASE__
+  compensatingControls:
+    - __COMPENSATING_CONTROL__
+  evidence:
+    - __FOCUSED_VERIFICATION_EVIDENCE__
+  exitOwner: __EXIT_OWNER__
+  exitConditions:
+    - __EXIT_CONDITION__

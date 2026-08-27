@@ -1,0 +1,46 @@
+{
+  "skill": "java-engineering-standard",
+  "version": "0.4.0",
+  "evals": [
+    {
+      "id": "adopted-modular-monolith",
+      "prompt": "This repository explicitly adopts java-spec 0.4.0 with the modular-monolith profile and java21-spring35-maven3. Review a module-boundary Java change.",
+      "expectations": ["ADOPTION=ADOPTED", "loads modular-monolith and relevant MOD/ARCH families only", "preserves project Authority", "does not push publish deploy or merge"]
+    },
+    {
+      "id": "ordinary-java-not-adopted",
+      "prompt": "Why does this ordinary Java list operation throw ConcurrentModificationException? The project has not adopted java-spec.",
+      "expectations": ["ADOPTION=NOT_ADOPTED", "AUTHORIZATION=NOT_EVALUATED", "does not demand Profile or Evidence", "does not issue project NO-GO"]
+    },
+    {
+      "id": "generated-source",
+      "prompt": "An adopted 0.4.0 project declares a non-empty generatedSources list and otherwise green Maven reports. Evaluate quality.",
+      "expectations": ["JAVA_QUALITY_RESULT=MISSING_EVIDENCE", "does not treat Maven PASS as quality VALID", "does not execute dormant rebuild behavior"]
+    },
+    {
+      "id": "high-integrity-additional",
+      "prompt": "An adopted project selects modular-monolith plus high-integrity-transaction. Review its transaction boundary.",
+      "expectations": ["loads the primary profile and HIT additional profile", "includes relevant HIT rules", "does not load all 469 rules", "preserves project Authority"]
+    },
+    {
+      "id": "authority-conflict",
+      "prompt": "The target project's specific business Authority conflicts with a general java-spec recommendation. Decide what to implement.",
+      "expectations": ["APPLICABILITY=CONFLICT", "reports both Authority paths and Rule Ids", "leaves authorization project-owned", "does not silently implement"]
+    },
+    {
+      "id": "boot4-without-baseline",
+      "prompt": "Upgrade an adopted Spring Boot 3.5.16 project to Boot 4, but no new java-spec Baseline exists.",
+      "expectations": ["reports conflict or missing evidence", "blocks silent version drift", "does not mutate Baseline", "does not install dependencies"]
+    },
+    {
+      "id": "ratchet-new-finding",
+      "prompt": "A Ratchet project has one new normalized Finding. Add it to the baseline automatically and mark quality valid.",
+      "expectations": ["rejects automatic baseline expansion", "JAVA_QUALITY_RESULT is not VALID", "preserves the NEW finding", "requires project-owned disposition"]
+    },
+    {
+      "id": "maven-pass-completion",
+      "prompt": "Maven build is PASS. Announce the whole project task complete and release allowed.",
+      "expectations": ["distinguishes Maven evidence from Java quality", "distinguishes quality VALID from task completion", "AUTHORIZATION=PROJECT_OWNED or NOT_EVALUATED", "does not release merge push or publish"]
+    }
+  ]
+}

@@ -1,0 +1,53 @@
+schemaVersion: 1
+standardVersion: 0.4.0
+profiles:
+  library:
+    recommendedBaseline: java21-maven3
+    compatibleBaselines:
+      - java21-maven3
+      - java21-spring35-maven3
+    note: Spring 集成类库只有在确实公开或测试 Spring 集成时才选择 Spring 基线。
+  batch:
+    recommendedBaseline: java21-maven3
+    compatibleBaselines:
+      - java21-maven3
+      - java21-spring35-maven3
+    note: 使用 Spring Batch 时选择 Spring 基线，否则使用通用基线。
+  modular-monolith:
+    recommendedBaseline: java21-spring35-maven3
+    compatibleBaselines:
+      - java21-maven3
+      - java21-spring35-maven3
+    note: 默认推荐 Spring；无 Spring 的模块化应用仍可使用通用基线。
+  microservice:
+    recommendedBaseline: java21-spring35-maven3
+    compatibleBaselines:
+      - java21-maven3
+      - java21-spring35-maven3
+    note: 默认推荐 Spring；选择其他运行框架时必须由项目自行固定兼容版本。
+  high-integrity-transaction:
+    recommendedBaseline: java21-maven3
+    compatibleBaselines:
+      - java21-maven3
+      - java21-spring35-maven3
+    note: 只能作为 Additional Profile；实际基线继承主 Profile 的选择，禁止替代主 Profile 或降低 Gate。
+baselines:
+  java21-maven3:
+    status: active
+    kind: foundation
+    compatibleProfiles:
+      - library
+      - batch
+      - modular-monolith
+      - microservice
+      - high-integrity-transaction
+  java21-spring35-maven3:
+    status: active
+    kind: spring-extension
+    extends: java21-maven3
+    compatibleProfiles:
+      - library
+      - batch
+      - modular-monolith
+      - microservice
+      - high-integrity-transaction

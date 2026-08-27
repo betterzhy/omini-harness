@@ -1,0 +1,21 @@
+schemaVersion: 2
+id: java21-spring35-maven3
+extends: java21-maven3
+status: active
+standardVersion: 0.4.0
+lifecycle:
+  introducedOn: "2026-08-23"
+  revisedOn: "2026-08-25"
+  nextReviewOn: "2026-12-01"
+  replacement: null
+spring:
+  bootBomVersion: 3.5.16
+  frameworkVersion: 6.2.19
+  frameworkVersionManagedBy: spring-boot-dependencies
+  modulith:
+    enabledByDefault: false
+    compatibleVersion: 1.4.12
+  cloud:
+    enabledByDefault: false
+    compatibleReleaseTrain: "2025.0"
+    patchVersionPolicy: project-must-pin

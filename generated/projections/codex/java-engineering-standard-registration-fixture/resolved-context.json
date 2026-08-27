@@ -1,5 +1,5 @@
 {
-  "capabilityLockFingerprint": "sha256:6dd7ee2f04a58c1fcef98110a4f83334a21a01307bf0038634d4bb11d0804c43",
+  "capabilityLockFingerprint": "sha256:8412f1abf468c3a770d7d729d2164e5463469cb81d63886ae7f5cb704c733eba",
   "closedTopics": [],
   "conflictSignals": [],
   "explain": {
@@ -19,16 +19,16 @@
     ]
   },
   "humanGates": [],
-  "intent": "java-engineering",
+  "intent": "capability-pack-registration",
   "project": "java-engineering-standard-registration-fixture",
   "projectAuthorityReferences": [],
   "projectBindingHash": "82b51ec071edd06f14ec7f7efdd75693bd3f623f85f8fd5cb0454306054b95e0",
   "projectStateHash": "8df5a991ef9d060782a03981c1a5b1beb2e94ccfca24033d2ec3aae3c9ac7f76",
   "protectedDecisions": [],
   "reopenSignal": null,
-  "requestedOutput": "neutral pilot readiness evidence",
+  "requestedOutput": "registration evidence",
   "requiredSelfReview": [],
-  "resolutionId": "resolution:5c24732c8b1ff8363f78d4ed",
+  "resolutionId": "resolution:e7ab70388b161809efa829fb",
   "runtime": "CODEX",
   "schemaVersion": "resolved-design-context/v1",
   "selectedCapabilities": [

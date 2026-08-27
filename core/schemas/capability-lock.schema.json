@@ -130,11 +130,16 @@
                       },
                       "toolchain": {
                         "type": "object",
-                        "required": ["ruby", "rg", "java"],
+                        "required": ["ruby", "rg", "java", "javac", "mvn", "javaHome", "mavenHome", "mavenRepository"],
                         "properties": {
                           "ruby": {"$ref": "#/$defs/toolIdentity"},
                           "rg": {"$ref": "#/$defs/toolIdentity"},
-                          "java": {"$ref": "#/$defs/toolIdentity"}
+                          "java": {"$ref": "#/$defs/toolIdentity"},
+                          "javac": {"$ref": "#/$defs/toolIdentity"},
+                          "mvn": {"$ref": "#/$defs/toolIdentity"},
+                          "javaHome": {"$ref": "#/$defs/directoryIdentity"},
+                          "mavenHome": {"$ref": "#/$defs/directoryIdentity"},
+                          "mavenRepository": {"$ref": "#/$defs/directoryIdentity"}
                         },
                         "additionalProperties": false
                       }
@@ -163,6 +168,15 @@
   ],
   "$defs": {
     "toolIdentity": {
+      "type": "object",
+      "required": ["absolutePath", "sha256"],
+      "properties": {
+        "absolutePath": {"type": "string", "pattern": "^/(?:[^/]+/)*[^/]+$"},
+        "sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+      },
+      "additionalProperties": false
+    },
+    "directoryIdentity": {
       "type": "object",
       "required": ["absolutePath", "sha256"],
       "properties": {

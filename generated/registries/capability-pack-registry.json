@@ -40,7 +40,8 @@
             "path": "scripts/verify-capability-pack"
           },
           "version": "0.4.0"
-        }
+        },
+        "projectionContract": "SELF_CONTAINED_SKILL_BUNDLE"
       },
       "distributionStatus": "LOCAL_ONLY",
       "packVersion": "0.4.0",
@@ -67,6 +68,26 @@
           "java": {
             "absolutePath": "/Library/Java/JavaVirtualMachines/temurin-21.jdk/Contents/Home/bin/java",
             "sha256": "sha256:1069d726eae63d510d2983a2a4c7869f14db200605685c98117d9a27aaa5270f"
+          },
+          "javaHome": {
+            "absolutePath": "/Library/Java/JavaVirtualMachines/temurin-21.jdk/Contents/Home",
+            "sha256": "sha256:e230de581457766929ddc9a397c1e0f643ce2edf929c48105084fd81358bf574"
+          },
+          "javac": {
+            "absolutePath": "/Library/Java/JavaVirtualMachines/temurin-21.jdk/Contents/Home/bin/javac",
+            "sha256": "sha256:68411beb17069d4a26f54fee148c2540251f42368f991d80a8087dcfa4c90a39"
+          },
+          "mavenHome": {
+            "absolutePath": "/Users/yuzhuangzhuang/Projects/omini-harness/.worktrees/.capability-pack-cache/java-engineering-standard/home/.m2/wrapper/dists/apache-maven-3.9.16/56ba1f9f",
+            "sha256": "sha256:d65c0197fa8531e537737c950c5ab35bcf808e63001361186ac2ab6ff0c57f64"
+          },
+          "mavenRepository": {
+            "absolutePath": "/Users/yuzhuangzhuang/Projects/omini-harness/.worktrees/.capability-pack-cache/java-engineering-standard/home/.m2/repository",
+            "sha256": "sha256:8362290d699f9a80f19d3dba330cbe17277af46fbd9bab8519a7bb6266fb96cd"
+          },
+          "mvn": {
+            "absolutePath": "/Users/yuzhuangzhuang/Projects/omini-harness/.worktrees/.capability-pack-cache/java-engineering-standard/home/.m2/wrapper/dists/apache-maven-3.9.16/56ba1f9f/bin/mvn",
+            "sha256": "sha256:f9381d0cb98abaaf9592dae421eddc497e84ed9bfb723b84c111d1350863c3a2"
           },
           "rg": {
             "absolutePath": "/Applications/ChatGPT.app/Contents/Resources/rg",
@@ -103,5 +124,5 @@
     }
   ],
   "schemaVersion": "capability-pack-registry/v1",
-  "sourceRevision": "content-sha256:3d2e6dcc85a594254047cc0a430345ac57e31559d07661782c70fb1492bec8d2"
+  "sourceRevision": "content-sha256:75181f0c36ac4ddceaaca4455fd35ac35b7299e603e7e64ede392a4da3b2e28c"
 }

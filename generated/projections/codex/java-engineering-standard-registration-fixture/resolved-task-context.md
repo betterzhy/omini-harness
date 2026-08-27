@@ -1,10 +1,10 @@
 # Resolved Design Context
 
-- Resolution: `resolution:5c24732c8b1ff8363f78d4ed`
+- Resolution: `resolution:e7ab70388b161809efa829fb`
 - Project: `java-engineering-standard-registration-fixture`
 - Topic: `neutral-java-pilot-readiness`
 - Stage: `ENGINEERING_DESIGN`
-- Intent: `java-engineering`
+- Intent: `capability-pack-registration`
 - Topic Guard: `OPEN_OR_IN_PROGRESS`
 
 ## Selected Capabilities

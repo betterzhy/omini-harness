@@ -22,11 +22,16 @@
         },
         "toolchain": {
           "type": "object",
-          "required": ["ruby", "rg", "java"],
+          "required": ["ruby", "rg", "java", "javac", "mvn", "javaHome", "mavenHome", "mavenRepository"],
           "properties": {
             "ruby": {"$ref": "#/$defs/toolIdentity"},
             "rg": {"$ref": "#/$defs/toolIdentity"},
-            "java": {"$ref": "#/$defs/toolIdentity"}
+            "java": {"$ref": "#/$defs/toolIdentity"},
+            "javac": {"$ref": "#/$defs/toolIdentity"},
+            "mvn": {"$ref": "#/$defs/toolIdentity"},
+            "javaHome": {"$ref": "#/$defs/directoryIdentity"},
+            "mavenHome": {"$ref": "#/$defs/directoryIdentity"},
+            "mavenRepository": {"$ref": "#/$defs/directoryIdentity"}
           },
           "additionalProperties": false
         }
@@ -34,6 +39,15 @@
       "additionalProperties": false
     },
     "toolIdentity": {
+      "type": "object",
+      "required": ["absolutePath", "sha256"],
+      "properties": {
+        "absolutePath": {"type": "string", "pattern": "^/(?:[^/]+/)*[^/]+$"},
+        "sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+      },
+      "additionalProperties": false
+    },
+    "directoryIdentity": {
       "type": "object",
       "required": ["absolutePath", "sha256"],
       "properties": {
@@ -114,9 +128,31 @@
         "validatorIdentity": {"$ref": "#/$defs/validatorIdentity"},
         "registrationFingerprint": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
         "sourceSkillPath": {"type": "string", "minLength": 1},
-        "skillBlobSha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+        "skillBlobSha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+        "projectionContract": {"const": "SELF_CONTAINED_SKILL_BUNDLE"},
+        "resourceSetDigest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+        "resourceFiles": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["sourcePath", "path", "sha256"],
+            "properties": {
+              "sourcePath": {"type": "string", "minLength": 1},
+              "path": {"type": "string", "pattern": "^skills/[^/]+/.+$"},
+              "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+            },
+            "additionalProperties": false
+          }
+        }
       },
-      "additionalProperties": false
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {"required": ["projectionContract"]},
+          "then": {"required": ["resourceSetDigest", "resourceFiles"]}
+        }
+      ]
     }
   },
   "type": "object",

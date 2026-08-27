@@ -1,0 +1,107 @@
+schemaVersion: 1
+standardVersion: 0.4.0
+evidenceKinds:
+  authority-review:
+    description: 当前 Authority、Owner、范围和批准记录的人工审查证据。
+  static-policy:
+    description: 可复现的格式、配置、Schema、依赖或架构静态检查。
+  focused-test:
+    description: 直接证伪目标行为的单元、组件或专项测试。
+  integration-test:
+    description: 使用真实或高保真基础设施的边界验证。
+  runtime-fact:
+    description: 来自实际命令、运行环境或制品的版本与行为事实。
+  compatibility-test:
+    description: 提供方、消费者、Schema 或升级兼容性证据。
+  recovery-drill:
+    description: 中断、重放、恢复、回切或人工接管演练证据。
+  fixed-candidate-review:
+    description: 绑定 Candidate、Parent、Tree 和 Exact WriteSet 的独立审查。
+profileContract:
+  schemaPath: schemas/java-project-profile.schema.json
+  templatePath: templates/java-project-profile.yaml
+  semantics: 选择 standardVersion、Profile、Baseline 和 Java 输入路径，不表达项目审批或完成。
+qualityConfigContract:
+  schemaPath: schemas/code-quality.schema.json
+  templatePath: templates/code-quality.yaml
+  semantics: 固定 Reactor、Source Set、质量模式和 Runner 技术信任身份。
+qualityEvidenceContract:
+  schemaPath: schemas/java-quality-evidence.schema.json
+  templatePath: templates/java-quality-evidence.yaml
+  semantics: 绑定实际 Commit、Tree、报告与检查结果；ruleOverrides 优先于 familyDefaults，但 VALID 不表示项目完成。
+familyDefaults:
+  GOV: [authority-review]
+  ENV: [static-policy, runtime-fact]
+  JAVA: [static-policy, focused-test]
+  CODE: [authority-review, focused-test]
+  DDD: [authority-review, focused-test]
+  ARCH: [authority-review, static-policy]
+  SPR: [focused-test, integration-test]
+  API: [compatibility-test]
+  DATA: [integration-test, recovery-drill]
+  SEC: [authority-review, static-policy, focused-test]
+  OBS: [runtime-fact]
+  TEST: [focused-test]
+  BUILD: [static-policy, runtime-fact]
+  DEL: [fixed-candidate-review]
+  AI: [authority-review]
+  LIB: [compatibility-test]
+  MOD: [static-policy, focused-test]
+  MS: [integration-test, recovery-drill]
+  BAT: [integration-test, recovery-drill]
+  HIT: [authority-review, focused-test, recovery-drill]
+ruleOverrides:
+  GOV-001: [authority-review, static-policy]
+  GOV-012: [static-policy]
+  ENV-002: [runtime-fact]
+  ENV-003: [static-policy, runtime-fact]
+  ARCH-014: [static-policy]
+  ARCH-021: [authority-review, static-policy]
+  API-018: [compatibility-test]
+  API-024: [static-policy, compatibility-test]
+  DATA-004: [integration-test, recovery-drill]
+  DATA-026: [integration-test, recovery-drill]
+  SEC-017: [static-policy, runtime-fact]
+  SEC-021: [static-policy]
+  SEC-022: [static-policy]
+  TEST-008: [integration-test]
+  TEST-010: [integration-test]
+  TEST-013: [static-policy]
+  TEST-017: [recovery-drill]
+  TEST-025: [fixed-candidate-review]
+  BUILD-001: [static-policy, runtime-fact]
+  BUILD-019: [static-policy, runtime-fact]
+  BUILD-021: [static-policy, runtime-fact]
+  BUILD-022: [runtime-fact]
+  BUILD-023: [static-policy]
+  DEL-004: [runtime-fact]
+  DEL-006: [fixed-candidate-review]
+  DEL-014: [fixed-candidate-review]
+  DEL-018: [static-policy, fixed-candidate-review]
+  AI-014: [fixed-candidate-review]
+  CODE-001: [static-policy, runtime-fact]
+  CODE-004: [static-policy, runtime-fact]
+  CODE-005: [static-policy, runtime-fact]
+  CODE-006: [static-policy, runtime-fact]
+  CODE-007: [static-policy, runtime-fact]
+  CODE-008: [static-policy, runtime-fact]
+  CODE-009: [static-policy, runtime-fact]
+  CODE-010: [static-policy, runtime-fact]
+  CODE-012: [static-policy, runtime-fact]
+  CODE-013: [static-policy, runtime-fact]
+  CODE-017: [static-policy, runtime-fact]
+  CODE-043: [static-policy, runtime-fact, focused-test]
+  CODE-051: [static-policy, runtime-fact]
+  CODE-071: [static-policy, runtime-fact, authority-review]
+  CODE-080: [static-policy, runtime-fact]
+  CODE-081: [static-policy, runtime-fact]
+  CODE-085: [static-policy, runtime-fact]
+  CODE-086: [static-policy, runtime-fact]
+  CODE-087: [static-policy, runtime-fact]
+  CODE-088: [static-policy, runtime-fact]
+  CODE-089: [fixed-candidate-review]
+  CODE-090: [fixed-candidate-review]
+  MOD-008: [static-policy]
+  MOD-009: [focused-test]
+  MS-016: [recovery-drill]
+  BAT-014: [recovery-drill]

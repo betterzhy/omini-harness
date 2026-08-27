@@ -5,6 +5,7 @@ import json
 import os
 import shutil
 import subprocess
+import time
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
@@ -13,6 +14,7 @@ import pytest
 import yaml
 
 from evolution_harness.capability_pack_registry import (
+    _directory_identity_digest,
     build_capability_pack_registry,
     get_registered_capability_pack,
 )
@@ -219,6 +221,7 @@ def _declared_manifest_registration(
         },
         "contentDeclaration": {
             "kind": "HARNESS_DECLARED_MANIFEST",
+            "projectionContract": "SELF_CONTAINED_SKILL_BUNDLE",
             "manifest": manifest,
         },
         "resolvedContentDigest": _expected_content_digest(
@@ -479,14 +482,23 @@ def test_candidate_gate_uses_registered_host_home_offline_cache_contract(
 ):
     repository, _, _ = _pack_fixture(tmp_path)
     trusted_home = tmp_path / "trusted-home"
-    trusted_home.mkdir()
+    (trusted_home / ".m2/repository").mkdir(parents=True)
+    (trusted_home / ".m2/repository/closure.txt").write_text("offline\n")
     trusted_bin = tmp_path / "trusted-bin"
     trusted_bin.mkdir()
     trusted_java_home = tmp_path / "trusted-java-home"
     (trusted_java_home / "bin").mkdir(parents=True)
+    bash_bytes = Path("/bin/bash").read_bytes()
     for executable in ["ruby", "rg"]:
-        (trusted_bin / executable).symlink_to("/bin/bash")
-    (trusted_java_home / "bin/java").symlink_to("/bin/bash")
+        (trusted_bin / executable).write_bytes(bash_bytes)
+        (trusted_bin / executable).chmod(0o755)
+    for executable in ["java", "javac"]:
+        (trusted_java_home / f"bin/{executable}").write_bytes(bash_bytes)
+        (trusted_java_home / f"bin/{executable}").chmod(0o755)
+    trusted_maven_home = trusted_home / ".m2/wrapper/dists/apache-maven/fixture"
+    (trusted_maven_home / "bin").mkdir(parents=True)
+    (trusted_maven_home / "bin/mvn").write_bytes(bash_bytes)
+    (trusted_maven_home / "bin/mvn").chmod(0o755)
     monkeypatch.setenv("HOME", str(trusted_home))
     validator = repository / "scripts/verify-capability-pack"
     validator.write_text(
@@ -518,6 +530,23 @@ def test_candidate_gate_uses_registered_host_home_offline_cache_contract(
         "absolutePath": str(trusted_java_home / "bin/java"),
         "sha256": bash_digest,
     }
+    registration["validator"]["toolchain"]["javac"] = {
+        "absolutePath": str(trusted_java_home / "bin/javac"),
+        "sha256": bash_digest,
+    }
+    registration["validator"]["toolchain"]["mvn"] = {
+        "absolutePath": str(trusted_maven_home / "bin/mvn"),
+        "sha256": bash_digest,
+    }
+    for name, path in {
+        "javaHome": trusted_java_home,
+        "mavenHome": trusted_maven_home,
+        "mavenRepository": trusted_home / ".m2/repository",
+    }.items():
+        registration["validator"]["toolchain"][name] = {
+            "absolutePath": str(path),
+            "sha256": _directory_identity_digest(path),
+        }
     registration["validator"]["sha256"] = "sha256:" + hashlib.sha256(
         validator.read_bytes()
     ).hexdigest()
@@ -530,21 +559,52 @@ def test_candidate_gate_uses_registered_host_home_offline_cache_contract(
     )
 
 
-def test_registry_rejects_registered_toolchain_digest_drift(tmp_path: Path):
+@pytest.mark.parametrize("drift", ["javac", "mvn", "maven-lib", "plugin-artifact"])
+def test_registry_rejects_registered_toolchain_digest_drift(
+    tmp_path: Path, drift: str
+):
     root, source, _, _ = _harness_with_pack(tmp_path)
     toolchain_root = tmp_path / "registered-toolchain"
     toolchain_root.mkdir()
     bash_bytes = Path("/bin/bash").read_bytes()
     toolchain = {}
-    for executable in ("ruby", "rg", "java"):
-        path = toolchain_root / executable
+    java_home = toolchain_root / "java-home"
+    maven_home = toolchain_root / ".m2/wrapper/dists/apache-maven/fixture"
+    repository = toolchain_root / ".m2/repository"
+    (java_home / "bin").mkdir(parents=True)
+    (maven_home / "bin").mkdir(parents=True)
+    (maven_home / "lib").mkdir()
+    (maven_home / "lib/maven-core.jar").write_bytes(b"maven-core")
+    repository.mkdir(parents=True)
+    plugin_artifact = repository / "org/example/plugin/1.0/plugin-1.0.jar"
+    plugin_artifact.parent.mkdir(parents=True)
+    plugin_artifact.write_bytes(b"plugin")
+    executable_paths = {
+        "ruby": toolchain_root / "ruby",
+        "rg": toolchain_root / "rg",
+        "java": java_home / "bin/java",
+        "javac": java_home / "bin/javac",
+        "mvn": maven_home / "bin/mvn",
+    }
+    for executable, path in executable_paths.items():
         path.write_bytes(bash_bytes)
         path.chmod(0o755)
         toolchain[executable] = {
             "absolutePath": str(path),
             "sha256": "sha256:" + hashlib.sha256(bash_bytes).hexdigest(),
         }
-    toolchain["java"]["sha256"] = "sha256:" + "0" * 64
+    for name, path in {
+        "javaHome": java_home,
+        "mavenHome": maven_home,
+        "mavenRepository": repository,
+    }.items():
+        toolchain[name] = {"absolutePath": str(path), "sha256": _directory_identity_digest(path)}
+    if drift in {"javac", "mvn"}:
+        executable_paths[drift].write_bytes(b"replaced executable")
+    elif drift == "maven-lib":
+        (maven_home / "lib/maven-core.jar").write_bytes(b"replaced maven lib")
+    else:
+        plugin_artifact.write_bytes(b"replaced plugin artifact")
     entry = _registered_entry(root)
     entry["validator"]["environmentContract"] = (
         "REGISTERED_TOOLCHAIN_OFFLINE_CACHE"
@@ -552,9 +612,7 @@ def test_registry_rejects_registered_toolchain_digest_drift(tmp_path: Path):
     entry["validator"]["toolchain"] = toolchain
     _write_registrations(root, [entry])
 
-    with pytest.raises(
-        ValueError, match="capability pack validator toolchain identity mismatch"
-    ):
+    with pytest.raises(ValueError, match="toolchain .*identity mismatch"):
         build_capability_pack_registry(root, write=False)
 
 
@@ -588,6 +646,47 @@ def test_candidate_gate_materializes_registered_parent_tree_closure(tmp_path: Pa
         "CANDIDATE_PARENT_TREE"
     )
     assert registry["entries"][0]["validator"]["timeoutSeconds"] == 30
+
+
+def test_candidate_gate_timeout_terminates_descendant_process_group(tmp_path: Path):
+    source, _, _ = _pack_fixture(tmp_path)
+    child_pid = tmp_path / "child.pid"
+    grandchild_pid = tmp_path / "grandchild.pid"
+    late_side_effect = tmp_path / "late.txt"
+    validator = source / "scripts/verify-capability-pack"
+    validator.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        f"bash -c '(sleep 60; printf late > {late_side_effect}) & echo $! > {grandchild_pid}; wait' &\n"
+        f"echo $! > {child_pid}\n"
+        "wait\n",
+        encoding="utf-8",
+    )
+    validator.chmod(0o755)
+    commit, tree = _commit(source, "test: descendant timeout cleanup")
+    root = tmp_path / "harness"
+    _write_test_schemas(root, source)
+    registration = _registration(source, commit, tree)
+    registration["validator"]["sha256"] = "sha256:" + hashlib.sha256(
+        validator.read_bytes()
+    ).hexdigest()
+    registration["validator"]["timeoutSeconds"] = 1
+    _write_registrations(root, [registration])
+
+    with pytest.raises(ValueError, match="candidate Gate timed out"):
+        build_capability_pack_registry(root, write=False)
+
+    for pid_path in (child_pid, grandchild_pid):
+        pid = int(pid_path.read_text(encoding="utf-8"))
+        for _ in range(40):
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                break
+            time.sleep(0.05)
+        else:
+            pytest.fail(f"candidate Gate descendant survived timeout: {pid}")
+    assert not late_side_effect.exists()
 
 
 @pytest.mark.parametrize("index_flag", ["--assume-unchanged", "--skip-worktree"])

@@ -1,0 +1,86 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://java-spec.local/schemas/quality-baseline-upgrade.schema.json",
+  "title": "代码质量工具升级迁移记录",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "standardVersion", "baselineId", "candidate", "toolId", "oldToolVersion", "newToolVersion", "oldReportSha256", "newReportSha256", "mappingAlgorithmVersion", "classificationCounts", "dispositions", "reviewer", "reviewedOn", "newBaselineSha256", "decision"],
+  "properties": {
+    "schemaVersion": {"const": 1},
+    "standardVersion": {"const": "0.4.0"},
+    "baselineId": {"type": "string", "minLength": 1},
+    "candidate": {"$ref": "#/$defs/commit"},
+    "toolId": {"enum": ["checkstyle", "pmd"]},
+    "oldToolVersion": {"type": "string", "minLength": 1},
+    "newToolVersion": {"type": "string", "minLength": 1},
+    "oldReportSha256": {"$ref": "#/$defs/sha256"},
+    "newReportSha256": {"$ref": "#/$defs/sha256"},
+    "mappingAlgorithmVersion": {"type": "string", "minLength": 1},
+    "classificationCounts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["continued", "renamed", "new", "resolved", "unmapped"],
+      "properties": {
+        "continued": {"type": "integer", "minimum": 0},
+        "renamed": {"type": "integer", "minimum": 0},
+        "new": {"type": "integer", "minimum": 0},
+        "resolved": {"type": "integer", "minimum": 0},
+        "unmapped": {"type": "integer", "minimum": 0}
+      }
+    },
+    "dispositions": {"type": "array", "items": {"$ref": "#/$defs/disposition"}},
+    "reviewer": {"type": "string", "minLength": 1},
+    "reviewedOn": {"type": "string", "minLength": 1},
+    "newBaselineSha256": {"$ref": "#/$defs/sha256"},
+    "decision": {"enum": ["approved", "rejected"]}
+  },
+  "$defs": {
+    "commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "disposition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["classification", "semanticKey", "oldFingerprint", "newFingerprint", "action", "reviewStatus", "reviewer", "evidence"],
+      "properties": {
+        "classification": {"enum": ["continued", "renamed", "new", "resolved", "unmapped"]},
+        "semanticKey": {"type": "string", "minLength": 1},
+        "oldFingerprint": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"},
+        "newFingerprint": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"},
+        "action": {"enum": ["retain", "rename", "reject-new", "accept-reviewed-new", "remove-resolved", "reject-unmapped", "accept-reviewed-mapping"]},
+        "reviewStatus": {"enum": ["approved", "rejected"]},
+        "reviewer": {"type": "string", "minLength": 1},
+        "evidence": {"type": "string", "minLength": 1}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"classification": {"const": "continued"}}},
+          "then": {"properties": {"oldFingerprint": {"$ref": "#/$defs/sha256"}, "newFingerprint": {"$ref": "#/$defs/sha256"}, "action": {"const": "retain"}, "reviewStatus": {"const": "approved"}}}
+        },
+        {
+          "if": {"properties": {"classification": {"const": "renamed"}}},
+          "then": {"properties": {"oldFingerprint": {"$ref": "#/$defs/sha256"}, "newFingerprint": {"$ref": "#/$defs/sha256"}, "action": {"const": "rename"}, "reviewStatus": {"const": "approved"}}}
+        },
+        {
+          "if": {"properties": {"classification": {"const": "new"}}},
+          "then": {"properties": {"oldFingerprint": {"type": "null"}, "newFingerprint": {"$ref": "#/$defs/sha256"}, "action": {"enum": ["reject-new", "accept-reviewed-new"]}}}
+        },
+        {
+          "if": {"properties": {"classification": {"const": "resolved"}}},
+          "then": {"properties": {"oldFingerprint": {"$ref": "#/$defs/sha256"}, "newFingerprint": {"type": "null"}, "action": {"const": "remove-resolved"}, "reviewStatus": {"const": "approved"}}}
+        },
+        {
+          "if": {"properties": {"classification": {"const": "unmapped"}}},
+          "then": {"properties": {"action": {"enum": ["reject-unmapped", "accept-reviewed-mapping"]}}}
+        },
+        {
+          "if": {"properties": {"action": {"enum": ["reject-new", "reject-unmapped"]}}},
+          "then": {"properties": {"reviewStatus": {"const": "rejected"}}}
+        },
+        {
+          "if": {"properties": {"action": {"enum": ["accept-reviewed-new", "accept-reviewed-mapping"]}}},
+          "then": {"properties": {"reviewStatus": {"const": "approved"}}}
+        }
+      ]
+    }
+  }
+}

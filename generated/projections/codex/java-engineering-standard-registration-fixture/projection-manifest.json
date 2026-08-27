@@ -1,9 +1,9 @@
 {
-  "capabilityLockFingerprint": "sha256:6dd7ee2f04a58c1fcef98110a4f83334a21a01307bf0038634d4bb11d0804c43",
+  "capabilityLockFingerprint": "sha256:8412f1abf468c3a770d7d729d2164e5463469cb81d63886ae7f5cb704c733eba",
   "generatedFiles": [
     {
       "path": "discussion-contract.md",
-      "sha256": "b162cab8a37f30278baff53609c033a4f9d74fe95f8a6a441a5b193a5c329c40"
+      "sha256": "ed57d70de7db7909c3595183194c9f0cbfbebf7ef20d7b9369c84b3c81f69f6a"
     },
     {
       "path": "repository-guidance.md",
@@ -11,15 +11,191 @@
     },
     {
       "path": "resolved-context.json",
-      "sha256": "ef71927a2fd6a4f885c8c023f1429a3a140325a111f2a1aa4ddcd8d2b94c45e9"
+      "sha256": "f7a29887c14fc4ae8b7957572b6e6c1e71bc7cdb92e084e8a423a2803d0e75e7"
     },
     {
       "path": "resolved-task-context.md",
-      "sha256": "45dd1a76ecf26dd5b63497fbbbe27324438a6a13beb809b7c07c3026be217970"
+      "sha256": "17536822f5f2b0ebb9890ac579b0dc395711d8a90a9cf30093caa092eb2004b7"
+    },
+    {
+      "path": "skills/java-engineering-standard/AGENTS.md",
+      "sha256": "a483e44bf7967505cc5b41d945e4449fb4ad47ff7fdf264f595ec2c5f3e269c5"
+    },
+    {
+      "path": "skills/java-engineering-standard/JAVA-DEVELOPMENT-STANDARD.md",
+      "sha256": "52f1e8d19f455af1e2f6dc4fd39469bb725ec2c752114ab7155cb99c9c197cbc"
+    },
+    {
+      "path": "skills/java-engineering-standard/README.md",
+      "sha256": "fed870a6f77e12ec05feab7ac34aade6d7aec1adda704b4e74cbe072efc431fd"
     },
     {
       "path": "skills/java-engineering-standard/SKILL.md",
       "sha256": "ca01a6b791a2638ab0bf1c85df9b6cf6f1f8c0851975cf4a3c896fc44121dae8"
+    },
+    {
+      "path": "skills/java-engineering-standard/VERSION",
+      "sha256": "40b8eb4000a913a7791090535f291d3d369874162a89ef3c9e3d4e887a1b9e79"
+    },
+    {
+      "path": "skills/java-engineering-standard/baselines/java21-maven3.yaml",
+      "sha256": "281da76434139b290a00997dfb080619f5996e3e2d45f1f2d2e64a64a38f2149"
+    },
+    {
+      "path": "skills/java-engineering-standard/baselines/java21-spring35-maven3.yaml",
+      "sha256": "29701efbe01ea99b3aac7149f2da37ccc4a368ac010026532a509e58af94b2ff"
+    },
+    {
+      "path": "skills/java-engineering-standard/compatibility/baseline-matrix.yaml",
+      "sha256": "a0c0260bf36078812d4dcdf7df3cb11de6864dc6f3c08276b41aa9941f38c507"
+    },
+    {
+      "path": "skills/java-engineering-standard/config/quality/checkstyle.xml",
+      "sha256": "73c0ab97bf594560cf402a6f03509d3f433cfe59ff9d8ec2975ffe482025b254"
+    },
+    {
+      "path": "skills/java-engineering-standard/config/quality/pmd-ruleset.xml",
+      "sha256": "022ed03000b472c5c25488bab18029270380d55b8afc593c5976f55127b28a2b"
+    },
+    {
+      "path": "skills/java-engineering-standard/docs/07-CAPABILITY-PACK-BOUNDARY.md",
+      "sha256": "0cedb38de3cf97e245e342b750f38f8f9474de192baf80bbb892bde15ab2ce0c"
+    },
+    {
+      "path": "skills/java-engineering-standard/policies/exception-policy.yaml",
+      "sha256": "a331cebb9c26cbfa3fb6da61c89fcbc8b6865462598ed82d22519dbab1e9e92f"
+    },
+    {
+      "path": "skills/java-engineering-standard/profiles/batch.md",
+      "sha256": "4a45e02468d7efd78f8b49701af8ef1d63044776caaeb4ee4b7cb3c84a9aa98a"
+    },
+    {
+      "path": "skills/java-engineering-standard/profiles/high-integrity-transaction.md",
+      "sha256": "23fb30823d1261ee0ba7a3c8207a706c5a714430f4d9ae093d8249bd4f8a4d14"
+    },
+    {
+      "path": "skills/java-engineering-standard/profiles/library.md",
+      "sha256": "0e42123174d4560ade378ec5a2e03f1c960bc9edfe3fa53baeec3575c4eb8baf"
+    },
+    {
+      "path": "skills/java-engineering-standard/profiles/microservice.md",
+      "sha256": "03055942d86063e59d61c12f4eb834547f5cbda1918a47c952605bebed3958cf"
+    },
+    {
+      "path": "skills/java-engineering-standard/profiles/modular-monolith.md",
+      "sha256": "cf4d664286389554a4755ddd88b230639d74a9c4c1e934c6f77afdc09abb0a17"
+    },
+    {
+      "path": "skills/java-engineering-standard/registries/rule-evidence-map.yaml",
+      "sha256": "54165b8716ba798c06d0da4b138fa1cc81c3e26b8156f0adb5f963928e592b83"
+    },
+    {
+      "path": "skills/java-engineering-standard/schemas/code-quality.schema.json",
+      "sha256": "fdbb54bab88acd4c6573bfefb492d91e69e400ab515871748a7d9fabf839cbff"
+    },
+    {
+      "path": "skills/java-engineering-standard/schemas/java-project-profile.schema.json",
+      "sha256": "e67e40784c44fff65adbc44326573bc6566aa2f3b63864fe1efd38a9791bbae2"
+    },
+    {
+      "path": "skills/java-engineering-standard/schemas/java-quality-evidence.schema.json",
+      "sha256": "2eaf3d345515aa57aeeed2e5dfa6c4e6d4b923d4f21a42db14a70a0d8d33c526"
+    },
+    {
+      "path": "skills/java-engineering-standard/schemas/module-boundaries.schema.json",
+      "sha256": "30634435450d003d71f33e4ac48611b70a1cc1b4c28eff34d66d5cb1c5e32bf5"
+    },
+    {
+      "path": "skills/java-engineering-standard/schemas/normalized-findings.schema.json",
+      "sha256": "f84add76477277300b307a60c7be4102a8ea38815ce8156c8fc23e7fc5b576a3"
+    },
+    {
+      "path": "skills/java-engineering-standard/schemas/quality-baseline-upgrade.schema.json",
+      "sha256": "d40da054ca03f0839f232ad313dae367c6e15e9165a06b75db54743e9a21630c"
+    },
+    {
+      "path": "skills/java-engineering-standard/schemas/quality-baseline.schema.json",
+      "sha256": "a152d4deb049fc3de2c677504c6e6b5cf16f4b634fad98b7aee531b5f32277d3"
+    },
+    {
+      "path": "skills/java-engineering-standard/schemas/standard-exception.schema.json",
+      "sha256": "efe467e920e4402f04fbbe643a286d438bd5ac88448fd365a15e531fcfd37697"
+    },
+    {
+      "path": "skills/java-engineering-standard/skills/java-engineering-standard/evals/evals.json",
+      "sha256": "2241e47cea10b0a4a7f3141792f608d4c65eec84b1167bea85fe5616210484fa"
+    },
+    {
+      "path": "skills/java-engineering-standard/skills/java-engineering-standard/evals/results-summary.md",
+      "sha256": "47aa65be98eb6915a5aa99566a971f557a16d137c27ebec57cc2e85762ee039b"
+    },
+    {
+      "path": "skills/java-engineering-standard/sources/reference-register.md",
+      "sha256": "89243e0a571937f7e909e0da074010499a5fca544ae6284d8c237a8fb0bb09ab"
+    },
+    {
+      "path": "skills/java-engineering-standard/templates/adr.md",
+      "sha256": "c7c0f592b02632ecd2af10ede4ccfe2e27a9bcc180f3493239d04e68917948a1"
+    },
+    {
+      "path": "skills/java-engineering-standard/templates/baseline-upgrade.md",
+      "sha256": "46924e7348c3691afaabcb4b9bb82421a55df185b6f465a816ffd6740d16d0c7"
+    },
+    {
+      "path": "skills/java-engineering-standard/templates/ci/github-actions-java21.yml",
+      "sha256": "7aa87c8ae133f55333d1eda72a05330aa781f2b27ce263bb1396448765e6b906"
+    },
+    {
+      "path": "skills/java-engineering-standard/templates/code-quality.yaml",
+      "sha256": "4fe82d4ddbd19b3eb579d400554a73a7ebe17a7411f6d3d800e906351f54390f"
+    },
+    {
+      "path": "skills/java-engineering-standard/templates/java-project-profile.md",
+      "sha256": "a4dcddecc5dc890d792bda2a3be20e1fbd45a33490f9653aaff2571a1294a161"
+    },
+    {
+      "path": "skills/java-engineering-standard/templates/java-project-profile.yaml",
+      "sha256": "90de618d2d5ab20df8a98bd2e67860a601abc297fef92607af6517c34ad67f26"
+    },
+    {
+      "path": "skills/java-engineering-standard/templates/java-quality-evidence.md",
+      "sha256": "344d0dccbb0aa83dc93908f4c69ba8aa899daa22b0b466f1d0a941144da86bef"
+    },
+    {
+      "path": "skills/java-engineering-standard/templates/java-quality-evidence.yaml",
+      "sha256": "a2238b7e5f89ccfbe81394fe9ccf2911250b81143047aefcc4433f6794b08594"
+    },
+    {
+      "path": "skills/java-engineering-standard/templates/maven/maven-wrapper.properties",
+      "sha256": "9e702bcd7e68ba1cace0a3382a7082e6e1e1b321688a7a3fbf4d5ae7eb0af533"
+    },
+    {
+      "path": "skills/java-engineering-standard/templates/maven/reference-parent-pom.xml",
+      "sha256": "cde6ffe7e71943b25179a7ae23a3a34558b8b8d6cb561e9bc8ddf5410590fa26"
+    },
+    {
+      "path": "skills/java-engineering-standard/templates/module-boundaries.yaml",
+      "sha256": "19d92d73364d029ca324e3c6e906f5d9706ce8c4bd50d61dc06e8b65d96d6459"
+    },
+    {
+      "path": "skills/java-engineering-standard/templates/quality-baseline-upgrade.yaml",
+      "sha256": "bcbf8a0119b11bc27622dbdff0bd8b898e02afadb8d74a5b39a429527fa5535e"
+    },
+    {
+      "path": "skills/java-engineering-standard/templates/quality-baseline.yaml",
+      "sha256": "ff388abdce4a14c5d7fed7baa561d99b0d84e90e6b05e166d09a8fddc9348dc7"
+    },
+    {
+      "path": "skills/java-engineering-standard/templates/standard-exception.md",
+      "sha256": "acb2f20f6c257ea42713735fa10d4dca12dad4ba248fd56400a6050b67bad624"
+    },
+    {
+      "path": "skills/java-engineering-standard/templates/standard-exception.yaml",
+      "sha256": "6e36570292e0f572848fc011b0f6cda6534aaa9dafeaa46365f35ebcf25ebbb4"
+    },
+    {
+      "path": "skills/java-engineering-standard/templates/tests/ArchitectureRulesTest.java",
+      "sha256": "d4e410452515d1b0df9b66c2a1bdbf4a43b5f309d1a015f2ba1aa522523ab4a7"
     }
   ],
   "generatedSkills": [
@@ -27,8 +203,237 @@
       "contentHash": "b226ed62d3b3e3710fb0a3611762864524ea94e8c15fe00a3b2b7e40943de666",
       "id": "framework:java:java-engineering-standard",
       "path": "skills/java-engineering-standard/SKILL.md",
-      "registrationFingerprint": "sha256:1b9139139ac5933f0d5d0b050bb6952a05be13aeaf77250f751936bda529e403",
+      "projectionContract": "SELF_CONTAINED_SKILL_BUNDLE",
+      "registrationFingerprint": "sha256:0f65cd30ddbea6b2c446d0d59285872c87c34080204dc83f50e69d697d070541",
       "resolvedContentDigest": "sha256:b226ed62d3b3e3710fb0a3611762864524ea94e8c15fe00a3b2b7e40943de666",
+      "resourceFiles": [
+        {
+          "path": "skills/java-engineering-standard/AGENTS.md",
+          "sha256": "a483e44bf7967505cc5b41d945e4449fb4ad47ff7fdf264f595ec2c5f3e269c5",
+          "sourcePath": "AGENTS.md"
+        },
+        {
+          "path": "skills/java-engineering-standard/JAVA-DEVELOPMENT-STANDARD.md",
+          "sha256": "52f1e8d19f455af1e2f6dc4fd39469bb725ec2c752114ab7155cb99c9c197cbc",
+          "sourcePath": "JAVA-DEVELOPMENT-STANDARD.md"
+        },
+        {
+          "path": "skills/java-engineering-standard/README.md",
+          "sha256": "fed870a6f77e12ec05feab7ac34aade6d7aec1adda704b4e74cbe072efc431fd",
+          "sourcePath": "README.md"
+        },
+        {
+          "path": "skills/java-engineering-standard/VERSION",
+          "sha256": "40b8eb4000a913a7791090535f291d3d369874162a89ef3c9e3d4e887a1b9e79",
+          "sourcePath": "VERSION"
+        },
+        {
+          "path": "skills/java-engineering-standard/baselines/java21-maven3.yaml",
+          "sha256": "281da76434139b290a00997dfb080619f5996e3e2d45f1f2d2e64a64a38f2149",
+          "sourcePath": "baselines/java21-maven3.yaml"
+        },
+        {
+          "path": "skills/java-engineering-standard/baselines/java21-spring35-maven3.yaml",
+          "sha256": "29701efbe01ea99b3aac7149f2da37ccc4a368ac010026532a509e58af94b2ff",
+          "sourcePath": "baselines/java21-spring35-maven3.yaml"
+        },
+        {
+          "path": "skills/java-engineering-standard/compatibility/baseline-matrix.yaml",
+          "sha256": "a0c0260bf36078812d4dcdf7df3cb11de6864dc6f3c08276b41aa9941f38c507",
+          "sourcePath": "compatibility/baseline-matrix.yaml"
+        },
+        {
+          "path": "skills/java-engineering-standard/config/quality/checkstyle.xml",
+          "sha256": "73c0ab97bf594560cf402a6f03509d3f433cfe59ff9d8ec2975ffe482025b254",
+          "sourcePath": "config/quality/checkstyle.xml"
+        },
+        {
+          "path": "skills/java-engineering-standard/config/quality/pmd-ruleset.xml",
+          "sha256": "022ed03000b472c5c25488bab18029270380d55b8afc593c5976f55127b28a2b",
+          "sourcePath": "config/quality/pmd-ruleset.xml"
+        },
+        {
+          "path": "skills/java-engineering-standard/docs/07-CAPABILITY-PACK-BOUNDARY.md",
+          "sha256": "0cedb38de3cf97e245e342b750f38f8f9474de192baf80bbb892bde15ab2ce0c",
+          "sourcePath": "docs/07-CAPABILITY-PACK-BOUNDARY.md"
+        },
+        {
+          "path": "skills/java-engineering-standard/policies/exception-policy.yaml",
+          "sha256": "a331cebb9c26cbfa3fb6da61c89fcbc8b6865462598ed82d22519dbab1e9e92f",
+          "sourcePath": "policies/exception-policy.yaml"
+        },
+        {
+          "path": "skills/java-engineering-standard/profiles/batch.md",
+          "sha256": "4a45e02468d7efd78f8b49701af8ef1d63044776caaeb4ee4b7cb3c84a9aa98a",
+          "sourcePath": "profiles/batch.md"
+        },
+        {
+          "path": "skills/java-engineering-standard/profiles/high-integrity-transaction.md",
+          "sha256": "23fb30823d1261ee0ba7a3c8207a706c5a714430f4d9ae093d8249bd4f8a4d14",
+          "sourcePath": "profiles/high-integrity-transaction.md"
+        },
+        {
+          "path": "skills/java-engineering-standard/profiles/library.md",
+          "sha256": "0e42123174d4560ade378ec5a2e03f1c960bc9edfe3fa53baeec3575c4eb8baf",
+          "sourcePath": "profiles/library.md"
+        },
+        {
+          "path": "skills/java-engineering-standard/profiles/microservice.md",
+          "sha256": "03055942d86063e59d61c12f4eb834547f5cbda1918a47c952605bebed3958cf",
+          "sourcePath": "profiles/microservice.md"
+        },
+        {
+          "path": "skills/java-engineering-standard/profiles/modular-monolith.md",
+          "sha256": "cf4d664286389554a4755ddd88b230639d74a9c4c1e934c6f77afdc09abb0a17",
+          "sourcePath": "profiles/modular-monolith.md"
+        },
+        {
+          "path": "skills/java-engineering-standard/registries/rule-evidence-map.yaml",
+          "sha256": "54165b8716ba798c06d0da4b138fa1cc81c3e26b8156f0adb5f963928e592b83",
+          "sourcePath": "registries/rule-evidence-map.yaml"
+        },
+        {
+          "path": "skills/java-engineering-standard/schemas/code-quality.schema.json",
+          "sha256": "fdbb54bab88acd4c6573bfefb492d91e69e400ab515871748a7d9fabf839cbff",
+          "sourcePath": "schemas/code-quality.schema.json"
+        },
+        {
+          "path": "skills/java-engineering-standard/schemas/java-project-profile.schema.json",
+          "sha256": "e67e40784c44fff65adbc44326573bc6566aa2f3b63864fe1efd38a9791bbae2",
+          "sourcePath": "schemas/java-project-profile.schema.json"
+        },
+        {
+          "path": "skills/java-engineering-standard/schemas/java-quality-evidence.schema.json",
+          "sha256": "2eaf3d345515aa57aeeed2e5dfa6c4e6d4b923d4f21a42db14a70a0d8d33c526",
+          "sourcePath": "schemas/java-quality-evidence.schema.json"
+        },
+        {
+          "path": "skills/java-engineering-standard/schemas/module-boundaries.schema.json",
+          "sha256": "30634435450d003d71f33e4ac48611b70a1cc1b4c28eff34d66d5cb1c5e32bf5",
+          "sourcePath": "schemas/module-boundaries.schema.json"
+        },
+        {
+          "path": "skills/java-engineering-standard/schemas/normalized-findings.schema.json",
+          "sha256": "f84add76477277300b307a60c7be4102a8ea38815ce8156c8fc23e7fc5b576a3",
+          "sourcePath": "schemas/normalized-findings.schema.json"
+        },
+        {
+          "path": "skills/java-engineering-standard/schemas/quality-baseline-upgrade.schema.json",
+          "sha256": "d40da054ca03f0839f232ad313dae367c6e15e9165a06b75db54743e9a21630c",
+          "sourcePath": "schemas/quality-baseline-upgrade.schema.json"
+        },
+        {
+          "path": "skills/java-engineering-standard/schemas/quality-baseline.schema.json",
+          "sha256": "a152d4deb049fc3de2c677504c6e6b5cf16f4b634fad98b7aee531b5f32277d3",
+          "sourcePath": "schemas/quality-baseline.schema.json"
+        },
+        {
+          "path": "skills/java-engineering-standard/schemas/standard-exception.schema.json",
+          "sha256": "efe467e920e4402f04fbbe643a286d438bd5ac88448fd365a15e531fcfd37697",
+          "sourcePath": "schemas/standard-exception.schema.json"
+        },
+        {
+          "path": "skills/java-engineering-standard/SKILL.md",
+          "sha256": "ca01a6b791a2638ab0bf1c85df9b6cf6f1f8c0851975cf4a3c896fc44121dae8",
+          "sourcePath": "skills/java-engineering-standard/SKILL.md"
+        },
+        {
+          "path": "skills/java-engineering-standard/skills/java-engineering-standard/evals/evals.json",
+          "sha256": "2241e47cea10b0a4a7f3141792f608d4c65eec84b1167bea85fe5616210484fa",
+          "sourcePath": "skills/java-engineering-standard/evals/evals.json"
+        },
+        {
+          "path": "skills/java-engineering-standard/skills/java-engineering-standard/evals/results-summary.md",
+          "sha256": "47aa65be98eb6915a5aa99566a971f557a16d137c27ebec57cc2e85762ee039b",
+          "sourcePath": "skills/java-engineering-standard/evals/results-summary.md"
+        },
+        {
+          "path": "skills/java-engineering-standard/sources/reference-register.md",
+          "sha256": "89243e0a571937f7e909e0da074010499a5fca544ae6284d8c237a8fb0bb09ab",
+          "sourcePath": "sources/reference-register.md"
+        },
+        {
+          "path": "skills/java-engineering-standard/templates/adr.md",
+          "sha256": "c7c0f592b02632ecd2af10ede4ccfe2e27a9bcc180f3493239d04e68917948a1",
+          "sourcePath": "templates/adr.md"
+        },
+        {
+          "path": "skills/java-engineering-standard/templates/baseline-upgrade.md",
+          "sha256": "46924e7348c3691afaabcb4b9bb82421a55df185b6f465a816ffd6740d16d0c7",
+          "sourcePath": "templates/baseline-upgrade.md"
+        },
+        {
+          "path": "skills/java-engineering-standard/templates/ci/github-actions-java21.yml",
+          "sha256": "7aa87c8ae133f55333d1eda72a05330aa781f2b27ce263bb1396448765e6b906",
+          "sourcePath": "templates/ci/github-actions-java21.yml"
+        },
+        {
+          "path": "skills/java-engineering-standard/templates/code-quality.yaml",
+          "sha256": "4fe82d4ddbd19b3eb579d400554a73a7ebe17a7411f6d3d800e906351f54390f",
+          "sourcePath": "templates/code-quality.yaml"
+        },
+        {
+          "path": "skills/java-engineering-standard/templates/java-project-profile.md",
+          "sha256": "a4dcddecc5dc890d792bda2a3be20e1fbd45a33490f9653aaff2571a1294a161",
+          "sourcePath": "templates/java-project-profile.md"
+        },
+        {
+          "path": "skills/java-engineering-standard/templates/java-project-profile.yaml",
+          "sha256": "90de618d2d5ab20df8a98bd2e67860a601abc297fef92607af6517c34ad67f26",
+          "sourcePath": "templates/java-project-profile.yaml"
+        },
+        {
+          "path": "skills/java-engineering-standard/templates/java-quality-evidence.md",
+          "sha256": "344d0dccbb0aa83dc93908f4c69ba8aa899daa22b0b466f1d0a941144da86bef",
+          "sourcePath": "templates/java-quality-evidence.md"
+        },
+        {
+          "path": "skills/java-engineering-standard/templates/java-quality-evidence.yaml",
+          "sha256": "a2238b7e5f89ccfbe81394fe9ccf2911250b81143047aefcc4433f6794b08594",
+          "sourcePath": "templates/java-quality-evidence.yaml"
+        },
+        {
+          "path": "skills/java-engineering-standard/templates/maven/maven-wrapper.properties",
+          "sha256": "9e702bcd7e68ba1cace0a3382a7082e6e1e1b321688a7a3fbf4d5ae7eb0af533",
+          "sourcePath": "templates/maven/maven-wrapper.properties"
+        },
+        {
+          "path": "skills/java-engineering-standard/templates/maven/reference-parent-pom.xml",
+          "sha256": "cde6ffe7e71943b25179a7ae23a3a34558b8b8d6cb561e9bc8ddf5410590fa26",
+          "sourcePath": "templates/maven/reference-parent-pom.xml"
+        },
+        {
+          "path": "skills/java-engineering-standard/templates/module-boundaries.yaml",
+          "sha256": "19d92d73364d029ca324e3c6e906f5d9706ce8c4bd50d61dc06e8b65d96d6459",
+          "sourcePath": "templates/module-boundaries.yaml"
+        },
+        {
+          "path": "skills/java-engineering-standard/templates/quality-baseline-upgrade.yaml",
+          "sha256": "bcbf8a0119b11bc27622dbdff0bd8b898e02afadb8d74a5b39a429527fa5535e",
+          "sourcePath": "templates/quality-baseline-upgrade.yaml"
+        },
+        {
+          "path": "skills/java-engineering-standard/templates/quality-baseline.yaml",
+          "sha256": "ff388abdce4a14c5d7fed7baa561d99b0d84e90e6b05e166d09a8fddc9348dc7",
+          "sourcePath": "templates/quality-baseline.yaml"
+        },
+        {
+          "path": "skills/java-engineering-standard/templates/standard-exception.md",
+          "sha256": "acb2f20f6c257ea42713735fa10d4dca12dad4ba248fd56400a6050b67bad624",
+          "sourcePath": "templates/standard-exception.md"
+        },
+        {
+          "path": "skills/java-engineering-standard/templates/standard-exception.yaml",
+          "sha256": "6e36570292e0f572848fc011b0f6cda6534aaa9dafeaa46365f35ebcf25ebbb4",
+          "sourcePath": "templates/standard-exception.yaml"
+        },
+        {
+          "path": "skills/java-engineering-standard/templates/tests/ArchitectureRulesTest.java",
+          "sha256": "d4e410452515d1b0df9b66c2a1bdbf4a43b5f309d1a015f2ba1aa522523ab4a7",
+          "sourcePath": "templates/tests/ArchitectureRulesTest.java"
+        }
+      ],
+      "resourceSetDigest": "sha256:89d78e88208bff946a9396e6c3302dea3d0497b5c8e1225403814dba6e4466e6",
       "skillBlobSha256": "sha256:ca01a6b791a2638ab0bf1c85df9b6cf6f1f8c0851975cf4a3c896fc44121dae8",
       "skillProjectionVersion": "agent-skill-projection/1",
       "sourceCommit": "765e9d00a3173ecfe873c1646f5dbe375de677e7",
@@ -46,6 +451,26 @@
           "java": {
             "absolutePath": "/Library/Java/JavaVirtualMachines/temurin-21.jdk/Contents/Home/bin/java",
             "sha256": "sha256:1069d726eae63d510d2983a2a4c7869f14db200605685c98117d9a27aaa5270f"
+          },
+          "javaHome": {
+            "absolutePath": "/Library/Java/JavaVirtualMachines/temurin-21.jdk/Contents/Home",
+            "sha256": "sha256:e230de581457766929ddc9a397c1e0f643ce2edf929c48105084fd81358bf574"
+          },
+          "javac": {
+            "absolutePath": "/Library/Java/JavaVirtualMachines/temurin-21.jdk/Contents/Home/bin/javac",
+            "sha256": "sha256:68411beb17069d4a26f54fee148c2540251f42368f991d80a8087dcfa4c90a39"
+          },
+          "mavenHome": {
+            "absolutePath": "/Users/yuzhuangzhuang/Projects/omini-harness/.worktrees/.capability-pack-cache/java-engineering-standard/home/.m2/wrapper/dists/apache-maven-3.9.16/56ba1f9f",
+            "sha256": "sha256:d65c0197fa8531e537737c950c5ab35bcf808e63001361186ac2ab6ff0c57f64"
+          },
+          "mavenRepository": {
+            "absolutePath": "/Users/yuzhuangzhuang/Projects/omini-harness/.worktrees/.capability-pack-cache/java-engineering-standard/home/.m2/repository",
+            "sha256": "sha256:8362290d699f9a80f19d3dba330cbe17277af46fbd9bab8519a7bb6266fb96cd"
+          },
+          "mvn": {
+            "absolutePath": "/Users/yuzhuangzhuang/Projects/omini-harness/.worktrees/.capability-pack-cache/java-engineering-standard/home/.m2/wrapper/dists/apache-maven-3.9.16/56ba1f9f/bin/mvn",
+            "sha256": "sha256:f9381d0cb98abaaf9592dae421eddc497e84ed9bfb723b84c111d1350863c3a2"
           },
           "rg": {
             "absolutePath": "/Applications/ChatGPT.app/Contents/Resources/rg",
@@ -73,7 +498,7 @@
       "contentHash": "b226ed62d3b3e3710fb0a3611762864524ea94e8c15fe00a3b2b7e40943de666",
       "id": "framework:java:java-engineering-standard",
       "kind": "FRAMEWORK",
-      "registrationFingerprint": "sha256:1b9139139ac5933f0d5d0b050bb6952a05be13aeaf77250f751936bda529e403",
+      "registrationFingerprint": "sha256:0f65cd30ddbea6b2c446d0d59285872c87c34080204dc83f50e69d697d070541",
       "resolvedContentDigest": "sha256:b226ed62d3b3e3710fb0a3611762864524ea94e8c15fe00a3b2b7e40943de666",
       "sourceCommit": "765e9d00a3173ecfe873c1646f5dbe375de677e7",
       "sourceKind": "EXTERNAL_CAPABILITY_PACK",
@@ -90,6 +515,26 @@
             "absolutePath": "/Library/Java/JavaVirtualMachines/temurin-21.jdk/Contents/Home/bin/java",
             "sha256": "sha256:1069d726eae63d510d2983a2a4c7869f14db200605685c98117d9a27aaa5270f"
           },
+          "javaHome": {
+            "absolutePath": "/Library/Java/JavaVirtualMachines/temurin-21.jdk/Contents/Home",
+            "sha256": "sha256:e230de581457766929ddc9a397c1e0f643ce2edf929c48105084fd81358bf574"
+          },
+          "javac": {
+            "absolutePath": "/Library/Java/JavaVirtualMachines/temurin-21.jdk/Contents/Home/bin/javac",
+            "sha256": "sha256:68411beb17069d4a26f54fee148c2540251f42368f991d80a8087dcfa4c90a39"
+          },
+          "mavenHome": {
+            "absolutePath": "/Users/yuzhuangzhuang/Projects/omini-harness/.worktrees/.capability-pack-cache/java-engineering-standard/home/.m2/wrapper/dists/apache-maven-3.9.16/56ba1f9f",
+            "sha256": "sha256:d65c0197fa8531e537737c950c5ab35bcf808e63001361186ac2ab6ff0c57f64"
+          },
+          "mavenRepository": {
+            "absolutePath": "/Users/yuzhuangzhuang/Projects/omini-harness/.worktrees/.capability-pack-cache/java-engineering-standard/home/.m2/repository",
+            "sha256": "sha256:8362290d699f9a80f19d3dba330cbe17277af46fbd9bab8519a7bb6266fb96cd"
+          },
+          "mvn": {
+            "absolutePath": "/Users/yuzhuangzhuang/Projects/omini-harness/.worktrees/.capability-pack-cache/java-engineering-standard/home/.m2/wrapper/dists/apache-maven-3.9.16/56ba1f9f/bin/mvn",
+            "sha256": "sha256:f9381d0cb98abaaf9592dae421eddc497e84ed9bfb723b84c111d1350863c3a2"
+          },
           "rg": {
             "absolutePath": "/Applications/ChatGPT.app/Contents/Resources/rg",
             "sha256": "sha256:83761933102235b0932142806cd2f56f76f2b02721078549ffa64866b165ceaf"
@@ -103,5 +548,5 @@
       "version": "0.4.0"
     }
   ],
-  "sourceResolutionId": "resolution:5c24732c8b1ff8363f78d4ed"
+  "sourceResolutionId": "resolution:e7ab70388b161809efa829fb"
 }

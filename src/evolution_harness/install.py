@@ -92,27 +92,53 @@ def _projection_inputs(
             raise ProjectionInstallError(f"unsafe projected skill path: {raw_path}") from exc
         if len(relative.parts) != 3 or relative.parts[0] != "skills" or relative.parts[2] != "SKILL.md":
             raise ProjectionInstallError(f"unsafe projected skill path: {raw_path}")
-        expected_hash = file_hashes.get(relative.as_posix())
-        try:
-            with AnchoredRoot(pack) as pack_filesystem:
-                source_bytes = pack_filesystem.read_bytes(relative.as_posix())
-        except AnchoredPathError as exc:
-            raise ProjectionInstallError(f"unsafe projected skill path: {raw_path}") from exc
-        if not expected_hash or sha256_bytes(source_bytes) != expected_hash:
-            raise ProjectionInstallError(f"projected skill hash mismatch: {raw_path}")
-        target_path = PurePosixPath(".agents", "skills", relative.parts[1], "SKILL.md").as_posix()
-        inputs.append(
+        resources = skill.get("resourceFiles") or [
             {
-                "path": target_path,
-                "sourcePath": relative.as_posix(),
-                "sourceSha256": expected_hash,
-                "installedSha256": expected_hash,
-                "capabilityId": skill["id"],
-                "capabilityVersion": skill["version"],
-                "capabilityContentHash": skill["contentHash"],
-                "_sourceBytes": source_bytes,
+                "sourcePath": skill.get("sourceSkillPath", relative.as_posix()),
+                "path": relative.as_posix(),
+                "sha256": file_hashes.get(relative.as_posix()),
             }
-        )
+        ]
+        skill_root = PurePosixPath("skills", relative.parts[1])
+        for resource in resources:
+            resource_path = safe_relative_path(
+                resource.get("path", ""), label="projected Skill resource path"
+            )
+            if resource_path.parts[:2] != skill_root.parts or len(resource_path.parts) < 3:
+                raise ProjectionInstallError(
+                    f"unsafe projected Skill resource path: {resource.get('path', '')}"
+                )
+            expected_hash = file_hashes.get(resource_path.as_posix())
+            if expected_hash != resource.get("sha256"):
+                raise ProjectionInstallError(
+                    f"projected Skill resource manifest drift: {resource_path.as_posix()}"
+                )
+            try:
+                with AnchoredRoot(pack) as pack_filesystem:
+                    source_bytes = pack_filesystem.read_bytes(resource_path.as_posix())
+            except AnchoredPathError as exc:
+                raise ProjectionInstallError(
+                    f"unsafe projected Skill resource path: {resource_path.as_posix()}"
+                ) from exc
+            if not expected_hash or sha256_bytes(source_bytes) != expected_hash:
+                raise ProjectionInstallError(
+                    f"projected Skill resource hash mismatch: {resource_path.as_posix()}"
+                )
+            target_path = PurePosixPath(
+                ".agents", "skills", relative.parts[1], *resource_path.parts[2:]
+            ).as_posix()
+            inputs.append(
+                {
+                    "path": target_path,
+                    "sourcePath": resource_path.as_posix(),
+                    "sourceSha256": expected_hash,
+                    "installedSha256": expected_hash,
+                    "capabilityId": skill["id"],
+                    "capabilityVersion": skill["version"],
+                    "capabilityContentHash": skill["contentHash"],
+                    "_sourceBytes": source_bytes,
+                }
+            )
     manifest["_validatedResolvedContext"] = resolved
     manifest["_validatedIntegrationRoot"] = str(integration_root) if integration_control.is_dir() else None
     return manifest, inputs

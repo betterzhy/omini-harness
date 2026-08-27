@@ -1,0 +1,18 @@
+schemaVersion: 1
+standardVersion: 0.4.0
+defaultDecision: deny
+eligibleRules: []
+defaultMaximumDurationDays: 30
+requiredFields:
+  - exceptionId
+  - ruleId
+  - owner
+  - approver
+  - exactScope
+  - risk
+  - compensatingControls
+  - evidence
+  - expiresOn
+  - exitConditions
+onExpiry: deny
+note: 0.4.0 当前没有可例外规则和项目级质量 Suppression；模板只保留未来受控开放能力。

@@ -7,6 +7,7 @@ from pathlib import Path
 
 import yaml
 
+from evolution_harness.install import install_projection
 from evolution_harness.schema import SchemaStore
 
 
@@ -46,7 +47,9 @@ def test_neutral_java_registration_fixture_binds_exact_immutable_identity():
     assert capability["validatorIdentity"]["timeoutSeconds"] == 600
 
 
-def test_projected_java_skill_is_self_contained_and_byte_identical_to_fixed_blob():
+def test_projected_java_skill_is_self_contained_and_byte_identical_to_fixed_blob(
+    tmp_path: Path,
+):
     root = Path(__file__).parents[1]
     pack = (
         root
@@ -76,4 +79,28 @@ def test_projected_java_skill_is_self_contained_and_byte_identical_to_fixed_blob
     assert len(manifest["sourceCapabilities"]) == 1
     assert manifest["sourceCapabilities"][0]["kind"] == "FRAMEWORK"
     assert manifest["generatedSkills"][0]["skillBlobSha256"] == SKILL_DIGEST
+    generated_skill = manifest["generatedSkills"][0]
+    assert generated_skill["projectionContract"] == "SELF_CONTAINED_SKILL_BUNDLE"
+    assert len(generated_skill["resourceFiles"]) == 45
+    assert len({item["sourcePath"] for item in generated_skill["resourceFiles"]}) == 45
+    for resource in generated_skill["resourceFiles"]:
+        target_bytes = (pack / resource["path"]).read_bytes()
+        source_bytes = subprocess.run(
+            [
+                "git",
+                "-C",
+                "/Users/yuzhuangzhuang/Projects/java-engineering-standard",
+                "show",
+                f"{SOURCE_COMMIT}:{resource['sourcePath']}",
+            ],
+            check=True,
+            capture_output=True,
+        ).stdout
+        assert target_bytes == source_bytes
+        assert hashlib.sha256(target_bytes).hexdigest() == resource["sha256"]
+    target = tmp_path / "neutral-target"
+    target.mkdir()
+    plan = install_projection(root, pack, target)
+    assert plan["gate"] == "PASS"
+    assert len(plan["actions"]) == 45
     assert b"../" not in skill_bytes

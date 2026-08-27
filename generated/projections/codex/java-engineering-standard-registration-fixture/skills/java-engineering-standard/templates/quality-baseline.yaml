@@ -1,0 +1,34 @@
+schemaVersion: 1
+standardVersion: 0.4.0
+baselineId: java21-maven3
+candidate: __FIXED_CANDIDATE_FULL_COMMIT_SHA__
+createdBy: __BASELINE_GENERATOR_IDENTITY__
+createdOn: __BASELINE_CREATED_ON__
+reviewedBy: __BASELINE_REVIEWER__
+reviewedOn: __BASELINE_REVIEWED_ON__
+tools:
+  - id: checkstyle
+    version: 13.9.0
+    normalizedReportSha256: __CHECKSTYLE_NORMALIZED_REPORT_SHA256__
+  - id: pmd
+    version: 7.26.0
+    normalizedReportSha256: __PMD_NORMALIZED_REPORT_SHA256__
+findings:
+  - modulePath: .
+    toolId: checkstyle
+    toolVersion: 13.9.0
+    toolRuleId: __TOOL_RULE_ID__
+    relativePath: __REPOSITORY_RELATIVE_SOURCE_PATH__
+    messageKey: __NORMALIZED_MESSAGE_KEY__
+    sourceSet: main
+    layerRole: application
+    severity: error
+    sourceAnchor:
+      kind: symbol
+      value: __STABLE_SOURCE_SYMBOL_OR_CONTEXT__
+    fingerprint: __FINDING_FINGERPRINT_SHA256__
+    owner: __FINDING_OWNER__
+    risk: medium
+    firstObservedCandidate: __FIRST_OBSERVED_FULL_COMMIT_SHA__
+    reviewOn: __FINDING_REVIEW_ON__
+    exitCondition: __FINDING_EXIT_CONDITION__

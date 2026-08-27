@@ -11,10 +11,13 @@ from typing import Any
 import yaml
 
 from .anchored_fs import AnchoredPathError, AnchoredRoot
-from .capability_pack_registry import read_registered_pack_blob
+from .capability_pack_registry import (
+    read_registered_pack_blob,
+    read_registered_pack_blobs,
+)
 from .discussion import materialize_discussion_contract
 from .generated import deterministic_json_bytes
-from .hashing import file_sha256, sha256_bytes
+from .hashing import canonical_json_bytes, file_sha256, sha256_bytes
 from .loader import load_capabilities
 from .paths import PathBoundaryError, resolve_without_symlinks, safe_relative_path
 from .process_lock import ProcessLockError, exclusive_process_lock, process_lock_identity
@@ -390,7 +393,7 @@ def _external_source_capability(
 
 def _external_skill_payload(
     source: dict[str, Any], registration: dict[str, Any]
-) -> tuple[str, bytes, dict[str, Any]]:
+) -> tuple[dict[str, bytes], dict[str, Any]]:
     manifest = registration.get("manifest")
     if not isinstance(manifest, dict):
         raise ProjectionError("external capability pack manifest is unavailable")
@@ -400,10 +403,37 @@ def _external_skill_payload(
         raise ProjectionError("external capability pack Skill declaration is invalid")
     if skill_path != f"skills/{skill_name}/SKILL.md":
         raise ProjectionError("external capability pack Skill declaration path drift")
+    relative = f"skills/{skill_name}/SKILL.md"
+    declaration = registration.get("contentDeclaration", {})
+    projection_contract = declaration.get("projectionContract")
     try:
-        skill_bytes = read_registered_pack_blob(registration, skill_path)
+        if projection_contract == "SELF_CONTAINED_SKILL_BUNDLE":
+            source_blobs = read_registered_pack_blobs(registration)
+            skill_bytes = source_blobs[skill_path]
+            payloads: dict[str, bytes] = {}
+            resource_files: list[dict[str, str]] = []
+            for source_path, data in sorted(source_blobs.items()):
+                target_path = (
+                    relative
+                    if source_path == skill_path
+                    else f"skills/{skill_name}/{source_path}"
+                )
+                if target_path in payloads:
+                    raise ValueError("self-contained Skill resource path collision")
+                payloads[target_path] = data
+                resource_files.append(
+                    {
+                        "sourcePath": source_path,
+                        "path": target_path,
+                        "sha256": _sha256(data),
+                    }
+                )
+        else:
+            skill_bytes = read_registered_pack_blob(registration, skill_path)
+            payloads = {relative: skill_bytes}
+            resource_files = []
         skill_text = skill_bytes.decode("utf-8", "strict")
-    except (UnicodeDecodeError, ValueError) as exc:
+    except (KeyError, UnicodeDecodeError, ValueError) as exc:
         raise ProjectionError("external capability pack Skill blob is invalid") from exc
     if not skill_text.startswith("---\n"):
         raise ProjectionError("external capability pack Skill front matter is missing")
@@ -416,7 +446,6 @@ def _external_skill_payload(
         raise ProjectionError("external capability pack Skill front matter is invalid") from exc
     if not isinstance(front_matter, dict) or front_matter.get("name") != skill_name:
         raise ProjectionError("external capability pack Skill front matter name drift")
-    relative = f"skills/{skill_name}/SKILL.md"
     generated = {
         "id": source["id"],
         "version": source["version"],
@@ -433,7 +462,16 @@ def _external_skill_payload(
         "sourceSkillPath": skill_path,
         "skillBlobSha256": "sha256:" + _sha256(skill_bytes),
     }
-    return relative, skill_bytes, generated
+    if projection_contract == "SELF_CONTAINED_SKILL_BUNDLE":
+        generated.update(
+            {
+                "projectionContract": projection_contract,
+                "resourceSetDigest": "sha256:"
+                + sha256_bytes(canonical_json_bytes(resource_files)),
+                "resourceFiles": resource_files,
+            }
+        )
+    return payloads, generated
 
 
 def _verify_external_source_snapshot(
@@ -556,10 +594,15 @@ def _build_projection_pack_unlocked(
                 for source in source_capabilities:
                     if source.get("sourceKind") == "EXTERNAL_CAPABILITY_PACK":
                         registration = verified_entries[source["id"]]
-                        relative, skill_bytes, generated = _external_skill_payload(
+                        skill_payloads, generated = _external_skill_payload(
                             source, registration
                         )
-                        generated_payloads[relative] = skill_bytes
+                        for relative, data in skill_payloads.items():
+                            if relative in generated_payloads:
+                                raise ProjectionError(
+                                    f"projection generated file collision: {relative}"
+                                )
+                            generated_payloads[relative] = data
                         generated_skills.append(generated)
                         continue
                     if source["kind"] != "SKILL":
@@ -778,10 +821,15 @@ def validate_projection_pack(
     generated_skills: list[dict[str, Any]] = []
     for source in source_capabilities:
         if source.get("sourceKind") == "EXTERNAL_CAPABILITY_PACK":
-            relative, skill_bytes, generated = _external_skill_payload(
+            skill_payloads, generated = _external_skill_payload(
                 source, verified_entries[source["id"]]
             )
-            expected_bytes[relative] = skill_bytes
+            for relative, data in skill_payloads.items():
+                if relative in expected_bytes:
+                    raise ProjectionError(
+                        f"canonical projection file collision: {relative}"
+                    )
+                expected_bytes[relative] = data
             generated_skills.append(generated)
             continue
         if source["kind"] != "SKILL":

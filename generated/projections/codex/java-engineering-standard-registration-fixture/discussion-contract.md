@@ -4,7 +4,7 @@
 - Project: java-engineering-standard-registration-fixture
 - Topic: neutral-java-pilot-readiness
 - Stage: ENGINEERING_DESIGN
-- Intent: java-engineering
+- Intent: capability-pack-registration
 - Topic Guard: OPEN_OR_IN_PROGRESS
 
 ## Background References
@@ -14,7 +14,7 @@
 - None
 
 ## Scope
-- Produce: neutral pilot readiness evidence
+- Produce: registration evidence
 - Runtime: CODEX
 
 ## Non-Goals
@@ -23,7 +23,7 @@
 
 ## Core Questions
 - Which authoritative references govern topic `neutral-java-pilot-readiness`?
-- What must remain true while producing `neutral pilot readiness evidence`?
+- What must remain true while producing `registration evidence`?
 - Which decisions require human authority rather than agent inference?
 
 ## Constraints
@@ -32,7 +32,7 @@
 - Generated discussion context is not canonical project truth.
 
 ## Expected Outputs
-- neutral pilot readiness evidence
+- registration evidence
 - framework:java:java-engineering-standard@0.4.0 (b226ed62d3b3)
 
 ## Closure Criteria

@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import signal
 import shutil
 import subprocess
 import time
@@ -726,6 +727,44 @@ def test_candidate_gate_timeout_terminates_descendant_process_group(tmp_path: Pa
         else:
             pytest.fail(f"candidate Gate descendant survived timeout: {pid}")
     assert not late_side_effect.exists()
+
+
+def test_candidate_gate_timeout_kills_group_before_reaping_leader(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from evolution_harness import capability_pack_registry
+
+    events: list[str] = []
+
+    class FakeProcess:
+        pid = 424242
+
+        def __init__(self, *args, **kwargs):
+            events.append("start")
+            self.calls = 0
+
+        def communicate(self, timeout=None):
+            self.calls += 1
+            if self.calls == 1:
+                events.append("timeout")
+                raise subprocess.TimeoutExpired("gate", timeout)
+            events.append("reap")
+            return b"", b""
+
+    monkeypatch.setattr(capability_pack_registry.subprocess, "Popen", FakeProcess)
+
+    def record_killpg(pid: int, signum: int):
+        assert pid == FakeProcess.pid
+        events.append("term" if signum == signal.SIGTERM else "kill")
+
+    monkeypatch.setattr(capability_pack_registry.os, "killpg", record_killpg)
+
+    with pytest.raises(ValueError, match="candidate Gate timed out"):
+        capability_pack_registry._run_candidate_gate(
+            ["gate"], cwd=tmp_path, timeout=1, environment={}
+        )
+
+    assert events == ["start", "timeout", "term", "kill", "reap"]
 
 
 @pytest.mark.parametrize("index_flag", ["--assume-unchanged", "--skip-worktree"])

@@ -107,10 +107,6 @@ def _run_candidate_gate(
         except ProcessLookupError:
             pass
         try:
-            stdout, stderr = process.communicate(timeout=5)
-        except subprocess.TimeoutExpired:
-            pass
-        try:
             os.killpg(process.pid, signal.SIGKILL)
         except ProcessLookupError:
             pass

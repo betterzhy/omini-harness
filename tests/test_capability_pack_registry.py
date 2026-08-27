@@ -579,6 +579,7 @@ def test_candidate_gate_materializes_registered_parent_tree_closure(tmp_path: Pa
         validator.read_bytes()
     ).hexdigest()
     registration["validator"]["gitHistoryContract"] = "CANDIDATE_PARENT_TREE"
+    registration["validator"]["timeoutSeconds"] = 30
     _write_registrations(root, [registration])
 
     registry = build_capability_pack_registry(root, write=False)
@@ -586,6 +587,7 @@ def test_candidate_gate_materializes_registered_parent_tree_closure(tmp_path: Pa
     assert registry["entries"][0]["validator"]["gitHistoryContract"] == (
         "CANDIDATE_PARENT_TREE"
     )
+    assert registry["entries"][0]["validator"]["timeoutSeconds"] == 30
 
 
 @pytest.mark.parametrize("index_flag", ["--assume-unchanged", "--skip-worktree"])
@@ -831,3 +833,19 @@ def test_registered_capability_pack_lookup_rejects_unknown_and_inactive(tmp_path
 
     with pytest.raises(KeyError, match="active capability pack registration not found or ambiguous"):
         get_registered_capability_pack(root, CAPABILITY_ID)
+
+
+def test_registered_capability_pack_lookup_does_not_validate_unselected_pack(
+    tmp_path: Path,
+):
+    root, _, _, _ = _harness_with_pack(tmp_path)
+    selected = _registered_entry(root)
+    unrelated = deepcopy(selected)
+    unrelated["registrationId"] = "pack:unrelated"
+    unrelated["capabilityId"] = "workflow:unrelated:broken"
+    unrelated["resolvedContentDigest"] = "sha256:" + "0" * 64
+    _write_registrations(root, [selected, unrelated])
+
+    registration = get_registered_capability_pack(root, CAPABILITY_ID)
+
+    assert registration["registrationId"] == REGISTRATION_ID

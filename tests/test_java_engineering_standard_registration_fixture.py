@@ -43,6 +43,7 @@ def test_neutral_java_registration_fixture_binds_exact_immutable_identity():
     assert capability["validatorIdentity"]["gitHistoryContract"] == (
         "CANDIDATE_PARENT_TREE"
     )
+    assert capability["validatorIdentity"]["timeoutSeconds"] == 600
 
 
 def test_projected_java_skill_is_self_contained_and_byte_identical_to_fixed_blob():

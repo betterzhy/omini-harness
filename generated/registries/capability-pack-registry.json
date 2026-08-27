@@ -62,6 +62,7 @@
         "kind": "FIXED_CANDIDATE_GATE",
         "relativePath": "scripts/verify-capability-pack",
         "sha256": "sha256:5bd70fd85092be6424410a42c0f0a1330820cc3d7d36bc1ee0e948958e54ee01",
+        "timeoutSeconds": 600,
         "toolchain": {
           "java": {
             "absolutePath": "/Library/Java/JavaVirtualMachines/temurin-21.jdk/Contents/Home/bin/java",
@@ -102,5 +103,5 @@
     }
   ],
   "schemaVersion": "capability-pack-registry/v1",
-  "sourceRevision": "content-sha256:b0b9c33de113d42d21d6b0c432267cd0fbb6ad44fd1fc8646236224e8e84736d"
+  "sourceRevision": "content-sha256:3d2e6dcc85a594254047cc0a430345ac57e31559d07661782c70fb1492bec8d2"
 }

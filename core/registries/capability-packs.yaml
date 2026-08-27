@@ -71,6 +71,7 @@
     argumentsContract: CANDIDATE_COMMIT_TREE
     environmentContract: REGISTERED_TOOLCHAIN_OFFLINE_CACHE
     gitHistoryContract: CANDIDATE_PARENT_TREE
+    timeoutSeconds: 600
     toolchain:
       ruby:
         absolutePath: /opt/homebrew/bin/ruby

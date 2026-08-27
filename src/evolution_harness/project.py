@@ -10,7 +10,7 @@ from .capability_pack_registry import (
     _require_fixed_git_identity,
     _source_root,
     _tree_entries,
-    build_capability_pack_registry,
+    get_registered_capability_pack,
 )
 from .catalog import build_design_active_catalog
 from .hashing import canonical_json_bytes, sha256_bytes
@@ -75,7 +75,6 @@ def build_capability_lock(repository_root: Path, project_root: Path, *, write: b
     catalog = build_design_active_catalog(root, write=False)
     by_id = {entry["id"]: entry for entry in catalog["entries"]}
     capability_sources: list[dict[str, Any]] = []
-    external_by_id: dict[str, list[dict[str, Any]]] | None = None
     for capability_id in sorted(reasons):
         entry = by_id.get(capability_id)
         if entry is not None:
@@ -87,19 +86,13 @@ def build_capability_lock(repository_root: Path, project_root: Path, *, write: b
                 }
             )
             continue
-        if external_by_id is None:
-            external_by_id = {}
-            for registration in build_capability_pack_registry(root, write=False)["entries"]:
-                if registration["status"] == "ACTIVE":
-                    external_by_id.setdefault(registration["capabilityId"], []).append(
-                        registration
-                    )
-        matches = external_by_id.get(capability_id, [])
-        if len(matches) != 1:
+        try:
+            registration = get_registered_capability_pack(root, capability_id)
+        except KeyError as exc:
             raise ValueError(
                 f"active capability pack registration not found or ambiguous: {capability_id}"
-            )
-        capability_sources.append(_external_lock_source(matches[0]))
+            ) from exc
+        capability_sources.append(_external_lock_source(registration))
     external_selected = any(
         source.get("sourceKind") == "EXTERNAL_CAPABILITY_PACK"
         for source in capability_sources
@@ -197,6 +190,11 @@ def _canonical_registration_identity_record(
                 if "gitHistoryContract" in validator
                 else {}
             ),
+            **(
+                {"timeoutSeconds": validator["timeoutSeconds"]}
+                if "timeoutSeconds" in validator
+                else {}
+            ),
         },
     }
     if "contentDeclaration" in registration:
@@ -251,6 +249,11 @@ def _external_lock_source(registration: dict[str, Any]) -> dict[str, Any]:
                     ]
                 }
                 if "gitHistoryContract" in registration["validator"]
+                else {}
+            ),
+            **(
+                {"timeoutSeconds": registration["validator"]["timeoutSeconds"]}
+                if "timeoutSeconds" in registration["validator"]
                 else {}
             ),
         },
@@ -340,20 +343,17 @@ def verify_capability_lock(
         for item in lock["capabilities"]
         if item.get("sourceKind") == "EXTERNAL_CAPABILITY_PACK"
     ]
-    external_by_id: dict[str, list[dict[str, Any]]] = {}
-    if external_items:
+    external_by_id: dict[str, dict[str, Any]] = {}
+    for item in external_items:
+        capability_id = item["capabilityId"]
         try:
-            external_registry = build_capability_pack_registry(root, write=False)
+            external_by_id[capability_id] = get_registered_capability_pack(
+                root, capability_id
+            )
         except (KeyError, ValueError) as exc:
-            capability_id = external_items[0]["capabilityId"]
             raise ValueError(
                 f"external capability pack lock registration drift: {capability_id}"
             ) from exc
-        for registration in external_registry["entries"]:
-            if registration["status"] == "ACTIVE":
-                external_by_id.setdefault(registration["capabilityId"], []).append(
-                    registration
-                )
     verified: dict[str, dict[str, Any]] = {}
     for capability_id, item in locked_items.items():
         if item["sourceHarnessRevision"] != lock["sourceHarnessRevision"]:
@@ -361,12 +361,11 @@ def verify_capability_lock(
         if sorted(item["resolvedBecause"]) != sorted(reasons[capability_id]):
             raise ValueError(f"capability lock binding reasons drift: {capability_id}")
         if item.get("sourceKind") == "EXTERNAL_CAPABILITY_PACK":
-            matches = external_by_id.get(capability_id, [])
-            if capability_id in active_internal_ids or len(matches) != 1:
+            registration = external_by_id.get(capability_id)
+            if capability_id in active_internal_ids or registration is None:
                 raise ValueError(
                     f"external capability pack lock registration drift: {capability_id}"
                 )
-            registration = matches[0]
             expected_source = _external_lock_source(registration)
             actual_source = {
                 key: item[key] for key in _source_identity_keys(item)

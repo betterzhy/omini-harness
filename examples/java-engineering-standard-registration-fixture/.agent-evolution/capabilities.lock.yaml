@@ -1,6 +1,6 @@
 schemaVersion: capability-lock/v2
 project: java-engineering-standard-registration-fixture
-sourceHarnessRevision: content-sha256:a2200a33aacb60178b9b35f15f45fdcdf14c589a89cc943b6b66e058ef1ef8f2
+sourceHarnessRevision: content-sha256:2954e6178592b415a84ca8454c15cd8f3d9328504880f8770f41e1ffc47a9f65
 disabledCapabilities: []
 capabilities:
 - capabilityId: framework:java:java-engineering-standard
@@ -26,8 +26,9 @@ capabilities:
         absolutePath: /Library/Java/JavaVirtualMachines/temurin-21.jdk/Contents/Home/bin/java
         sha256: sha256:1069d726eae63d510d2983a2a4c7869f14db200605685c98117d9a27aaa5270f
     gitHistoryContract: CANDIDATE_PARENT_TREE
-  registrationFingerprint: sha256:a0d451ce3f3c15112eccb50ee3d0f5ed39ea864950fc39d32d81480e8143f7d4
-  sourceHarnessRevision: content-sha256:a2200a33aacb60178b9b35f15f45fdcdf14c589a89cc943b6b66e058ef1ef8f2
+    timeoutSeconds: 600
+  registrationFingerprint: sha256:1b9139139ac5933f0d5d0b050bb6952a05be13aeaf77250f751936bda529e403
+  sourceHarnessRevision: content-sha256:2954e6178592b415a84ca8454c15cd8f3d9328504880f8770f41e1ffc47a9f65
   resolvedBecause:
   - explicit-binding
-lockFingerprint: sha256:a7f235cdd9ad0b2286bc7c1f57a5a02a164d945f0690647737caaffa49c3e9f9
+lockFingerprint: sha256:6dd7ee2f04a58c1fcef98110a4f83334a21a01307bf0038634d4bb11d0804c43

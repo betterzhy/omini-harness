@@ -15,6 +15,11 @@
         "gitHistoryContract": {
           "enum": ["CANDIDATE_ONLY", "CANDIDATE_PARENT_TREE"]
         },
+        "timeoutSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1800
+        },
         "toolchain": {
           "type": "object",
           "required": ["ruby", "rg", "java"],

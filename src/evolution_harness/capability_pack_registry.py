@@ -606,6 +606,7 @@ def _validate_registration(repository_root: Path, registration: dict[str, Any]) 
             ["bash", str(validator_path), commit, tree],
             cwd=checkout,
             check=False,
+            timeout=registration["validator"].get("timeoutSeconds", 300),
             environment=_validator_environment(registration),
         )
         if completed.returncode != 0:
@@ -679,14 +680,16 @@ def get_registered_capability_pack(
 ) -> dict[str, Any]:
     matches = [
         entry
-        for entry in build_capability_pack_registry(repository_root)["entries"]
+        for entry in load_capability_pack_registrations(Path(repository_root))
         if entry["capabilityId"] == capability_id and entry["status"] == "ACTIVE"
     ]
-    if len(matches) != 1:
+    if not matches:
         raise KeyError(
             f"active capability pack registration not found or ambiguous: {capability_id}"
         )
-    return matches[0]
+    if len(matches) > 1:
+        raise ValueError(f"duplicate active capability pack ID: {capability_id}")
+    return _validate_registration(Path(repository_root), matches[0])
 
 
 def _registration_record(registration: Mapping[str, Any]) -> dict[str, Any]:

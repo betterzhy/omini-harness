@@ -1,5 +1,5 @@
 {
-  "capabilityLockFingerprint": "sha256:a7f235cdd9ad0b2286bc7c1f57a5a02a164d945f0690647737caaffa49c3e9f9",
+  "capabilityLockFingerprint": "sha256:6dd7ee2f04a58c1fcef98110a4f83334a21a01307bf0038634d4bb11d0804c43",
   "generatedFiles": [
     {
       "path": "discussion-contract.md",
@@ -11,11 +11,11 @@
     },
     {
       "path": "resolved-context.json",
-      "sha256": "3bd0378897d3d45553f7db3f2f5ca672e0495ceb3adf8a94d33cce32e93d041a"
+      "sha256": "ef71927a2fd6a4f885c8c023f1429a3a140325a111f2a1aa4ddcd8d2b94c45e9"
     },
     {
       "path": "resolved-task-context.md",
-      "sha256": "af290abd1e335d0ae210c5901736e3e02272f15f6627d5e08d080288b43b34d2"
+      "sha256": "45dd1a76ecf26dd5b63497fbbbe27324438a6a13beb809b7c07c3026be217970"
     },
     {
       "path": "skills/java-engineering-standard/SKILL.md",
@@ -27,7 +27,7 @@
       "contentHash": "b226ed62d3b3e3710fb0a3611762864524ea94e8c15fe00a3b2b7e40943de666",
       "id": "framework:java:java-engineering-standard",
       "path": "skills/java-engineering-standard/SKILL.md",
-      "registrationFingerprint": "sha256:a0d451ce3f3c15112eccb50ee3d0f5ed39ea864950fc39d32d81480e8143f7d4",
+      "registrationFingerprint": "sha256:1b9139139ac5933f0d5d0b050bb6952a05be13aeaf77250f751936bda529e403",
       "resolvedContentDigest": "sha256:b226ed62d3b3e3710fb0a3611762864524ea94e8c15fe00a3b2b7e40943de666",
       "skillBlobSha256": "sha256:ca01a6b791a2638ab0bf1c85df9b6cf6f1f8c0851975cf4a3c896fc44121dae8",
       "skillProjectionVersion": "agent-skill-projection/1",
@@ -41,6 +41,7 @@
         "gitHistoryContract": "CANDIDATE_PARENT_TREE",
         "relativePath": "scripts/verify-capability-pack",
         "sha256": "sha256:5bd70fd85092be6424410a42c0f0a1330820cc3d7d36bc1ee0e948958e54ee01",
+        "timeoutSeconds": 600,
         "toolchain": {
           "java": {
             "absolutePath": "/Library/Java/JavaVirtualMachines/temurin-21.jdk/Contents/Home/bin/java",
@@ -72,7 +73,7 @@
       "contentHash": "b226ed62d3b3e3710fb0a3611762864524ea94e8c15fe00a3b2b7e40943de666",
       "id": "framework:java:java-engineering-standard",
       "kind": "FRAMEWORK",
-      "registrationFingerprint": "sha256:a0d451ce3f3c15112eccb50ee3d0f5ed39ea864950fc39d32d81480e8143f7d4",
+      "registrationFingerprint": "sha256:1b9139139ac5933f0d5d0b050bb6952a05be13aeaf77250f751936bda529e403",
       "resolvedContentDigest": "sha256:b226ed62d3b3e3710fb0a3611762864524ea94e8c15fe00a3b2b7e40943de666",
       "sourceCommit": "765e9d00a3173ecfe873c1646f5dbe375de677e7",
       "sourceKind": "EXTERNAL_CAPABILITY_PACK",
@@ -83,6 +84,7 @@
         "gitHistoryContract": "CANDIDATE_PARENT_TREE",
         "relativePath": "scripts/verify-capability-pack",
         "sha256": "sha256:5bd70fd85092be6424410a42c0f0a1330820cc3d7d36bc1ee0e948958e54ee01",
+        "timeoutSeconds": 600,
         "toolchain": {
           "java": {
             "absolutePath": "/Library/Java/JavaVirtualMachines/temurin-21.jdk/Contents/Home/bin/java",
@@ -101,5 +103,5 @@
       "version": "0.4.0"
     }
   ],
-  "sourceResolutionId": "resolution:152449aa3086c14af9d2458c"
+  "sourceResolutionId": "resolution:5c24732c8b1ff8363f78d4ed"
 }

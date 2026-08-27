@@ -158,6 +158,17 @@ def _file_snapshot(root: Path) -> dict[str, bytes]:
     }
 
 
+def _inode_snapshot(root: Path) -> dict[str, int]:
+    snapshot = {".": root.stat().st_ino}
+    snapshot.update(
+        {
+            path.relative_to(root).as_posix(): path.stat().st_ino
+            for path in root.rglob("*")
+        }
+    )
+    return snapshot
+
+
 def test_projection_snapshots_external_skill_from_locked_git_blob(tmp_path: Path):
     from evolution_harness.projection import build_projection_pack
 
@@ -225,6 +236,70 @@ def test_projection_build_rejects_external_identity_drift_after_blob_read_withou
 
     assert advanced
     assert _file_snapshot(pack) == before
+    assert not list(pack.parent.glob(".project-fixture.*"))
+
+
+def test_projection_build_rolls_back_swap_when_external_identity_drifts_after_pre_swap_check(
+    tmp_path: Path, monkeypatch
+):
+    from evolution_harness import projection
+
+    root, project, source = _external_pack_project(tmp_path)
+    resolved = _resolved(root, project, runtime="CODEX")
+    projection.build_projection_pack(root, project, resolved, runtime="CODEX")
+    pack = root / "generated/projections/codex/project-fixture"
+    before_bytes = _file_snapshot(pack)
+    before_inodes = _inode_snapshot(pack)
+    original_verify = projection._verify_external_source_snapshot
+    checks = 0
+
+    def verify_then_advance(*args, **kwargs):
+        nonlocal checks
+        checks += 1
+        original_verify(*args, **kwargs)
+        if checks == 2:
+            _advance_external_pack_identity(root, project, source)
+
+    monkeypatch.setattr(
+        projection, "_verify_external_source_snapshot", verify_then_advance
+    )
+
+    with pytest.raises(projection.ProjectionError, match="external source identity drift"):
+        projection.build_projection_pack(root, project, resolved, runtime="CODEX")
+
+    assert checks == 3
+    assert _file_snapshot(pack) == before_bytes
+    assert _inode_snapshot(pack) == before_inodes
+    assert not list(pack.parent.glob(".project-fixture.*"))
+
+
+def test_projection_build_removes_new_canonical_when_post_swap_identity_check_fails(
+    tmp_path: Path, monkeypatch
+):
+    from evolution_harness import projection
+
+    root, project, source = _external_pack_project(tmp_path)
+    resolved = _resolved(root, project, runtime="CODEX")
+    pack = root / "generated/projections/codex/project-fixture"
+    original_verify = projection._verify_external_source_snapshot
+    checks = 0
+
+    def verify_then_advance(*args, **kwargs):
+        nonlocal checks
+        checks += 1
+        original_verify(*args, **kwargs)
+        if checks == 2:
+            _advance_external_pack_identity(root, project, source)
+
+    monkeypatch.setattr(
+        projection, "_verify_external_source_snapshot", verify_then_advance
+    )
+
+    with pytest.raises(projection.ProjectionError, match="external source identity drift"):
+        projection.build_projection_pack(root, project, resolved, runtime="CODEX")
+
+    assert checks == 3
+    assert not pack.exists()
     assert not list(pack.parent.glob(".project-fixture.*"))
 
 

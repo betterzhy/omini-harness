@@ -640,6 +640,9 @@ def _build_projection_pack_unlocked(
                         raise ProjectionError("unsafe projection target before swap")
                     filesystem.rename(target_relative, backup_relative)
                 filesystem.rename(pack_relative, target_relative)
+                _verify_external_source_snapshot(
+                    root, project, lock, verified_entries
+                )
                 journal["phase"] = "COMMITTED"
                 filesystem.write_bytes(journal_relative, deterministic_json_bytes(journal))
                 if filesystem.exists(backup_relative):

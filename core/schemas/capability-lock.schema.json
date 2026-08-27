@@ -1,44 +1,132 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://agent-evolution.local/core/schemas/capability-lock.schema.json",
-  "type": "object",
-  "required": [
-    "schemaVersion", "project", "sourceHarnessRevision", "disabledCapabilities",
-    "capabilities", "lockFingerprint"
-  ],
-  "properties": {
-    "schemaVersion": {"const": "capability-lock/v1"},
-    "project": {"type": "string", "minLength": 1},
-    "sourceHarnessRevision": {"type": "string", "pattern": "^content-sha256:[0-9a-f]{64}$"},
-    "disabledCapabilities": {
-      "type": "array",
-      "items": {"type": "string", "minLength": 1},
-      "uniqueItems": true
-    },
-    "capabilities": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "required": [
-          "capabilityId", "resolvedVersion", "contentHash", "sourceHarnessRevision",
-          "resolvedBecause"
-        ],
-        "properties": {
-          "capabilityId": {"type": "string", "minLength": 1},
-          "resolvedVersion": {"type": "string", "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"},
-          "contentHash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
-          "sourceHarnessRevision": {"type": "string", "pattern": "^content-sha256:[0-9a-f]{64}$"},
-          "resolvedBecause": {
-            "type": "array",
-            "minItems": 1,
-            "items": {"type": "string", "minLength": 1},
-            "uniqueItems": true
+  "oneOf": [
+    {
+      "type": "object",
+      "required": [
+        "schemaVersion", "project", "sourceHarnessRevision", "disabledCapabilities",
+        "capabilities", "lockFingerprint"
+      ],
+      "properties": {
+        "schemaVersion": {"const": "capability-lock/v1"},
+        "project": {"type": "string", "minLength": 1},
+        "sourceHarnessRevision": {"type": "string", "pattern": "^content-sha256:[0-9a-f]{64}$"},
+        "disabledCapabilities": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1},
+          "uniqueItems": true
+        },
+        "capabilities": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "capabilityId", "resolvedVersion", "contentHash", "sourceHarnessRevision",
+              "resolvedBecause"
+            ],
+            "properties": {
+              "capabilityId": {"type": "string", "minLength": 1},
+              "resolvedVersion": {"type": "string", "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"},
+              "contentHash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+              "sourceHarnessRevision": {"type": "string", "pattern": "^content-sha256:[0-9a-f]{64}$"},
+              "resolvedBecause": {
+                "type": "array",
+                "minItems": 1,
+                "items": {"type": "string", "minLength": 1},
+                "uniqueItems": true
+              }
+            },
+            "additionalProperties": false
           }
         },
-        "additionalProperties": false
-      }
+        "lockFingerprint": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+      },
+      "additionalProperties": false
     },
-    "lockFingerprint": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
-  },
-  "additionalProperties": false
+    {
+      "type": "object",
+      "required": [
+        "schemaVersion", "project", "sourceHarnessRevision", "disabledCapabilities",
+        "capabilities", "lockFingerprint"
+      ],
+      "properties": {
+        "schemaVersion": {"const": "capability-lock/v2"},
+        "project": {"type": "string", "minLength": 1},
+        "sourceHarnessRevision": {"type": "string", "pattern": "^content-sha256:[0-9a-f]{64}$"},
+        "disabledCapabilities": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1},
+          "uniqueItems": true
+        },
+        "capabilities": {
+          "type": "array",
+          "items": {
+            "oneOf": [
+              {
+                "type": "object",
+                "required": [
+                  "capabilityId", "resolvedVersion", "contentHash", "sourceHarnessRevision",
+                  "resolvedBecause", "sourceKind"
+                ],
+                "properties": {
+                  "capabilityId": {"type": "string", "minLength": 1},
+                  "resolvedVersion": {"type": "string", "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"},
+                  "contentHash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                  "sourceHarnessRevision": {"type": "string", "pattern": "^content-sha256:[0-9a-f]{64}$"},
+                  "resolvedBecause": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {"type": "string", "minLength": 1},
+                    "uniqueItems": true
+                  },
+                  "sourceKind": {"const": "HARNESS_CANONICAL"}
+                },
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "required": [
+                  "capabilityId", "resolvedVersion", "contentHash", "sourceHarnessRevision",
+                  "resolvedBecause", "sourceKind", "sourceRegistrationId", "sourceCommit",
+                  "sourceTree", "resolvedContentDigest", "validatorIdentity",
+                  "registrationFingerprint"
+                ],
+                "properties": {
+                  "capabilityId": {"type": "string", "minLength": 1},
+                  "resolvedVersion": {"type": "string", "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"},
+                  "contentHash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                  "sourceHarnessRevision": {"type": "string", "pattern": "^content-sha256:[0-9a-f]{64}$"},
+                  "resolvedBecause": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {"type": "string", "minLength": 1},
+                    "uniqueItems": true
+                  },
+                  "sourceKind": {"const": "EXTERNAL_CAPABILITY_PACK"},
+                  "sourceRegistrationId": {"const": "pack:web-high-fidelity"},
+                  "sourceCommit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+                  "sourceTree": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+                  "resolvedContentDigest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+                  "validatorIdentity": {
+                    "type": "object",
+                    "required": ["relativePath", "sha256"],
+                    "properties": {
+                      "relativePath": {"const": "scripts/verify-capability-pack"},
+                      "sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+                    },
+                    "additionalProperties": false
+                  },
+                  "registrationFingerprint": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+                },
+                "additionalProperties": false
+              }
+            ]
+          }
+        },
+        "lockFingerprint": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+      },
+      "additionalProperties": false
+    }
+  ]
 }

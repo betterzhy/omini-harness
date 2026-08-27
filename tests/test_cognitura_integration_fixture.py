@@ -10,6 +10,8 @@ import yaml
 
 
 WEB_CAPABILITY_ID = "workflow:web-high-fidelity:reference-driven-visual-fidelity"
+COGNITURA_SOURCE_REPOSITORY = Path("/Users/yuzhuangzhuang/Projects/cognitura")
+COGNITURA_SOURCE_COMMIT = "a14206d5171b776b6fe14dbb0feca582d982a393"
 
 
 def _write_source_authority(source: Path) -> None:
@@ -65,17 +67,51 @@ REAL_PAGE_PILOT=NOT_AUTHORIZED
     )
 
 
-def _copy_cognitura_shadow_fixture(tmp_path: Path) -> tuple[Path, Path]:
+def _copy_harness_fixture(tmp_path: Path) -> Path:
     repository = Path(__file__).parents[1]
     root = tmp_path / "harness"
     for name in ["core", "design", "runtime"]:
         shutil.copytree(repository / name, root / name)
     integration = root / "integrations/cognitura-shadow"
     shutil.copytree(repository / "integrations/cognitura-shadow", integration)
+    return root
+
+
+def _copy_cognitura_shadow_fixture(tmp_path: Path) -> tuple[Path, Path]:
+    root = _copy_harness_fixture(tmp_path)
     source = tmp_path / "cognitura-source"
     source.mkdir()
     _write_source_authority(source)
     return root, source
+
+
+def _clone_real_cognitura_source(tmp_path: Path) -> Path:
+    source = tmp_path / "real-cognitura-source"
+    subprocess.run(
+        [
+            "git",
+            "clone",
+            "--shared",
+            "--dissociate",
+            "--no-checkout",
+            "-q",
+            str(COGNITURA_SOURCE_REPOSITORY),
+            str(source),
+        ],
+        check=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(source), "checkout", "-q", "--detach", COGNITURA_SOURCE_COMMIT],
+        check=True,
+    )
+    assert subprocess.run(
+        ["git", "-C", str(source), "status", "--porcelain=v1", "--untracked-files=all"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout == ""
+    assert not (source / ".git/objects/info/alternates").exists()
+    return source
 
 
 def _run_scenario(tmp_path: Path, name: str) -> dict[str, object]:
@@ -165,6 +201,41 @@ def test_cognitura_business_authority_does_not_imply_page_authorization(tmp_path
     assert resolved["authorityFacts"]["permission.page-implementation"][
         "normalizedValue"
     ] != "ALLOW"
+
+
+@pytest.mark.parametrize("legacy_value", ["AUTHORIZED", "UNRECOGNIZED_VALUE"])
+def test_real_cognitura_legacy_pilot_mutation_fails_closed(
+    tmp_path: Path,
+    legacy_value: str,
+):
+    from evolution_harness.scenario import run_integration_scenario
+
+    root = _copy_harness_fixture(tmp_path)
+    source = _clone_real_cognitura_source(tmp_path)
+    integration = root / "integrations/cognitura-shadow"
+    legacy_binding = source / "docs/engineering/cognitura-high-fidelity-harness-binding.md"
+    original = legacy_binding.read_text(encoding="utf-8")
+    mutated = original.replace(
+        "REAL_PAGE_PILOT=NOT_AUTHORIZED",
+        f"REAL_PAGE_PILOT={legacy_value}",
+    )
+    assert mutated != original
+    legacy_binding.write_text(mutated, encoding="utf-8")
+
+    result = run_integration_scenario(
+        root,
+        integration,
+        source,
+        integration / "scenarios/unauthorized-page-completion.yaml",
+    )
+    checks = {item["name"]: item for item in result["checks"]}
+    pilot = checks["fact:permission.real-page-pilot"]
+
+    assert checks["authority-gate"]["actual"] == "PASS"
+    assert result["gate"] == "NO_GO"
+    assert pilot["expected"] == "DENY"
+    assert pilot["actual"] == "UNKNOWN"
+    assert pilot["pass"] is False
 
 
 @pytest.mark.parametrize(

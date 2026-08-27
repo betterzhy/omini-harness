@@ -50,9 +50,6 @@ authorities:
             - operator: EXACT
               expected: NOT_AUTHORIZED
               value: DENY
-            - operator: EXACT
-              expected: AUTHORIZED
-              value: ALLOW
           default: UNKNOWN
 requiredFacts:
   - task.wave2.active

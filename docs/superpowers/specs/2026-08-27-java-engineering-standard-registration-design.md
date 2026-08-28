@@ -3,14 +3,15 @@
 ## 目标与边界
 
 本 Slice 在 Harness Candidate A `050c58c7b6e8786e653bc5e60f9ad5b26dc01820`
-之上注册 `java-engineering-standard` 0.4.0，并停在独立 Harness worktree
-中的固定候选审查完成状态。
+之上注册 `java-engineering-standard` 0.4.0。原始 Slice 停在独立 Harness worktree 的固定
+候选审查完成状态；用户后续另行授权了 Java Pack 注册状态镜像与协调本地合并。
 
-本 Slice 不修改 Java Pack，不修改现有 Web Pack worktree，不接入真实项目，不合并
-Harness `main`，不 push、发布、部署或安装 Skill。Java 来源仓库中的
-`CANONICAL_CAPABILITY_ID=UNASSIGNED` 与 `REGISTRATION_STATUS=NOT_REGISTERED`
-继续描述尚未进入 Harness `main` 的来源镜像；本候选内的 Harness Registry 是待合入的
-注册事实，不能反向宣称 `main` 已注册。
+注册实现不重做 Java Pack 的 Contract Split、Skill、Eval 或 Gate，也不修改现有 Web Pack
+worktree、不接入真实项目、不 push、发布、部署或安装 Skill。当前固定来源 commit 中的
+`CANONICAL_CAPABILITY_ID=framework:java:java-engineering-standard` 与
+`REGISTRATION_STATUS=REGISTERED` 是经独立审查后合入 Java `main` 的 Harness 注册事实镜像；
+它不代表下游采用、任务完成、发布或部署授权。Harness 候选在实际合入 `main` 前仍是待合入
+注册实现，不得提前宣称 Harness `main` 已注册。
 
 ## 注册身份
 
@@ -31,8 +32,8 @@ fingerprint、v2 lock fingerprint、source revision 或 projection provenance。
 ## Harness-declared manifest
 
 Candidate A 要求来源 tree 内存在 `capability-pack.yaml`。Java 0.4.0 已完成 Contract
-Split、Skill、Eval 与固定候选 Gate，但固定 tree 没有该文件；本 Slice 又禁止写 Java
-仓库。因此注册 Contract 增加两种互斥声明方式：
+Split、Skill、Eval 与固定候选 Gate，但固定 tree 没有该文件；注册实现也不应为满足
+Harness discovery Contract 而改造来源 Pack。因此注册 Contract 增加两种互斥声明方式：
 
 - `SOURCE_TRACKED_MANIFEST`：保持 Web Pack 现有行为，从固定 tree 的
   `capability-pack.yaml` 读取 manifest。

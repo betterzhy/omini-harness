@@ -103,11 +103,12 @@ def test_projected_java_skill_is_self_contained_and_byte_identical_to_fixed_blob
     assert b"../" not in skill_bytes
 
 
-def test_projected_java_skill_install_plan_is_complete(tmp_path: Path):
+@pytest.mark.parametrize("runtime", ["chatgpt", "codex"])
+def test_projected_java_skill_install_plan_is_complete(tmp_path: Path, runtime: str):
     root = Path(__file__).parents[1]
     pack = (
         root
-        / "generated/projections/codex/java-engineering-standard-registration-fixture"
+        / f"generated/projections/{runtime}/java-engineering-standard-registration-fixture"
     )
     target = tmp_path / "neutral-target"
     target.mkdir()

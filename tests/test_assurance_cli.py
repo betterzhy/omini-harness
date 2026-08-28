@@ -9,7 +9,7 @@ from pathlib import Path
 
 import yaml
 
-from capability_pack_test_support import retain_web_registration_fixture
+from capability_pack_test_support import JAVA_CAPABILITY_ID, retain_web_registration_fixture
 
 
 def _copy_repo(tmp_path: Path) -> tuple[Path, Path]:
@@ -46,6 +46,18 @@ def _make_external_pack_source_unavailable(root: Path, tmp_path: Path) -> None:
     registration_path.write_text(
         registration.replace(repository_path, unavailable_path), encoding="utf-8"
     )
+
+
+def test_web_only_copied_repository_fixture_excludes_java_pay_projection(tmp_path: Path):
+    root, _ = _copy_repo(tmp_path)
+    control = root / "integrations/pay-nexus-shadow/control-plane/.agent-evolution"
+    binding = yaml.safe_load((control / "capabilities.yaml").read_text(encoding="utf-8"))
+    lock = yaml.safe_load((control / "capabilities.lock.yaml").read_text(encoding="utf-8"))
+
+    assert JAVA_CAPABILITY_ID not in binding["capabilities"]
+    assert all(item["capabilityId"] != JAVA_CAPABILITY_ID for item in lock["capabilities"])
+    assert lock["schemaVersion"] == "capability-lock/v1"
+    assert not (root / "generated/projections/codex/pay-nexus-shadow").exists()
 
 
 def test_structural_validation_separates_mechanical_gate_from_semantic_quality(tmp_path: Path):

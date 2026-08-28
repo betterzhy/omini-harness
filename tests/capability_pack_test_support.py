@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 import yaml
@@ -43,6 +44,9 @@ def _remove_java_from_copied_pay_integration(root: Path) -> None:
     from evolution_harness.project import build_capability_lock
 
     build_capability_lock(root, integration / "control-plane", write=True)
+    projection = root / "generated/projections/codex/pay-nexus-shadow"
+    if projection.exists():
+        shutil.rmtree(projection)
 
 
 def retain_web_registration_fixture(root: Path) -> None:

@@ -5,6 +5,7 @@ import json
 import subprocess
 from pathlib import Path
 
+import pytest
 import yaml
 
 from evolution_harness.schema import SchemaStore
@@ -16,7 +17,9 @@ SOURCE_COMMIT = "01d0e7d15ef9f6aa7814b0b001fa0b7c2c30e882"
 SOURCE_TREE = "4bfc51d75c9e01e585db4cc073f952043ea01393"
 CONTENT_DIGEST = "sha256:4e5920ddd604d7905647af94eb460f7ab20124fb96ffdea73f50ed6efd5a4581"
 RESOURCE_SET_DIGEST = "sha256:0ae349a6e13c367759774c12d84f83ae14db782f2bea8f5b0fe6406748c82539"
-PAY_SOURCE = Path("/Users/yuzhuangzhuang/Projects/pay-nexus/.worktrees/java-capability-adoption-pilot")
+PAY_REPOSITORY = Path("/Users/yuzhuangzhuang/Projects/pay-nexus")
+PAY_SOURCE_COMMIT = "bd37c62d8219d96c341dbf19318bf97f3f3ef844"
+PAY_SOURCE_TREE = "6c4b080f1bf13f67f9b43340f63f6c27a0528898"
 
 
 def _yaml(path: Path) -> dict:
@@ -37,6 +40,27 @@ def _git_state(path: Path) -> tuple[bytes, bytes, bytes]:
     return head_tree[0], head_tree[1], status
 
 
+@pytest.fixture(scope="module")
+def pay_source(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    target = tmp_path_factory.mktemp("pay-source") / "repository"
+    subprocess.run(
+        ["git", "clone", "-q", "--no-checkout", "--local", str(PAY_REPOSITORY), str(target)],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(target), "checkout", "-q", "--detach", PAY_SOURCE_COMMIT],
+        check=True,
+        capture_output=True,
+    )
+    assert _git_state(target) == (
+        PAY_SOURCE_COMMIT.encode(),
+        PAY_SOURCE_TREE.encode(),
+        b"",
+    )
+    return target
+
+
 def test_pay_nexus_sidecar_binds_exact_java_v2_lock():
     root = Path(__file__).parents[1]
     control = root / "integrations/pay-nexus-shadow/control-plane/.agent-evolution"
@@ -53,12 +77,12 @@ def test_pay_nexus_sidecar_binds_exact_java_v2_lock():
     assert java["validatorIdentity"]["gitHistoryContract"] == "CANDIDATE_PARENT_TREE"
 
 
-def test_pay_registration_matches_lock_and_pilot_is_orthogonal():
+def test_pay_registration_matches_lock_and_pilot_is_orthogonal(pay_source: Path):
     root = Path(__file__).parents[1]
     lock = _yaml(root / "integrations/pay-nexus-shadow/control-plane/.agent-evolution/capabilities.lock.yaml")
-    registration = _yaml(PAY_SOURCE / ".agent-evolution/registration.yaml")
-    progress = (PAY_SOURCE / "docs/architecture/engineering-readiness/java-capability-adoption-pilot-progress.md").read_text(encoding="utf-8")
-    status = (PAY_SOURCE / "current-formal-status.md").read_text(encoding="utf-8")
+    registration = _yaml(pay_source / ".agent-evolution/registration.yaml")
+    progress = (pay_source / "docs/architecture/engineering-readiness/java-capability-adoption-pilot-progress.md").read_text(encoding="utf-8")
+    status = (pay_source / "current-formal-status.md").read_text(encoding="utf-8")
     assert registration["capabilityLockFingerprint"] == lock["lockFingerprint"]
     assert "TaskCardId = JCA-PILOT-RT-001" in progress
     assert "ActiveDevelopmentSliceCount = 0" in progress
@@ -73,6 +97,8 @@ def test_pay_nexus_projection_contains_byte_identical_java_bundle():
     pack = root / "generated/projections/codex/pay-nexus-shadow"
     manifest = json.loads((pack / "projection-manifest.json").read_text(encoding="utf-8"))
     SchemaStore(root).validate("core/schemas/runtime-projection-manifest.schema.json", manifest)
+    assert manifest["authoritySourceRevision"]["head"] == PAY_SOURCE_COMMIT
+    assert manifest["authoritySourceRevision"]["tree"] == PAY_SOURCE_TREE
     generated = next(item for item in manifest["generatedSkills"] if item["id"] == CAPABILITY_ID)
     assert generated["projectionContract"] == "SELF_CONTAINED_SKILL_BUNDLE"
     assert generated["resourceSetDigest"] == RESOURCE_SET_DIGEST
@@ -91,15 +117,17 @@ def test_pay_nexus_projection_contains_byte_identical_java_bundle():
     assert not any("temp-input" in item["path"] for item in manifest["generatedFiles"])
 
 
-def test_pay_nexus_scenarios_and_install_plan_remain_read_only(tmp_path: Path):
+def test_pay_nexus_scenarios_and_install_plan_remain_read_only(
+    tmp_path: Path, pay_source: Path
+):
     from evolution_harness.install import install_projection
     from evolution_harness.scenario import run_integration_scenario
 
     root = Path(__file__).parents[1]
     integration = root / "integrations/pay-nexus-shadow"
-    before = _git_state(PAY_SOURCE)
+    before = _git_state(pay_source)
     results = [
-        run_integration_scenario(root, integration, PAY_SOURCE, scenario)
+        run_integration_scenario(root, integration, pay_source, scenario)
         for scenario in sorted((integration / "scenarios").glob("*.yaml"))
     ]
     assert len(results) == 6
@@ -115,9 +143,9 @@ def test_pay_nexus_scenarios_and_install_plan_remain_read_only(tmp_path: Path):
         root,
         root / "generated/projections/codex/pay-nexus-shadow",
         target,
-        source_root=PAY_SOURCE,
+        source_root=pay_source,
     )
     assert plan["gate"] == "PASS"
     assert plan["mode"] == "DRY_RUN"
     assert len(plan["actions"]) == 46
-    assert before == _git_state(PAY_SOURCE)
+    assert before == _git_state(pay_source)

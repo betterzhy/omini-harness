@@ -218,7 +218,7 @@
       "id": "java-capability-adoption-pilot",
       "path": "docs/architecture/engineering-readiness/java-capability-adoption-pilot-progress.md",
       "role": "SPECIALIZED",
-      "sha256": "d68a102e6e29859ace5164e2443d62d8db257a8402436430069ab4c5e49acb86"
+      "sha256": "1b5c8743c24d7739fc7a673eb535ff721fc225d4462a8b4c05b95068a6d7aa8c"
     },
     {
       "id": "repository-agent-guidance",
@@ -227,13 +227,13 @@
       "sha256": "d88866dddcda5120c65d0390dafa6601ef0fa5dc3337316b9c96c92e8ea4ff0a"
     }
   ],
-  "authoritySnapshotFingerprint": "sha256:54b5e3656f6dfa8a3c1cfd02d082b1bd176a0fb88aac3e2f1c17d4a346a50b5d",
+  "authoritySnapshotFingerprint": "sha256:84b3ab91febbf823708ad35a52490fbf8ae9e6502a3cbddfa8f0f57763dcd469",
   "authoritySourceRevision": {
-    "authoritySetDigest": "sha256:4b3386319742f97b12733b396cd60d31356e2a7ab22642b2e36278fef1692473",
+    "authoritySetDigest": "sha256:94d291a8561fae053b1b0440850f04c4bf1c75df1a73de1d2e975aa6959bd67a",
     "authoritySetStatus": "CLEAN_FOR_AUTHORITY_SET",
-    "head": "5a1c475fc4785f894ddcb6fe4c992324a479481b",
+    "head": "bd37c62d8219d96c341dbf19318bf97f3f3ef844",
     "kind": "GIT",
-    "tree": "c7d1883a29ff9e6e59cf4ed3523afc92cd03ebe8"
+    "tree": "6c4b080f1bf13f67f9b43340f63f6c27a0528898"
   },
   "capabilityLockFingerprint": "sha256:cec81d28e8f6b015fa824db42bd0624d8cca7fa58c52a31ac6a220fbbf49936c",
   "closedTopics": [
@@ -360,7 +360,7 @@
     "Did project truth override generic guidance where applicable?",
     "Did I avoid mutating closure or promotion state?"
   ],
-  "resolutionId": "resolution:ad53830c59d5b73a9b089da1",
+  "resolutionId": "resolution:99bc04697015fab6d5848e3b",
   "runtime": "CODEX",
   "schemaVersion": "resolved-design-context/v1",
   "selectedCapabilities": [

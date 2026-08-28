@@ -19,11 +19,11 @@ CONTENT_DIGEST = "sha256:4e5920ddd604d7905647af94eb460f7ab20124fb96ffdea73f50ed6
 RESOURCE_SET_DIGEST = "sha256:0ae349a6e13c367759774c12d84f83ae14db782f2bea8f5b0fe6406748c82539"
 LOCK_FINGERPRINT = "sha256:cec81d28e8f6b015fa824db42bd0624d8cca7fa58c52a31ac6a220fbbf49936c"
 REGISTRATION_FINGERPRINT = "sha256:5257755a93fafa35f7cb40fcdcd0a50aaf829ec66848e50c8c3e5db9a879e92b"
-AUTHORITY_SNAPSHOT_FINGERPRINT = "sha256:4483f9a1548d9dc1af82a514ae0937ae4b53db43cfb0f575b3b3a8add978330a"
-AUTHORITY_SET_DIGEST = "sha256:65437c8d988c241735cd9be19b3f3a8384b0b992b329554129b20a351f760f8b"
+AUTHORITY_SNAPSHOT_FINGERPRINT = "sha256:75fe45f728f16d256ccdf88608f6a4a8fb98e6ea0c023da3cb5987eb4e6a0c32"
+AUTHORITY_SET_DIGEST = "sha256:ff784fe6b77325eaa793004853ada8e693f886ae434a0983d083bf1f0cc12e48"
 PAY_REPOSITORY = Path("/Users/yuzhuangzhuang/Projects/pay-nexus")
-PAY_SOURCE_COMMIT = "050438405f76dbd1fb7bf13317b9f9d569760a53"
-PAY_SOURCE_TREE = "735541356cabf7501547192e4972f8b236befe18"
+PAY_SOURCE_COMMIT = "8252b746461ed9be40429739d66efea78151ee4d"
+PAY_SOURCE_TREE = "4c8ff242aa2fc436a9f0387a650a7f868d559c9a"
 
 
 def _yaml(path: Path) -> dict:
@@ -122,7 +122,7 @@ def test_pay_registration_matches_lock_and_pilot_is_orthogonal(pay_source: Path)
         "JavaCapabilityPilotCurrentGate = JCA_PILOT_FINAL_CLOSURE_REVIEWED_GO"
         in status
     )
-    assert "CurrentDevelopmentAdmissionStage = PHASE3D_DUAL_LANE_EXECUTION_REVIEWED_REBIND_REQUIRED" in status
+    assert "CurrentDevelopmentAdmissionStage = PHASE3D_DUAL_LANE_EXECUTION_AUTHORITY_CANDIDATE_PENDING_REVIEW" in status
     assert "JavaCapabilityPilotProgressAuthority = docs/architecture/engineering-readiness/java-capability-adoption-pilot-progress.md" in status
 
 

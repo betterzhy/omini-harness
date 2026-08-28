@@ -20,21 +20,21 @@
       "sourcePath": "docs/architecture/engineering-readiness/development-entry-admission-progress.md"
     },
     "governance.er05.current-gate": {
-      "normalizedValue": "NONE_PHASE3D_REVIEWED_REBIND_REQUIRED",
+      "normalizedValue": "PHASE3D_FIXED_CANDIDATE_REVIEW",
       "owner": "development-control-plane-progress",
-      "rawValue": "NONE_PHASE3D_REVIEWED_REBIND_REQUIRED",
+      "rawValue": "PHASE3D_FIXED_CANDIDATE_REVIEW",
       "sourcePath": "docs/architecture/engineering-readiness/development-control-plane-progress.md"
     },
     "governance.er05.next-gate": {
-      "normalizedValue": "PHASE3D_LANE_CANDIDATES",
+      "normalizedValue": "PHASE3D_RECEIPT_BOUND_EXECUTION_ACTIVATION",
       "owner": "development-control-plane-progress",
-      "rawValue": "PHASE3D_LANE_CANDIDATES",
+      "rawValue": "PHASE3D_RECEIPT_BOUND_EXECUTION_ACTIVATION",
       "sourcePath": "docs/architecture/engineering-readiness/development-control-plane-progress.md"
     },
     "governance.er05.status": {
-      "normalizedValue": "PHASE3D_DUAL_LANE_EXECUTION_REVIEWED_REBIND_REQUIRED",
+      "normalizedValue": "PHASE3D_DUAL_LANE_EXECUTION_AUTHORITY_CANDIDATE_PENDING_REVIEW",
       "owner": "development-control-plane-progress",
-      "rawValue": "PHASE3D_DUAL_LANE_EXECUTION_REVIEWED_REBIND_REQUIRED",
+      "rawValue": "PHASE3D_DUAL_LANE_EXECUTION_AUTHORITY_CANDIDATE_PENDING_REVIEW",
       "sourcePath": "docs/architecture/engineering-readiness/development-control-plane-progress.md"
     },
     "governance.java-capability-pilot.current-gate": {
@@ -70,7 +70,7 @@
     "permission.development": {
       "normalizedValue": "DENY",
       "owner": "current-formal-status",
-      "rawValue": "YES_PHASE3D_CONDITIONAL_ON_DURABLE_REPLACEMENT_ACTIVE_LEASES_EXACT_23_26",
+      "rawValue": "NO_PENDING_PHASE3D_FIXED_CANDIDATE_REVIEW",
       "sourcePath": "current-formal-status.md"
     },
     "permission.git-push": {
@@ -110,9 +110,9 @@
       "sourcePath": "current-formal-status.md"
     },
     "project.current-stage": {
-      "normalizedValue": "PHASE3D_DUAL_LANE_EXECUTION_REVIEWED_REBIND_REQUIRED",
+      "normalizedValue": "PHASE3D_DUAL_LANE_EXECUTION_AUTHORITY_CANDIDATE_PENDING_REVIEW",
       "owner": "current-formal-status",
-      "rawValue": "PHASE3D_DUAL_LANE_EXECUTION_REVIEWED_REBIND_REQUIRED",
+      "rawValue": "PHASE3D_DUAL_LANE_EXECUTION_AUTHORITY_CANDIDATE_PENDING_REVIEW",
       "sourcePath": "current-formal-status.md"
     },
     "slice.dev-s01.allowed-future-write": {
@@ -188,13 +188,13 @@
       "id": "active-development-projection",
       "path": "docs/architecture/engineering-readiness/machine/active-development-projection-1.0.0.yaml",
       "role": "DERIVED",
-      "sha256": "83061809b5fdcf04d188f451f6901314f1b59e1c4826abf67386eaec36b87767"
+      "sha256": "a4182fc95fc074244eea1cc917f885d539c37641a4fdf0f404ab42a02cc62952"
     },
     {
       "id": "current-formal-status",
       "path": "current-formal-status.md",
       "role": "CANONICAL",
-      "sha256": "07fc5f9fe7841c5e09f04e59cef704f9a01ec9801e344b40cccb64151f81789a"
+      "sha256": "24030094999f5890ace5f60599ded7999bf34284aab9490e8329d0365af15042"
     },
     {
       "id": "dev-s01-progress",
@@ -206,7 +206,7 @@
       "id": "development-control-plane-progress",
       "path": "docs/architecture/engineering-readiness/development-control-plane-progress.md",
       "role": "SPECIALIZED",
-      "sha256": "b573ca51518e1d266ab03a0c578b33c63ac4cbba1ab56e763216a3b7df0cc77c"
+      "sha256": "37669d996ff0341c6564379c6517ebc724546ee5c66afdd1dcd7cbd0e0a8ad58"
     },
     {
       "id": "development-entry-assessment",
@@ -227,13 +227,13 @@
       "sha256": "d88866dddcda5120c65d0390dafa6601ef0fa5dc3337316b9c96c92e8ea4ff0a"
     }
   ],
-  "authoritySnapshotFingerprint": "sha256:4483f9a1548d9dc1af82a514ae0937ae4b53db43cfb0f575b3b3a8add978330a",
+  "authoritySnapshotFingerprint": "sha256:75fe45f728f16d256ccdf88608f6a4a8fb98e6ea0c023da3cb5987eb4e6a0c32",
   "authoritySourceRevision": {
-    "authoritySetDigest": "sha256:65437c8d988c241735cd9be19b3f3a8384b0b992b329554129b20a351f760f8b",
+    "authoritySetDigest": "sha256:ff784fe6b77325eaa793004853ada8e693f886ae434a0983d083bf1f0cc12e48",
     "authoritySetStatus": "CLEAN_FOR_AUTHORITY_SET",
-    "head": "050438405f76dbd1fb7bf13317b9f9d569760a53",
+    "head": "8252b746461ed9be40429739d66efea78151ee4d",
     "kind": "GIT",
-    "tree": "735541356cabf7501547192e4972f8b236befe18"
+    "tree": "4c8ff242aa2fc436a9f0387a650a7f868d559c9a"
   },
   "capabilityLockFingerprint": "sha256:cec81d28e8f6b015fa824db42bd0624d8cca7fa58c52a31ac6a220fbbf49936c",
   "closedTopics": [
@@ -360,7 +360,7 @@
     "Did project truth override generic guidance where applicable?",
     "Did I avoid mutating closure or promotion state?"
   ],
-  "resolutionId": "resolution:f4f190198bcadde587b3811f",
+  "resolutionId": "resolution:aff10f12615792e8ab46d956",
   "runtime": "CODEX",
   "schemaVersion": "resolved-design-context/v1",
   "selectedCapabilities": [

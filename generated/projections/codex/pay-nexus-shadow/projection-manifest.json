@@ -1,12 +1,12 @@
 {
   "authorityGate": "PASS",
-  "authoritySnapshotFingerprint": "sha256:4483f9a1548d9dc1af82a514ae0937ae4b53db43cfb0f575b3b3a8add978330a",
+  "authoritySnapshotFingerprint": "sha256:75fe45f728f16d256ccdf88608f6a4a8fb98e6ea0c023da3cb5987eb4e6a0c32",
   "authoritySourceRevision": {
-    "authoritySetDigest": "sha256:65437c8d988c241735cd9be19b3f3a8384b0b992b329554129b20a351f760f8b",
+    "authoritySetDigest": "sha256:ff784fe6b77325eaa793004853ada8e693f886ae434a0983d083bf1f0cc12e48",
     "authoritySetStatus": "CLEAN_FOR_AUTHORITY_SET",
-    "head": "050438405f76dbd1fb7bf13317b9f9d569760a53",
+    "head": "8252b746461ed9be40429739d66efea78151ee4d",
     "kind": "GIT",
-    "tree": "735541356cabf7501547192e4972f8b236befe18"
+    "tree": "4c8ff242aa2fc436a9f0387a650a7f868d559c9a"
   },
   "capabilityLockFingerprint": "sha256:cec81d28e8f6b015fa824db42bd0624d8cca7fa58c52a31ac6a220fbbf49936c",
   "generatedFiles": [
@@ -20,11 +20,11 @@
     },
     {
       "path": "resolved-context.json",
-      "sha256": "75f12360fd42ba31d87658d63e9acf5f3c79cb6dc0cc92ef501b77a6eced632b"
+      "sha256": "5e2eb8a8dbbfe359f87eec3f94b98f50e537349b8a6d5527ef7ff16847175131"
     },
     {
       "path": "resolved-task-context.md",
-      "sha256": "5e293c0a3f6de632898385160ff547d81c75ed179f780da64089beaab74af610"
+      "sha256": "35be11882f2cfd7bbe6cf93ee62c92e2aa47b9957388f993fc8b971491c912f2"
     },
     {
       "path": "skills/architecture-review/SKILL.md",
@@ -592,5 +592,5 @@
       "version": "1.0.0"
     }
   ],
-  "sourceResolutionId": "resolution:f4f190198bcadde587b3811f"
+  "sourceResolutionId": "resolution:aff10f12615792e8ab46d956"
 }

@@ -1,36 +1,84 @@
-schemaVersion: capability-lock/v1
+schemaVersion: capability-lock/v2
 project: pay-nexus-shadow
-sourceHarnessRevision: content-sha256:e5ff078bb187b0970dde15b65abacc705b4d384622ce4dc593e25894fae55a41
+sourceHarnessRevision: content-sha256:cc330ce47fa4b1183e3270bc6e9e6ad670df9a550d828647765bae72c31f64ad
 disabledCapabilities: []
 capabilities:
 - capabilityId: framework:agent-design:authority-analysis
   resolvedVersion: 1.0.0
   contentHash: 4fd4857d170c01c8c7672d5e16353be26a2b10897e31952d15172e418eb23f49
-  sourceHarnessRevision: content-sha256:e5ff078bb187b0970dde15b65abacc705b4d384622ce4dc593e25894fae55a41
+  sourceKind: HARNESS_CANONICAL
+  sourceHarnessRevision: content-sha256:cc330ce47fa4b1183e3270bc6e9e6ad670df9a550d828647765bae72c31f64ad
   resolvedBecause:
   - explicit-binding
 - capabilityId: framework:agent-design:lifecycle-analysis
   resolvedVersion: 1.0.0
   contentHash: 7a6d87e989ae4e86814fffff078b9a2af686a1e79e98f1831db7abb9ab017a09
-  sourceHarnessRevision: content-sha256:e5ff078bb187b0970dde15b65abacc705b4d384622ce4dc593e25894fae55a41
+  sourceKind: HARNESS_CANONICAL
+  sourceHarnessRevision: content-sha256:cc330ce47fa4b1183e3270bc6e9e6ad670df9a550d828647765bae72c31f64ad
+  resolvedBecause:
+  - explicit-binding
+- capabilityId: framework:java:java-engineering-standard
+  resolvedVersion: 0.4.0
+  contentHash: 4e5920ddd604d7905647af94eb460f7ab20124fb96ffdea73f50ed6efd5a4581
+  sourceKind: EXTERNAL_CAPABILITY_PACK
+  sourceRegistrationId: pack:java-engineering-standard
+  sourceCommit: 01d0e7d15ef9f6aa7814b0b001fa0b7c2c30e882
+  sourceTree: 4bfc51d75c9e01e585db4cc073f952043ea01393
+  resolvedContentDigest: sha256:4e5920ddd604d7905647af94eb460f7ab20124fb96ffdea73f50ed6efd5a4581
+  validatorIdentity:
+    relativePath: scripts/verify-capability-pack
+    sha256: sha256:5bd70fd85092be6424410a42c0f0a1330820cc3d7d36bc1ee0e948958e54ee01
+    environmentContract: REGISTERED_TOOLCHAIN_OFFLINE_CACHE
+    toolchain:
+      ruby:
+        absolutePath: /opt/homebrew/bin/ruby
+        sha256: sha256:4694e9689687f3c2d30339c3d444a7c3f3eb39d68c7e1d9e37194ece9fe15512
+      rg:
+        absolutePath: /Applications/ChatGPT.app/Contents/Resources/rg
+        sha256: sha256:83761933102235b0932142806cd2f56f76f2b02721078549ffa64866b165ceaf
+      java:
+        absolutePath: /Library/Java/JavaVirtualMachines/temurin-21.jdk/Contents/Home/bin/java
+        sha256: sha256:1069d726eae63d510d2983a2a4c7869f14db200605685c98117d9a27aaa5270f
+      javac:
+        absolutePath: /Library/Java/JavaVirtualMachines/temurin-21.jdk/Contents/Home/bin/javac
+        sha256: sha256:68411beb17069d4a26f54fee148c2540251f42368f991d80a8087dcfa4c90a39
+      mvn:
+        absolutePath: /Users/yuzhuangzhuang/Projects/omini-harness/.worktrees/.capability-pack-cache/java-engineering-standard/home/.m2/wrapper/dists/apache-maven-3.9.16/56ba1f9f/bin/mvn
+        sha256: sha256:f9381d0cb98abaaf9592dae421eddc497e84ed9bfb723b84c111d1350863c3a2
+      javaHome:
+        absolutePath: /Library/Java/JavaVirtualMachines/temurin-21.jdk/Contents/Home
+        sha256: sha256:a30ae0a3178be8aa787ecdb850d150f529e811e9b712c3bfcdbdfc2fdf91fd90
+      mavenHome:
+        absolutePath: /Users/yuzhuangzhuang/Projects/omini-harness/.worktrees/.capability-pack-cache/java-engineering-standard/home/.m2/wrapper/dists/apache-maven-3.9.16/56ba1f9f
+        sha256: sha256:5447e4224f32bb94d26420a62ee18a39ccef3b2dfe62c7739c36c313991c2286
+      mavenRepository:
+        absolutePath: /Users/yuzhuangzhuang/Projects/omini-harness/.worktrees/.capability-pack-cache/java-engineering-standard/home/.m2/repository
+        sha256: sha256:5187065b1bb4bf7d0a139cc97b3fb19213ed3ee713a15d83b525760ed3d520fe
+    gitHistoryContract: CANDIDATE_PARENT_TREE
+    timeoutSeconds: 600
+  registrationFingerprint: sha256:5257755a93fafa35f7cb40fcdcd0a50aaf829ec66848e50c8c3e5db9a879e92b
+  sourceHarnessRevision: content-sha256:cc330ce47fa4b1183e3270bc6e9e6ad670df9a550d828647765bae72c31f64ad
   resolvedBecause:
   - explicit-binding
 - capabilityId: principle:agent-design:closure-requires-authority
   resolvedVersion: 1.0.0
   contentHash: c7bf1c1477f24ad95b0cf6eff47c2fe9a902e33d257b3ffae51f5e92bafc66c0
-  sourceHarnessRevision: content-sha256:e5ff078bb187b0970dde15b65abacc705b4d384622ce4dc593e25894fae55a41
+  sourceKind: HARNESS_CANONICAL
+  sourceHarnessRevision: content-sha256:cc330ce47fa4b1183e3270bc6e9e6ad670df9a550d828647765bae72c31f64ad
   resolvedBecause:
   - explicit-binding
 - capabilityId: principle:agent-design:project-truth-over-generic-guidance
   resolvedVersion: 1.0.0
   contentHash: fb16ec4b824fea1ccb63c589b314253c56b2cd29992c3008a4dde415532d28ab
-  sourceHarnessRevision: content-sha256:e5ff078bb187b0970dde15b65abacc705b4d384622ce4dc593e25894fae55a41
+  sourceKind: HARNESS_CANONICAL
+  sourceHarnessRevision: content-sha256:cc330ce47fa4b1183e3270bc6e9e6ad670df9a550d828647765bae72c31f64ad
   resolvedBecause:
   - explicit-binding
 - capabilityId: skill:agent-design:architecture-review
   resolvedVersion: 1.0.0
   contentHash: 00094ad3677d968fa101879886d2dc0e14bac5926930ddcfad897c9f8879c834
-  sourceHarnessRevision: content-sha256:e5ff078bb187b0970dde15b65abacc705b4d384622ce4dc593e25894fae55a41
+  sourceKind: HARNESS_CANONICAL
+  sourceHarnessRevision: content-sha256:cc330ce47fa4b1183e3270bc6e9e6ad670df9a550d828647765bae72c31f64ad
   resolvedBecause:
   - explicit-binding
-lockFingerprint: sha256:1b5b5116bbd7b98be65f207b0f849cca0cf16cd541e80bb3f6a93f405d4f6bdb
+lockFingerprint: sha256:cec81d28e8f6b015fa824db42bd0624d8cca7fa58c52a31ac6a220fbbf49936c

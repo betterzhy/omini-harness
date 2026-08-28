@@ -1,0 +1,33 @@
+schemaVersion: java-quality-evidence/v1
+subjectCommit: null
+subjectTree: null
+profilePath: java-project-profile.yaml
+profileSha256: null
+qualityConfigPath: code-quality.yaml
+qualityConfigSha256: null
+standardVersion: 0.4.0
+baselineId: java21-spring35-maven3
+mode: strict
+runnerIdentity:
+  sourceLayoutVerifier: null
+  findingAdapterRunner: null
+  qualityBaselineRunner: null
+runtimeFacts:
+  ruby: null
+  java: null
+  maven: null
+  wrapper: null
+  qualityTools: []
+moduleReports: []
+checks:
+  sourceLayout: null
+  suppressionScan: null
+  normalizedFindings: []
+  baselineDelta: null
+results:
+  javaProfileResult: INVALID
+  javaQualityResult: MISSING_EVIDENCE
+issues:
+  - replace null fields with evidence bound to the actual subject commit and tree
+limitations:
+  - this scaffold is not a project completion or release decision

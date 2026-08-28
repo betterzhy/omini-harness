@@ -6,5 +6,6 @@ capabilities:
   - framework:agent-design:authority-analysis
   - framework:agent-design:lifecycle-analysis
   - skill:agent-design:architecture-review
+  - framework:java:java-engineering-standard
 extensions: []
 disabledCapabilities: []

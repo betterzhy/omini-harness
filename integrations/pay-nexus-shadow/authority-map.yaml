@@ -35,6 +35,9 @@ authorities:
         required: true
         normalization: &execution_permission
           rules:
+            - operator: EXACT
+              expected: YES_PHASE3D_CONDITIONAL_ON_DURABLE_REPLACEMENT_ACTIVE_LEASES_EXACT_23_26
+              value: DENY
             - operator: CONTAINS
               expected: CONSUMED
               value: CONSUMED
@@ -110,6 +113,25 @@ authorities:
         required: true
       assessment.final-closure-status:
         key: FinalClosureStatus
+        required: true
+  - id: java-capability-adoption-pilot
+    path: docs/architecture/engineering-readiness/java-capability-adoption-pilot-progress.md
+    format: MARKDOWN_KV
+    role: SPECIALIZED
+    required: true
+    owns:
+      - governance.java-capability-pilot.status
+      - governance.java-capability-pilot.current-gate
+      - governance.java-capability-pilot.next-gate
+    selectors:
+      governance.java-capability-pilot.status:
+        key: Status
+        required: true
+      governance.java-capability-pilot.current-gate:
+        key: CurrentGate
+        required: true
+      governance.java-capability-pilot.next-gate:
+        key: NextGate
         required: true
   - id: dev-s01-progress
     path: docs/architecture/engineering-readiness/dev-s01-cpc-query-reference-slice-progress.md
@@ -209,6 +231,9 @@ requiredFacts:
   - governance.er05.next-gate
   - assessment.status
   - assessment.final-closure-status
+  - governance.java-capability-pilot.status
+  - governance.java-capability-pilot.current-gate
+  - governance.java-capability-pilot.next-gate
   - slice.dev-s01.status
   - slice.dev-s01.current-gate
   - slice.dev-s01.allowed-future-write

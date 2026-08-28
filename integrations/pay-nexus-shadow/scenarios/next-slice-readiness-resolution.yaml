@@ -22,6 +22,7 @@ expected:
     - framework:agent-design:lifecycle-analysis
     - principle:agent-design:project-truth-over-generic-guidance
     - skill:agent-design:architecture-review
+    - framework:java:java-engineering-standard
   excludedCapabilities:
     - principle:agent-design:closure-requires-authority
   conflictResolutionRules:

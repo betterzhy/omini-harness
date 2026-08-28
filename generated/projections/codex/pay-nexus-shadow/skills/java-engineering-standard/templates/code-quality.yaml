@@ -1,0 +1,52 @@
+schemaVersion: 2
+standardIdentity:
+  standardVersion: 0.4.0
+  baselineId: java21-maven3
+  javaSpecCommit: __JAVA_SPEC_FULL_COMMIT_SHA__
+mode: strict
+reactorModules:
+  - modulePath: .
+    qualityRole: source
+    sourceSets:
+      main: [src/main/java]
+      test: [src/test/java]
+    generatedSources: [] # 0.4.0 必填且只允许为空；非空在首次 Maven 前 fail closed
+    reports:
+      checkstyle: target/checkstyle-result.xml
+      pmd: target/pmd.xml
+      spotbugs: target/spotbugsXml.xml
+sourceLayoutVerifier:
+  javaSpecCommit: __JAVA_SPEC_FULL_COMMIT_SHA__
+  relativePath: scripts/verify_source_layout.rb
+  sha256: __SOURCE_LAYOUT_VERIFIER_SHA256__
+qualityRunnerRuntime:
+  rubyCommand: ruby
+  exactVersion: 3.4.10
+gateModes:
+  spotless: hard
+  checkstyle: hard
+  error-prone: hard
+  archunit: hard
+  pmd: observed
+  spotbugs: observed
+hardErrorProneRuleIds:
+  - CollectionIncompatibleType
+  - InterruptedExceptionSwallowed
+  - InterruptedInCatchBlock
+qualityBaselinePath: null
+qualityBaselineSha256: null
+qualityBaselineRunner: null
+findingAdapterRunner:
+  javaSpecCommit: __JAVA_SPEC_FULL_COMMIT_SHA__
+  relativePath: scripts/normalize_quality_findings.rb
+  sha256: __FINDING_ADAPTER_RUNNER_SHA256__
+findingAdapters:
+  checkstyle: {schemaVersion: 1, rawFormat: checkstyle-xml}
+  pmd: {schemaVersion: 1, rawFormat: pmd-xml}
+  spotbugs: {schemaVersion: 1, rawFormat: spotbugs-xml}
+thresholds:
+  productionClassLinesReview: 300
+  methodLinesReview: 60
+  testClassLinesReview: 500
+  parameterCountReview: 7
+  nestingDepthReview: 4

@@ -1,0 +1,221 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://java-spec.local/schemas/java-quality-evidence.schema.json",
+  "title": "Java Quality Evidence",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "subjectCommit", "subjectTree", "profilePath", "profileSha256", "qualityConfigPath", "qualityConfigSha256", "standardVersion", "baselineId", "mode", "runnerIdentity", "runtimeFacts", "moduleReports", "checks", "results", "issues", "limitations"],
+  "properties": {
+    "schemaVersion": {"const": "java-quality-evidence/v1"},
+    "subjectCommit": {"oneOf": [{"$ref": "#/$defs/commit"}, {"type": "null"}]},
+    "subjectTree": {"oneOf": [{"$ref": "#/$defs/commit"}, {"type": "null"}]},
+    "profilePath": {"$ref": "#/$defs/repositoryPath"},
+    "profileSha256": {"oneOf": [{"$ref": "#/$defs/sha256"}, {"type": "null"}]},
+    "qualityConfigPath": {"$ref": "#/$defs/repositoryPath"},
+    "qualityConfigSha256": {"oneOf": [{"$ref": "#/$defs/sha256"}, {"type": "null"}]},
+    "standardVersion": {"const": "0.4.0"},
+    "baselineId": {"enum": ["java21-maven3", "java21-spring35-maven3"]},
+    "mode": {"enum": ["strict", "ratchet"]},
+    "runnerIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sourceLayoutVerifier", "findingAdapterRunner", "qualityBaselineRunner"],
+      "properties": {
+        "sourceLayoutVerifier": {"oneOf": [{"$ref": "#/$defs/sourceLayoutRunner"}, {"type": "null"}]},
+        "findingAdapterRunner": {"oneOf": [{"$ref": "#/$defs/findingAdapterRunner"}, {"type": "null"}]},
+        "qualityBaselineRunner": {"oneOf": [{"$ref": "#/$defs/qualityBaselineRunner"}, {"type": "null"}]}
+      }
+    },
+    "runtimeFacts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ruby", "java", "maven", "wrapper", "qualityTools"],
+      "properties": {
+        "ruby": {"oneOf": [{"$ref": "#/$defs/runtimeFact"}, {"type": "null"}]},
+        "java": {"oneOf": [{"$ref": "#/$defs/runtimeFact"}, {"type": "null"}]},
+        "maven": {"oneOf": [{"$ref": "#/$defs/runtimeFact"}, {"type": "null"}]},
+        "wrapper": {"oneOf": [{"$ref": "#/$defs/wrapperFact"}, {"type": "null"}]},
+        "qualityTools": {
+          "type": "array",
+          "maxItems": 4,
+          "items": {"$ref": "#/$defs/qualityToolFact"}
+        }
+      }
+    },
+    "moduleReports": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/moduleReport"}
+    },
+    "checks": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sourceLayout", "suppressionScan", "normalizedFindings", "baselineDelta"],
+      "properties": {
+        "sourceLayout": {"oneOf": [{"$ref": "#/$defs/checkEvidence"}, {"type": "null"}]},
+        "suppressionScan": {"oneOf": [{"$ref": "#/$defs/checkEvidence"}, {"type": "null"}]},
+        "normalizedFindings": {"type": "array", "maxItems": 3, "items": {"$ref": "#/$defs/normalizedFindingEvidence"}},
+        "baselineDelta": {"oneOf": [{"$ref": "#/$defs/baselineDelta"}, {"type": "null"}]}
+      }
+    },
+    "results": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["javaProfileResult", "javaQualityResult"],
+      "properties": {
+        "javaProfileResult": {"enum": ["VALID", "INVALID"]},
+        "javaQualityResult": {"enum": ["VALID", "INVALID", "MISSING_EVIDENCE"]}
+      }
+    },
+    "issues": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    "limitations": {"type": "array", "items": {"type": "string", "minLength": 1}}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"results": {"properties": {"javaQualityResult": {"const": "VALID"}}}}},
+      "then": {
+        "properties": {
+          "subjectCommit": {"$ref": "#/$defs/commit"},
+          "subjectTree": {"$ref": "#/$defs/commit"},
+          "profileSha256": {"$ref": "#/$defs/sha256"},
+          "qualityConfigSha256": {"$ref": "#/$defs/sha256"},
+          "moduleReports": {"minItems": 1},
+          "runtimeFacts": {
+            "properties": {
+              "ruby": {"$ref": "#/$defs/runtimeFact"},
+              "java": {"$ref": "#/$defs/runtimeFact"},
+              "maven": {"$ref": "#/$defs/runtimeFact"},
+              "wrapper": {"$ref": "#/$defs/wrapperFact"},
+              "qualityTools": {"minItems": 4, "maxItems": 4}
+            }
+          },
+          "checks": {
+            "properties": {
+              "sourceLayout": {"$ref": "#/$defs/checkEvidence"},
+              "suppressionScan": {"$ref": "#/$defs/checkEvidence"},
+              "normalizedFindings": {"minItems": 3, "maxItems": 3}
+            }
+          },
+          "results": {
+            "properties": {
+              "javaProfileResult": {"const": "VALID"}
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {"properties": {"mode": {"const": "strict"}}},
+      "then": {"properties": {"runnerIdentity": {"properties": {"qualityBaselineRunner": {"type": "null"}}}, "checks": {"properties": {"baselineDelta": {"type": "null"}}}}},
+      "else": {"properties": {"runnerIdentity": {"properties": {"qualityBaselineRunner": {"$ref": "#/$defs/qualityBaselineRunner"}}}}}
+    }
+  ],
+  "$defs": {
+    "commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "repositoryPath": {"type": "string", "minLength": 1, "pattern": "^(?!.*(?:^|/)\\.{1,2}(?:/|$))[^/\\\\]+(?:/[^/\\\\]+)*$"},
+    "runner": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["javaSpecCommit", "relativePath", "sha256"],
+      "properties": {"javaSpecCommit": {"$ref": "#/$defs/commit"}, "relativePath": {"type": "string"}, "sha256": {"$ref": "#/$defs/sha256"}}
+    },
+    "sourceLayoutRunner": {"allOf": [{"$ref": "#/$defs/runner"}, {"properties": {"relativePath": {"const": "scripts/verify_source_layout.rb"}}}]},
+    "findingAdapterRunner": {"allOf": [{"$ref": "#/$defs/runner"}, {"properties": {"relativePath": {"const": "scripts/normalize_quality_findings.rb"}}}]},
+    "qualityBaselineRunner": {"allOf": [{"$ref": "#/$defs/runner"}, {"properties": {"relativePath": {"const": "scripts/quality_baseline.rb"}}}]},
+    "outputReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256"],
+      "properties": {"path": {"$ref": "#/$defs/repositoryPath"}, "sha256": {"$ref": "#/$defs/sha256"}}
+    },
+    "runtimeFact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "resolvedExecutablePath", "exitCode", "output"],
+      "properties": {
+        "version": {"type": "string", "minLength": 1},
+        "resolvedExecutablePath": {"type": "string", "pattern": "^/"},
+        "exitCode": {"const": 0},
+        "output": {"$ref": "#/$defs/outputReference"}
+      }
+    },
+    "wrapperFact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["propertiesPath", "distributionSha256", "mvnwSha256", "mvnwCmdSha256"],
+      "properties": {
+        "propertiesPath": {"const": ".mvn/wrapper/maven-wrapper.properties"},
+        "distributionSha256": {"$ref": "#/$defs/sha256"},
+        "mvnwSha256": {"$ref": "#/$defs/sha256"},
+        "mvnwCmdSha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "qualityToolFact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "version", "execution", "exitCode", "output"],
+      "properties": {
+        "id": {"enum": ["checkstyle", "error-prone", "pmd", "spotbugs"]},
+        "version": {"type": "string", "minLength": 1},
+        "execution": {"$ref": "#/$defs/projectCommandRef"},
+        "exitCode": {"const": 0},
+        "output": {"$ref": "#/$defs/outputReference"}
+      }
+    },
+    "projectCommandRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["commandRef"],
+      "properties": {"commandRef": {"type": "string", "pattern": "^[A-Za-z0-9._/-]+#[A-Za-z0-9._/-]+$"}}
+    },
+    "moduleReport": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["modulePath", "effectivePom", "checkstyle", "pmd", "spotbugs"],
+      "properties": {
+        "modulePath": {"type": "string", "minLength": 1},
+        "effectivePom": {"$ref": "#/$defs/outputReference"},
+        "checkstyle": {"$ref": "#/$defs/outputReference"},
+        "pmd": {"$ref": "#/$defs/outputReference"},
+        "spotbugs": {"$ref": "#/$defs/outputReference"}
+      }
+    },
+    "executionIdentity": {
+      "oneOf": [
+        {"type": "object", "additionalProperties": false, "required": ["commandRef"], "properties": {"commandRef": {"type": "string", "pattern": "^[A-Za-z0-9._/-]+#[A-Za-z0-9._/-]+$"}}},
+        {"type": "object", "additionalProperties": false, "required": ["runnerName", "argv"], "properties": {"runnerName": {"enum": ["sourceLayoutVerifier", "findingAdapterRunner", "qualityBaselineRunner"]}, "argv": {"type": "array", "minItems": 1, "items": {"type": "string"}}}}
+      ]
+    },
+    "checkEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["execution", "exitCode", "output"],
+      "properties": {"execution": {"$ref": "#/$defs/executionIdentity"}, "exitCode": {"const": 0}, "output": {"$ref": "#/$defs/outputReference"}}
+    },
+    "normalizedFindingEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["toolId", "execution", "exitCode", "output"],
+      "properties": {
+        "toolId": {"enum": ["checkstyle", "pmd", "spotbugs"]},
+        "execution": {"$ref": "#/$defs/executionIdentity"},
+        "exitCode": {"const": 0},
+        "output": {"$ref": "#/$defs/outputReference"}
+      }
+    },
+    "baselineDelta": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["execution", "exitCode", "output", "baselinePath", "baselineSha256", "newFindings", "staleFindings"],
+      "properties": {
+        "execution": {"$ref": "#/$defs/executionIdentity"},
+        "exitCode": {"const": 0},
+        "output": {"$ref": "#/$defs/outputReference"},
+        "baselinePath": {"$ref": "#/$defs/repositoryPath"},
+        "baselineSha256": {"$ref": "#/$defs/sha256"},
+        "newFindings": {"type": "integer", "minimum": 0},
+        "staleFindings": {"type": "integer", "minimum": 0}
+      }
+    }
+  }
+}

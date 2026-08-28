@@ -1,0 +1,174 @@
+name: Java 21 完整质量门禁
+
+"on":
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+env:
+  JAVA_SPEC_REPOSITORY_URL: __JAVA_SPEC_REPOSITORY_URL__
+  JAVA_SPEC_COMMIT: __JAVA_SPEC_FULL_COMMIT_SHA__
+  CODE_QUALITY_PATH: code-quality.yaml
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: /usr/bin/env -u BASH_ENV -u ENV /bin/bash --noprofile --norc -euo pipefail {0}
+    steps:
+      - name: 检出固定候选
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          clean: true
+
+      - name: 安装活动 JDK
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961
+        with:
+          distribution: temurin
+          java-version: 21.0.12.1+1
+          cache: maven
+          check-latest: false
+
+      - name: 安装治理 Ruby 3.4.10
+        uses: ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b
+        with:
+          ruby-version: "3.4.10"
+
+      - name: 验证 Maven Wrapper 身份
+        run: |
+          test -x ./mvnw
+          test -f .mvn/wrapper/maven-wrapper.properties
+          grep -Fqx 'wrapperVersion=3.3.4' .mvn/wrapper/maven-wrapper.properties
+          grep -Fqx 'distributionType=only-script' .mvn/wrapper/maven-wrapper.properties
+          grep -Fqx 'distributionUrl=https://repo.maven.apache.org/maven2/org/apache/maven/apache-maven/3.9.16/apache-maven-3.9.16-bin.zip' .mvn/wrapper/maven-wrapper.properties
+          grep -Fqx 'distributionSha256Sum=5af3b743dd8b876b5c45da33b676251e5f1687712644abb4ee519ca56e1d89ce' .mvn/wrapper/maven-wrapper.properties
+
+      - name: 固定 java-engineering-standard 控制树、Trust Seam 与 Maven 前置验证
+        id: governance-control
+        run: |
+          for name in RUBYOPT RUBYLIB GEM_HOME GEM_PATH BUNDLE_GEMFILE BASH_ENV ENV; do
+            test -z "${!name-}" || { printf 'QUALITY_PRODUCTION_ENVIRONMENT_INJECTION:%s\n' "$name" >&2; exit 1; }
+          done
+          umask 077
+          CONTROL_ROOT="$RUNNER_TEMP/java-spec-control-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          REPOSITORY_ROOT="$CONTROL_ROOT/repository"
+          TRUST_SEAM="$CONTROL_ROOT/validate-standard.rb"
+          mkdir -p "$REPOSITORY_ROOT"
+          git -C "$REPOSITORY_ROOT" init -q
+          git -C "$REPOSITORY_ROOT" remote add origin "$JAVA_SPEC_REPOSITORY_URL"
+          git -C "$REPOSITORY_ROOT" fetch --no-tags --depth=1 origin "$JAVA_SPEC_COMMIT"
+          git -C "$REPOSITORY_ROOT" cat-file -e "$JAVA_SPEC_COMMIT^{commit}"
+          git -C "$REPOSITORY_ROOT" show "$JAVA_SPEC_COMMIT:scripts/validate-standard.rb" > "$TRUST_SEAM"
+          chmod 600 "$TRUST_SEAM"
+          test "$(git -C "$REPOSITORY_ROOT" rev-parse "$JAVA_SPEC_COMMIT:scripts/validate-standard.rb")" = "$(git hash-object "$TRUST_SEAM")"
+          CONTROL_JSON="$CONTROL_ROOT/validated-config.json"
+          env -i PATH="$PATH" HOME="$HOME" JAVA_HOME="$JAVA_HOME" GITHUB_WORKSPACE="$GITHUB_WORKSPACE" TMPDIR="$RUNNER_TEMP" LANG=C.UTF-8 LC_ALL=C.UTF-8 \
+            ruby --disable-gems "$TRUST_SEAM" "$GITHUB_WORKSPACE" --quality-config-validate "$REPOSITORY_ROOT" "$JAVA_SPEC_COMMIT" "$CODE_QUALITY_PATH" > "$CONTROL_JSON"
+          MODE="$(env -i PATH="$PATH" HOME="$HOME" LANG=C.UTF-8 LC_ALL=C.UTF-8 ruby --disable-gems -rjson -e 'document = JSON.parse(File.read(ARGV.fetch(0))); value = document.fetch("mode"); abort "QUALITY_CONFIG_WORKFLOW_OUTPUT_INVALID" unless %w[strict ratchet].include?(value); puts value' "$CONTROL_JSON")"
+          BASELINE_PATH="$(env -i PATH="$PATH" HOME="$HOME" LANG=C.UTF-8 LC_ALL=C.UTF-8 ruby --disable-gems -rjson -e 'document = JSON.parse(File.read(ARGV.fetch(0))); value = document["baselinePath"]; abort "QUALITY_CONFIG_WORKFLOW_OUTPUT_INVALID" unless value.nil? || (value.is_a?(String) && !value.match?(/[\r\n]/)); puts value.to_s' "$CONTROL_JSON")"
+          printf 'repository=%s\n' "$REPOSITORY_ROOT" >> "$GITHUB_OUTPUT"
+          printf 'trust-seam=%s\n' "$TRUST_SEAM" >> "$GITHUB_OUTPUT"
+          printf 'mode=%s\n' "$MODE" >> "$GITHUB_OUTPUT"
+          printf 'baseline-path=%s\n' "$BASELINE_PATH" >> "$GITHUB_OUTPUT"
+          printf 'candidate=%s\n' "$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: 记录工具链事实
+        run: |
+          printf 'RunnerImage=%s@%s\n' "${ImageOS:-unknown}" "${ImageVersion:-unknown}"
+          env -i PATH="$PATH" HOME="$HOME" JAVA_HOME="$JAVA_HOME" LANG=C.UTF-8 LC_ALL=C.UTF-8 ruby --disable-gems --version
+          env -i PATH="$PATH" HOME="$HOME" JAVA_HOME="$JAVA_HOME" LANG=C.UTF-8 LC_ALL=C.UTF-8 java -version
+          env -i PATH="$PATH" HOME="$HOME" JAVA_HOME="$JAVA_HOME" LANG=C.UTF-8 LC_ALL=C.UTF-8 ./mvnw --version
+
+      - name: 拒绝 tracked 或 stale 注册报告
+        env:
+          TRUST_SEAM: ${{ steps.governance-control.outputs.trust-seam }}
+        run: |
+          env -i PATH="$PATH" HOME="$HOME" JAVA_HOME="$JAVA_HOME" GITHUB_WORKSPACE="$GITHUB_WORKSPACE" TMPDIR="$RUNNER_TEMP" LANG=C.UTF-8 LC_ALL=C.UTF-8 \
+            ruby --disable-gems "$TRUST_SEAM" "$GITHUB_WORKSPACE" --quality-report-provenance "$CODE_QUALITY_PATH" pre-build
+
+      - name: 执行项目 clean verify
+        run: |
+          for name in MAVEN_ARGS MAVEN_OPTS JAVA_TOOL_OPTIONS JDK_JAVA_OPTIONS; do
+            test -z "${!name-}" || { printf 'QUALITY_MAVEN_AMBIENT_ARGUMENT_INJECTION:%s\n' "$name" >&2; exit 1; }
+          done
+          env -i PATH="$PATH" HOME="$HOME" JAVA_HOME="$JAVA_HOME" GITHUB_WORKSPACE="$GITHUB_WORKSPACE" TMPDIR="$RUNNER_TEMP" LANG=C.UTF-8 LC_ALL=C.UTF-8 \
+            ./mvnw -B -ntp clean verify
+
+      - name: 验真逐 Module 原始报告
+        env:
+          TRUST_SEAM: ${{ steps.governance-control.outputs.trust-seam }}
+        run: |
+          env -i PATH="$PATH" HOME="$HOME" JAVA_HOME="$JAVA_HOME" GITHUB_WORKSPACE="$GITHUB_WORKSPACE" TMPDIR="$RUNNER_TEMP" LANG=C.UTF-8 LC_ALL=C.UTF-8 \
+            ruby --disable-gems "$TRUST_SEAM" "$GITHUB_WORKSPACE" --quality-report-provenance "$CODE_QUALITY_PATH" post-build
+
+      - name: 生成逐 Module Effective POM
+        run: |
+          env -i PATH="$PATH" HOME="$HOME" JAVA_HOME="$JAVA_HOME" GITHUB_WORKSPACE="$GITHUB_WORKSPACE" CODE_QUALITY_PATH="$CODE_QUALITY_PATH" TMPDIR="$RUNNER_TEMP" LANG=C.UTF-8 LC_ALL=C.UTF-8 \
+          ruby --disable-gems -ryaml -rfileutils -e '
+            config = YAML.safe_load(File.read(ENV.fetch("CODE_QUALITY_PATH")), permitted_classes: [], permitted_symbols: [], aliases: false)
+            root = "target/java-spec-quality/effective-poms"
+            Array(config.fetch("reactorModules")).each do |mod|
+              module_path = mod.fetch("modulePath")
+              output = module_path == "." ? File.join(root, "effective-pom.xml") : File.join(root, module_path, "effective-pom.xml")
+              FileUtils.mkdir_p(File.dirname(output))
+              pom = module_path == "." ? "pom.xml" : File.join(module_path, "pom.xml")
+              ok = system("./mvnw", "-B", "-ntp", "-N", "-f", pom, "org.apache.maven.plugins:maven-help-plugin:3.5.2:effective-pom", "-Doutput=#{File.expand_path(output)}")
+              abort "QUALITY_EFFECTIVE_POM_GENERATION_FAILED:#{module_path}" unless ok
+            end
+          '
+
+      - name: 执行 Source Layout Verifier
+        env:
+          TRUST_SEAM: ${{ steps.governance-control.outputs.trust-seam }}
+          JAVA_SPEC_ROOT: ${{ steps.governance-control.outputs.repository }}
+        run: |
+          env -i PATH="$PATH" HOME="$HOME" JAVA_HOME="$JAVA_HOME" GITHUB_WORKSPACE="$GITHUB_WORKSPACE" TMPDIR="$RUNNER_TEMP" LANG=C.UTF-8 LC_ALL=C.UTF-8 \
+            ruby --disable-gems "$TRUST_SEAM" "$GITHUB_WORKSPACE" --quality-runner "$JAVA_SPEC_ROOT" "$CODE_QUALITY_PATH" sourceLayoutVerifier -- "$GITHUB_WORKSPACE" "$CODE_QUALITY_PATH" target/java-spec-quality/effective-poms
+
+      - name: 扫描手写 Source Suppression（0.4.0 Generated Source 已前置拒绝）
+        env:
+          TRUST_SEAM: ${{ steps.governance-control.outputs.trust-seam }}
+        run: |
+          env -i PATH="$PATH" HOME="$HOME" JAVA_HOME="$JAVA_HOME" GITHUB_WORKSPACE="$GITHUB_WORKSPACE" TMPDIR="$RUNNER_TEMP" LANG=C.UTF-8 LC_ALL=C.UTF-8 \
+            ruby --disable-gems "$TRUST_SEAM" "$GITHUB_WORKSPACE" --quality-suppression-scan "$CODE_QUALITY_PATH"
+
+      - name: 执行逐 Module Finding Adapter
+        env:
+          TRUST_SEAM: ${{ steps.governance-control.outputs.trust-seam }}
+          JAVA_SPEC_ROOT: ${{ steps.governance-control.outputs.repository }}
+        run: |
+          mkdir -p target/java-spec-quality/normalized
+          env -i PATH="$PATH" HOME="$HOME" JAVA_HOME="$JAVA_HOME" GITHUB_WORKSPACE="$GITHUB_WORKSPACE" TMPDIR="$RUNNER_TEMP" LANG=C.UTF-8 LC_ALL=C.UTF-8 ruby --disable-gems "$TRUST_SEAM" "$GITHUB_WORKSPACE" --quality-finding-adapter "$JAVA_SPEC_ROOT" "$CODE_QUALITY_PATH" checkstyle "${{ steps.governance-control.outputs.candidate }}" target/java-spec-quality/normalized/checkstyle.json
+          env -i PATH="$PATH" HOME="$HOME" JAVA_HOME="$JAVA_HOME" GITHUB_WORKSPACE="$GITHUB_WORKSPACE" TMPDIR="$RUNNER_TEMP" LANG=C.UTF-8 LC_ALL=C.UTF-8 ruby --disable-gems "$TRUST_SEAM" "$GITHUB_WORKSPACE" --quality-finding-adapter "$JAVA_SPEC_ROOT" "$CODE_QUALITY_PATH" pmd "${{ steps.governance-control.outputs.candidate }}" target/java-spec-quality/normalized/pmd.json
+          env -i PATH="$PATH" HOME="$HOME" JAVA_HOME="$JAVA_HOME" GITHUB_WORKSPACE="$GITHUB_WORKSPACE" TMPDIR="$RUNNER_TEMP" LANG=C.UTF-8 LC_ALL=C.UTF-8 ruby --disable-gems "$TRUST_SEAM" "$GITHUB_WORKSPACE" --quality-finding-adapter "$JAVA_SPEC_ROOT" "$CODE_QUALITY_PATH" spotbugs "${{ steps.governance-control.outputs.candidate }}" target/java-spec-quality/normalized/spotbugs.json
+
+      - name: 逐工具验证固定 Normalized Finding Schema
+        env:
+          TRUST_SEAM: ${{ steps.governance-control.outputs.trust-seam }}
+          JAVA_SPEC_ROOT: ${{ steps.governance-control.outputs.repository }}
+        run: |
+          env -i PATH="$PATH" HOME="$HOME" JAVA_HOME="$JAVA_HOME" GITHUB_WORKSPACE="$GITHUB_WORKSPACE" TMPDIR="$RUNNER_TEMP" LANG=C.UTF-8 LC_ALL=C.UTF-8 \
+            ruby --disable-gems "$TRUST_SEAM" "$GITHUB_WORKSPACE" --quality-normalized-schema-validate "$JAVA_SPEC_ROOT" "$JAVA_SPEC_COMMIT" \
+              target/java-spec-quality/normalized/checkstyle.json \
+              target/java-spec-quality/normalized/pmd.json \
+              target/java-spec-quality/normalized/spotbugs.json
+
+      - name: Ratchet 模式执行 Baseline Delta
+        if: ${{ steps.governance-control.outputs.mode == 'ratchet' }}
+        env:
+          TRUST_SEAM: ${{ steps.governance-control.outputs.trust-seam }}
+          JAVA_SPEC_ROOT: ${{ steps.governance-control.outputs.repository }}
+          BASELINE_PATH: ${{ steps.governance-control.outputs.baseline-path }}
+        run: |
+          test "$(env -i PATH="$PATH" HOME="$HOME" LANG=C.UTF-8 LC_ALL=C.UTF-8 ruby --disable-gems -ryaml -e 'puts YAML.safe_load(File.read(ARGV[0]), permitted_classes: [], permitted_symbols: [], aliases: false).fetch("mode")' "$CODE_QUALITY_PATH")" = ratchet
+          ADAPTER_SHA="$(env -i PATH="$PATH" HOME="$HOME" LANG=C.UTF-8 LC_ALL=C.UTF-8 ruby --disable-gems -ryaml -e 'puts YAML.safe_load(File.read(ARGV[0]), permitted_classes: [], permitted_symbols: [], aliases: false).dig("findingAdapterRunner", "sha256")' "$CODE_QUALITY_PATH")"
+          env -i PATH="$PATH" HOME="$HOME" JAVA_HOME="$JAVA_HOME" GITHUB_WORKSPACE="$GITHUB_WORKSPACE" TMPDIR="$RUNNER_TEMP" LANG=C.UTF-8 LC_ALL=C.UTF-8 \
+            ruby --disable-gems "$TRUST_SEAM" "$GITHUB_WORKSPACE" --quality-runner "$JAVA_SPEC_ROOT" "$CODE_QUALITY_PATH" qualityBaselineRunner -- check --normalized target/java-spec-quality/normalized/checkstyle.json --normalized target/java-spec-quality/normalized/pmd.json --baseline "$BASELINE_PATH" --finding-adapter-sha256 "$ADAPTER_SHA"

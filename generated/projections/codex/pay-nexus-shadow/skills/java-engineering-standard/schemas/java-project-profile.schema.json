@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://java-spec.local/schemas/java-project-profile.schema.json",
+  "title": "Java Project Profile",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "standardVersion", "project", "primaryProfile", "additionalProfiles", "baselineId", "moduleBoundariesPath", "codeQualityPath", "exceptionPaths", "outOfScope"],
+  "properties": {
+    "schemaVersion": {"const": "java-project-profile/v1"},
+    "standardVersion": {"const": "0.4.0"},
+    "project": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "profileOwner"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1},
+        "profileOwner": {"type": "string", "minLength": 1}
+      }
+    },
+    "primaryProfile": {"enum": ["library", "batch", "modular-monolith", "microservice"]},
+    "additionalProfiles": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"const": "high-integrity-transaction"}
+    },
+    "baselineId": {"enum": ["java21-maven3", "java21-spring35-maven3"]},
+    "moduleBoundariesPath": {"$ref": "#/$defs/repositoryPath"},
+    "codeQualityPath": {"$ref": "#/$defs/repositoryPath"},
+    "exceptionPaths": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/repositoryPath"}
+    },
+    "outOfScope": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1}
+    }
+  },
+  "$defs": {
+    "repositoryPath": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?!.*(?:^|/)\\.{1,2}(?:/|$))[^/\\\\]+(?:/[^/\\\\]+)*$"
+    }
+  }
+}

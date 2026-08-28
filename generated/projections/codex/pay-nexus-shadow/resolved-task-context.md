@@ -1,15 +1,16 @@
 # Resolved Design Context
 
-- Resolution: `resolution:7c5b43e825be6a19b23623c5`
+- Resolution: `resolution:ad53830c59d5b73a9b089da1`
 - Project: `pay-nexus-shadow`
-- Topic: `next-development-slice-admission`
+- Topic: `harness-shadow-binding`
 - Stage: `CALIBRATION`
-- Intent: `implementation-readiness-review`
+- Intent: `architecture-review`
 - Topic Guard: `OPEN_OR_IN_PROGRESS`
 
 ## Selected Capabilities
 - `framework:agent-design:authority-analysis@1.0.0` hash `4fd4857d170c01c8c7672d5e16353be26a2b10897e31952d15172e418eb23f49`
 - `framework:agent-design:lifecycle-analysis@1.0.0` hash `7a6d87e989ae4e86814fffff078b9a2af686a1e79e98f1831db7abb9ab017a09`
+- `framework:java:java-engineering-standard@0.4.0` hash `4e5920ddd604d7905647af94eb460f7ab20124fb96ffdea73f50ed6efd5a4581`
 - `principle:agent-design:project-truth-over-generic-guidance@1.0.0` hash `fb16ec4b824fea1ccb63c589b314253c56b2cd29992c3008a4dde415532d28ab`
 - `skill:agent-design:architecture-review@1.0.0` hash `00094ad3677d968fa101879886d2dc0e14bac5926930ddcfad897c9f8879c834`
 

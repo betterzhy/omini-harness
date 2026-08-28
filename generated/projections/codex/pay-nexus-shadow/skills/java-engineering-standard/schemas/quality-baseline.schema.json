@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://java-spec.local/schemas/quality-baseline.schema.json",
+  "title": "Java 代码质量债务基线",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "standardVersion", "baselineId", "candidate", "createdBy", "createdOn", "reviewedBy", "reviewedOn", "tools", "findings"],
+  "properties": {
+    "schemaVersion": {"const": 1},
+    "standardVersion": {"const": "0.4.0"},
+    "baselineId": {"type": "string", "minLength": 1},
+    "candidate": {"$ref": "#/$defs/commit"},
+    "createdBy": {"type": "string", "minLength": 1},
+    "createdOn": {"type": "string", "minLength": 1},
+    "reviewedBy": {"type": "string", "minLength": 1},
+    "reviewedOn": {"type": "string", "minLength": 1},
+    "tools": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/tool"}},
+    "findings": {"type": "array", "items": {"$ref": "#/$defs/debtFinding"}}
+  },
+  "$defs": {
+    "commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "modulePath": {"type": "string", "minLength": 1, "pattern": "^(?:\\.|(?!.*(?:^|/)\\.{1,2}(?:/|$))[^/\\\\]+(?:/[^/\\\\]+)*)$"},
+    "repositoryPath": {"type": "string", "minLength": 1, "pattern": "^(?!.*(?:^|/)\\.{1,2}(?:/|$))[^/\\\\]+(?:/[^/\\\\]+)*$"},
+    "tool": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "version", "normalizedReportSha256"],
+      "properties": {
+        "id": {"enum": ["checkstyle", "pmd"]},
+        "version": {"type": "string", "minLength": 1},
+        "normalizedReportSha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "sourceAnchor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "value"],
+      "properties": {
+        "kind": {"enum": ["symbol", "context"]},
+        "value": {"type": "string", "minLength": 1}
+      }
+    },
+    "debtFinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["modulePath", "toolId", "toolVersion", "toolRuleId", "relativePath", "messageKey", "sourceSet", "layerRole", "severity", "sourceAnchor", "fingerprint", "owner", "risk", "firstObservedCandidate", "reviewOn", "exitCondition"],
+      "properties": {
+        "modulePath": {"$ref": "#/$defs/modulePath"},
+        "toolId": {"enum": ["checkstyle", "pmd"]},
+        "toolVersion": {"type": "string", "minLength": 1},
+        "toolRuleId": {"type": "string", "minLength": 1},
+        "relativePath": {"$ref": "#/$defs/repositoryPath"},
+        "messageKey": {"type": "string", "minLength": 1},
+        "sourceSet": {"enum": ["main", "test"]},
+        "layerRole": {"enum": ["contract", "domain", "application", "adapter-in", "adapter-out", "runtime", "technical-support", "test-support", "unclassified"]},
+        "severity": {"enum": ["info", "warning", "error"]},
+        "sourceAnchor": {"$ref": "#/$defs/sourceAnchor"},
+        "fingerprint": {"$ref": "#/$defs/sha256"},
+        "owner": {"type": "string", "minLength": 1},
+        "risk": {"enum": ["low", "medium", "high"]},
+        "firstObservedCandidate": {"$ref": "#/$defs/commit"},
+        "reviewOn": {"type": "string", "minLength": 1},
+        "exitCondition": {"type": "string", "minLength": 1}
+      }
+    }
+  }
+}

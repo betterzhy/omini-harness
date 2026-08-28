@@ -20,22 +20,40 @@
       "sourcePath": "docs/architecture/engineering-readiness/development-entry-admission-progress.md"
     },
     "governance.er05.current-gate": {
-      "normalizedValue": "NONE_ER05_CLOSED",
+      "normalizedValue": "NONE_PHASE3D_REVIEWED_REBIND_REQUIRED",
       "owner": "development-control-plane-progress",
-      "rawValue": "NONE_ER05_CLOSED",
+      "rawValue": "NONE_PHASE3D_REVIEWED_REBIND_REQUIRED",
       "sourcePath": "docs/architecture/engineering-readiness/development-control-plane-progress.md"
     },
     "governance.er05.next-gate": {
-      "normalizedValue": "NONE_ER05_CLOSED",
+      "normalizedValue": "PHASE3D_LANE_CANDIDATES",
       "owner": "development-control-plane-progress",
-      "rawValue": "NONE_ER05_CLOSED",
+      "rawValue": "PHASE3D_LANE_CANDIDATES",
       "sourcePath": "docs/architecture/engineering-readiness/development-control-plane-progress.md"
     },
     "governance.er05.status": {
-      "normalizedValue": "FINAL_CLOSURE_REVIEWED_GO_STABLE_REGISTRATION",
+      "normalizedValue": "PHASE3D_DUAL_LANE_EXECUTION_REVIEWED_REBIND_REQUIRED",
       "owner": "development-control-plane-progress",
-      "rawValue": "FINAL_CLOSURE_REVIEWED_GO_STABLE_REGISTRATION",
+      "rawValue": "PHASE3D_DUAL_LANE_EXECUTION_REVIEWED_REBIND_REQUIRED",
       "sourcePath": "docs/architecture/engineering-readiness/development-control-plane-progress.md"
+    },
+    "governance.java-capability-pilot.current-gate": {
+      "normalizedValue": "JCA_PILOT_CONFIGURATION_TDD",
+      "owner": "java-capability-adoption-pilot",
+      "rawValue": "JCA_PILOT_CONFIGURATION_TDD",
+      "sourcePath": "docs/architecture/engineering-readiness/java-capability-adoption-pilot-progress.md"
+    },
+    "governance.java-capability-pilot.next-gate": {
+      "normalizedValue": "JCA_PILOT_FIXED_CANDIDATE_REVIEW",
+      "owner": "java-capability-adoption-pilot",
+      "rawValue": "JCA_PILOT_FIXED_CANDIDATE_REVIEW",
+      "sourcePath": "docs/architecture/engineering-readiness/java-capability-adoption-pilot-progress.md"
+    },
+    "governance.java-capability-pilot.status": {
+      "normalizedValue": "AUTHORIZED_CONFIGURATION_TDD",
+      "owner": "java-capability-adoption-pilot",
+      "rawValue": "AUTHORIZED_CONFIGURATION_TDD",
+      "sourcePath": "docs/architecture/engineering-readiness/java-capability-adoption-pilot-progress.md"
     },
     "permission.database-write": {
       "normalizedValue": "DENY",
@@ -52,7 +70,7 @@
     "permission.development": {
       "normalizedValue": "DENY",
       "owner": "current-formal-status",
-      "rawValue": "NO_DEV_S01_STAGE5_LOCAL_LANDING_COMPLETE",
+      "rawValue": "YES_PHASE3D_CONDITIONAL_ON_DURABLE_REPLACEMENT_ACTIVE_LEASES_EXACT_23_26",
       "sourcePath": "current-formal-status.md"
     },
     "permission.git-push": {
@@ -92,9 +110,9 @@
       "sourcePath": "current-formal-status.md"
     },
     "project.current-stage": {
-      "normalizedValue": "DEV_S01_STAGE5_LOCAL_REPOSITORY_LANDING_COMPLETED",
+      "normalizedValue": "PHASE3D_DUAL_LANE_EXECUTION_REVIEWED_REBIND_REQUIRED",
       "owner": "current-formal-status",
-      "rawValue": "DEV_S01_STAGE5_LOCAL_REPOSITORY_LANDING_COMPLETED",
+      "rawValue": "PHASE3D_DUAL_LANE_EXECUTION_REVIEWED_REBIND_REQUIRED",
       "sourcePath": "current-formal-status.md"
     },
     "slice.dev-s01.allowed-future-write": {
@@ -170,13 +188,13 @@
       "id": "active-development-projection",
       "path": "docs/architecture/engineering-readiness/machine/active-development-projection-1.0.0.yaml",
       "role": "DERIVED",
-      "sha256": "e5851d69f6596e3bf0e4cdb1949fe98923c3132e3ccf13a6cae599ba6a0f3f6c"
+      "sha256": "83061809b5fdcf04d188f451f6901314f1b59e1c4826abf67386eaec36b87767"
     },
     {
       "id": "current-formal-status",
       "path": "current-formal-status.md",
       "role": "CANONICAL",
-      "sha256": "fb0b20e175bcfc8a10c0f86ede26b8471f7dbd88f0c800557597191f9a0e5a36"
+      "sha256": "af7b8e694ad16be5f10d78a5e337ce688d23b4df727c4fa8ddbdb7d2aff33f18"
     },
     {
       "id": "dev-s01-progress",
@@ -188,7 +206,7 @@
       "id": "development-control-plane-progress",
       "path": "docs/architecture/engineering-readiness/development-control-plane-progress.md",
       "role": "SPECIALIZED",
-      "sha256": "67e8b1f7334c58f8e50a6bc2539834a3ea95ae06aa633d6402e29de3c7718c6c"
+      "sha256": "b573ca51518e1d266ab03a0c578b33c63ac4cbba1ab56e763216a3b7df0cc77c"
     },
     {
       "id": "development-entry-assessment",
@@ -197,21 +215,27 @@
       "sha256": "231780891994bfaf2a44251e16b7c881ec081fc83844a0e3dbfd5b54787d1068"
     },
     {
+      "id": "java-capability-adoption-pilot",
+      "path": "docs/architecture/engineering-readiness/java-capability-adoption-pilot-progress.md",
+      "role": "SPECIALIZED",
+      "sha256": "d68a102e6e29859ace5164e2443d62d8db257a8402436430069ab4c5e49acb86"
+    },
+    {
       "id": "repository-agent-guidance",
       "path": "AGENTS.md",
       "role": "GUIDANCE",
-      "sha256": "d5a60f0382dfa85f154aea6792611a5e43b1bf524c5870817774692af7c9640d"
+      "sha256": "d88866dddcda5120c65d0390dafa6601ef0fa5dc3337316b9c96c92e8ea4ff0a"
     }
   ],
-  "authoritySnapshotFingerprint": "sha256:eda768c0ea421009a980b39a46e29e99f9c4585fcf93f47aa8afa5edd4fd67ef",
+  "authoritySnapshotFingerprint": "sha256:54b5e3656f6dfa8a3c1cfd02d082b1bd176a0fb88aac3e2f1c17d4a346a50b5d",
   "authoritySourceRevision": {
-    "authoritySetDigest": "sha256:15a1b4bb44d0534dc50dd3696d225fa78b12484071830d976e38ef651a0e8356",
+    "authoritySetDigest": "sha256:4b3386319742f97b12733b396cd60d31356e2a7ab22642b2e36278fef1692473",
     "authoritySetStatus": "CLEAN_FOR_AUTHORITY_SET",
-    "head": "6ac4b5cf21eae16a8c662d47e89dea13c5ccb9fc",
+    "head": "5a1c475fc4785f894ddcb6fe4c992324a479481b",
     "kind": "GIT",
-    "tree": "d27cf9161d9c5a4fc0e339c22381d44b574fd202"
+    "tree": "c7d1883a29ff9e6e59cf4ed3523afc92cd03ebe8"
   },
-  "capabilityLockFingerprint": "sha256:1b5b5116bbd7b98be65f207b0f849cca0cf16cd541e80bb3f6a93f405d4f6bdb",
+  "capabilityLockFingerprint": "sha256:cec81d28e8f6b015fa824db42bd0624d8cca7fa58c52a31ac6a220fbbf49936c",
   "closedTopics": [
     {
       "baselineReference": "current-formal-status.md#architecturesemanticstatus",
@@ -260,7 +284,6 @@
         "selectedBecause": [
           "dependency-of:skill:agent-design:architecture-review",
           "explicit-binding",
-          "intent-alias:implementation-readiness-review->architecture-review",
           "intent-match",
           "runtime-match"
         ],
@@ -273,11 +296,21 @@
         "selectedBecause": [
           "dependency-of:skill:agent-design:architecture-review",
           "explicit-binding",
-          "intent-alias:implementation-readiness-review->architecture-review",
           "intent-match",
           "runtime-match"
         ],
         "version": "1.0.0"
+      },
+      {
+        "contentHash": "4e5920ddd604d7905647af94eb460f7ab20124fb96ffdea73f50ed6efd5a4581",
+        "id": "framework:java:java-engineering-standard",
+        "kind": "FRAMEWORK",
+        "selectedBecause": [
+          "explicit-binding"
+        ],
+        "sourceKind": "EXTERNAL_CAPABILITY_PACK",
+        "sourceRegistrationId": "pack:java-engineering-standard",
+        "version": "0.4.0"
       },
       {
         "contentHash": "fb16ec4b824fea1ccb63c589b314253c56b2cd29992c3008a4dde415532d28ab",
@@ -296,7 +329,6 @@
         "kind": "SKILL",
         "selectedBecause": [
           "explicit-binding",
-          "intent-alias:implementation-readiness-review->architecture-review",
           "intent-match",
           "runtime-match",
           "stage-match"
@@ -306,7 +338,7 @@
     ]
   },
   "humanGates": [],
-  "intent": "implementation-readiness-review",
+  "intent": "architecture-review",
   "project": "pay-nexus-shadow",
   "projectAuthorityReferences": [
     "current-formal-status.md",
@@ -315,7 +347,7 @@
     "docs/architecture/engineering-readiness/development-entry-admission-progress.md",
     "docs/architecture/engineering-readiness/dev-s01-cpc-query-reference-slice-progress.md"
   ],
-  "projectBindingHash": "caa604a50553d850d05fa6303f300406a3643805bf26f33b18c7e65bfa5e205c",
+  "projectBindingHash": "0ca2db63194a1a41de162bd1f1b887a85df4585b1d72502adba3e1e5e7cb8f73",
   "projectStateHash": "b723124750fb9beefcbb69fdc8325cc47356b39d5ab2ce78f8edf3e0b4ab2d52",
   "protectedDecisions": [
     "PaymentPlatformV1.13",
@@ -323,12 +355,12 @@
     "Wave 0, DDL, database writes, repeat landing, production operations, and push require separate authority"
   ],
   "reopenSignal": null,
-  "requestedOutput": "next Slice admission guidance and exact planning constraints",
+  "requestedOutput": "read-only authority review",
   "requiredSelfReview": [
     "Did project truth override generic guidance where applicable?",
     "Did I avoid mutating closure or promotion state?"
   ],
-  "resolutionId": "resolution:7c5b43e825be6a19b23623c5",
+  "resolutionId": "resolution:ad53830c59d5b73a9b089da1",
   "runtime": "CODEX",
   "schemaVersion": "resolved-design-context/v1",
   "selectedCapabilities": [
@@ -339,7 +371,6 @@
       "selectedBecause": [
         "dependency-of:skill:agent-design:architecture-review",
         "explicit-binding",
-        "intent-alias:implementation-readiness-review->architecture-review",
         "intent-match",
         "runtime-match"
       ],
@@ -352,11 +383,21 @@
       "selectedBecause": [
         "dependency-of:skill:agent-design:architecture-review",
         "explicit-binding",
-        "intent-alias:implementation-readiness-review->architecture-review",
         "intent-match",
         "runtime-match"
       ],
       "version": "1.0.0"
+    },
+    {
+      "contentHash": "4e5920ddd604d7905647af94eb460f7ab20124fb96ffdea73f50ed6efd5a4581",
+      "id": "framework:java:java-engineering-standard",
+      "kind": "FRAMEWORK",
+      "selectedBecause": [
+        "explicit-binding"
+      ],
+      "sourceKind": "EXTERNAL_CAPABILITY_PACK",
+      "sourceRegistrationId": "pack:java-engineering-standard",
+      "version": "0.4.0"
     },
     {
       "contentHash": "fb16ec4b824fea1ccb63c589b314253c56b2cd29992c3008a4dde415532d28ab",
@@ -375,7 +416,6 @@
       "kind": "SKILL",
       "selectedBecause": [
         "explicit-binding",
-        "intent-alias:implementation-readiness-review->architecture-review",
         "intent-match",
         "runtime-match",
         "stage-match"
@@ -383,10 +423,9 @@
       "version": "1.0.0"
     }
   ],
-  "selectionIntent": "architecture-review",
   "semanticSelectionCandidates": [],
   "stage": "CALIBRATION",
-  "topic": "next-development-slice-admission",
+  "topic": "harness-shadow-binding",
   "topicGuard": "OPEN_OR_IN_PROGRESS",
   "workflowStage": null
 }

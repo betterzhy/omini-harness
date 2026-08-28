@@ -1,0 +1,21 @@
+schemaVersion: 1
+standardVersion: 0.4.0
+baselineId: java21-maven3
+candidate: __FIXED_CANDIDATE_FULL_COMMIT_SHA__
+toolId: checkstyle
+oldToolVersion: __OLD_TOOL_VERSION__
+newToolVersion: __NEW_TOOL_VERSION__
+oldReportSha256: __OLD_NORMALIZED_REPORT_SHA256__
+newReportSha256: __NEW_NORMALIZED_REPORT_SHA256__
+mappingAlgorithmVersion: __MAPPING_ALGORITHM_VERSION__
+classificationCounts:
+  continued: 0
+  renamed: 0
+  new: 0
+  resolved: 0
+  unmapped: 0
+dispositions: []
+reviewer: __UPGRADE_REVIEWER__
+reviewedOn: __UPGRADE_REVIEWED_ON__
+newBaselineSha256: __NEW_BASELINE_SHA256__
+decision: rejected

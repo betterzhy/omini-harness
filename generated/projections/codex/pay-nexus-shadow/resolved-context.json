@@ -38,21 +38,21 @@
       "sourcePath": "docs/architecture/engineering-readiness/development-control-plane-progress.md"
     },
     "governance.java-capability-pilot.current-gate": {
-      "normalizedValue": "JCA_PILOT_CONFIGURATION_TDD",
+      "normalizedValue": "JCA_PILOT_FINAL_CLOSURE_REVIEWED_GO",
       "owner": "java-capability-adoption-pilot",
-      "rawValue": "JCA_PILOT_CONFIGURATION_TDD",
+      "rawValue": "JCA_PILOT_FINAL_CLOSURE_REVIEWED_GO",
       "sourcePath": "docs/architecture/engineering-readiness/java-capability-adoption-pilot-progress.md"
     },
     "governance.java-capability-pilot.next-gate": {
-      "normalizedValue": "JCA_PILOT_FIXED_CANDIDATE_REVIEW",
+      "normalizedValue": "NONE_AWAIT_SEPARATE_PHASE3D_REBIND_AND_DEVELOPMENT_ADMISSION_TASK",
       "owner": "java-capability-adoption-pilot",
-      "rawValue": "JCA_PILOT_FIXED_CANDIDATE_REVIEW",
+      "rawValue": "NONE_AWAIT_SEPARATE_PHASE3D_REBIND_AND_DEVELOPMENT_ADMISSION_TASK",
       "sourcePath": "docs/architecture/engineering-readiness/java-capability-adoption-pilot-progress.md"
     },
     "governance.java-capability-pilot.status": {
-      "normalizedValue": "AUTHORIZED_CONFIGURATION_TDD",
+      "normalizedValue": "CLOSED_FINAL_CLOSURE_REVIEWED_GO_AUTHORIZATION_CONSUMED",
       "owner": "java-capability-adoption-pilot",
-      "rawValue": "AUTHORIZED_CONFIGURATION_TDD",
+      "rawValue": "CLOSED_FINAL_CLOSURE_REVIEWED_GO_AUTHORIZATION_CONSUMED",
       "sourcePath": "docs/architecture/engineering-readiness/java-capability-adoption-pilot-progress.md"
     },
     "permission.database-write": {
@@ -194,7 +194,7 @@
       "id": "current-formal-status",
       "path": "current-formal-status.md",
       "role": "CANONICAL",
-      "sha256": "af7b8e694ad16be5f10d78a5e337ce688d23b4df727c4fa8ddbdb7d2aff33f18"
+      "sha256": "07fc5f9fe7841c5e09f04e59cef704f9a01ec9801e344b40cccb64151f81789a"
     },
     {
       "id": "dev-s01-progress",
@@ -218,7 +218,7 @@
       "id": "java-capability-adoption-pilot",
       "path": "docs/architecture/engineering-readiness/java-capability-adoption-pilot-progress.md",
       "role": "SPECIALIZED",
-      "sha256": "1b5c8743c24d7739fc7a673eb535ff721fc225d4462a8b4c05b95068a6d7aa8c"
+      "sha256": "84cb887fb77e4d35dc48e32ca7700c4613562e2adec5667ccf41221d0af35484"
     },
     {
       "id": "repository-agent-guidance",
@@ -227,13 +227,13 @@
       "sha256": "d88866dddcda5120c65d0390dafa6601ef0fa5dc3337316b9c96c92e8ea4ff0a"
     }
   ],
-  "authoritySnapshotFingerprint": "sha256:84b3ab91febbf823708ad35a52490fbf8ae9e6502a3cbddfa8f0f57763dcd469",
+  "authoritySnapshotFingerprint": "sha256:4483f9a1548d9dc1af82a514ae0937ae4b53db43cfb0f575b3b3a8add978330a",
   "authoritySourceRevision": {
-    "authoritySetDigest": "sha256:94d291a8561fae053b1b0440850f04c4bf1c75df1a73de1d2e975aa6959bd67a",
+    "authoritySetDigest": "sha256:65437c8d988c241735cd9be19b3f3a8384b0b992b329554129b20a351f760f8b",
     "authoritySetStatus": "CLEAN_FOR_AUTHORITY_SET",
-    "head": "bd37c62d8219d96c341dbf19318bf97f3f3ef844",
+    "head": "050438405f76dbd1fb7bf13317b9f9d569760a53",
     "kind": "GIT",
-    "tree": "6c4b080f1bf13f67f9b43340f63f6c27a0528898"
+    "tree": "735541356cabf7501547192e4972f8b236befe18"
   },
   "capabilityLockFingerprint": "sha256:cec81d28e8f6b015fa824db42bd0624d8cca7fa58c52a31ac6a220fbbf49936c",
   "closedTopics": [
@@ -360,7 +360,7 @@
     "Did project truth override generic guidance where applicable?",
     "Did I avoid mutating closure or promotion state?"
   ],
-  "resolutionId": "resolution:99bc04697015fab6d5848e3b",
+  "resolutionId": "resolution:f4f190198bcadde587b3811f",
   "runtime": "CODEX",
   "schemaVersion": "resolved-design-context/v1",
   "selectedCapabilities": [

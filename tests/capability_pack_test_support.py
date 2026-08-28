@@ -10,6 +10,39 @@ from evolution_harness.hashing import canonical_json_bytes, sha256_bytes
 
 
 WEB_REGISTRATION_ID = "pack:web-high-fidelity"
+JAVA_CAPABILITY_ID = "framework:java:java-engineering-standard"
+
+
+def _remove_java_from_copied_pay_integration(root: Path) -> None:
+    """Keep full-repository copies consistent with the Web-only registration fixture."""
+    integration = root / "integrations/pay-nexus-shadow"
+    if not integration.exists():
+        return
+
+    binding_path = integration / "control-plane/.agent-evolution/capabilities.yaml"
+    binding = yaml.safe_load(binding_path.read_text(encoding="utf-8"))
+    binding["capabilities"] = [
+        capability
+        for capability in binding["capabilities"]
+        if capability != JAVA_CAPABILITY_ID
+    ]
+    binding_path.write_text(yaml.safe_dump(binding, sort_keys=False), encoding="utf-8")
+
+    for scenario_path in sorted((integration / "scenarios").glob("*.yaml")):
+        scenario = yaml.safe_load(scenario_path.read_text(encoding="utf-8"))
+        selected = scenario.get("expected", {}).get("selectedCapabilities")
+        if selected is None or JAVA_CAPABILITY_ID not in selected:
+            continue
+        scenario["expected"]["selectedCapabilities"] = [
+            capability for capability in selected if capability != JAVA_CAPABILITY_ID
+        ]
+        scenario_path.write_text(
+            yaml.safe_dump(scenario, sort_keys=False), encoding="utf-8"
+        )
+
+    from evolution_harness.project import build_capability_lock
+
+    build_capability_lock(root, integration / "control-plane", write=True)
 
 
 def retain_web_registration_fixture(root: Path) -> None:
@@ -42,3 +75,4 @@ def retain_web_registration_fixture(root: Path) -> None:
                 "entries": registrations,
             },
         )
+    _remove_java_from_copied_pay_integration(root)

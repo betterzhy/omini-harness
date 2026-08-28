@@ -28,8 +28,8 @@
   "reopenSignal": null,
   "requestedOutput": "registration evidence",
   "requiredSelfReview": [],
-  "resolutionId": "resolution:a31a2e1197349eeb389606c3",
-  "runtime": "CODEX",
+  "resolutionId": "resolution:f2c26c9a8e3007eb31bd4c22",
+  "runtime": "CHATGPT",
   "schemaVersion": "resolved-design-context/v1",
   "selectedCapabilities": [
     {

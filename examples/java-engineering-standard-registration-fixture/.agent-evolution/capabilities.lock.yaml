@@ -1,16 +1,16 @@
 schemaVersion: capability-lock/v2
 project: java-engineering-standard-registration-fixture
-sourceHarnessRevision: content-sha256:663c17b154a77b78af4d2040d96f2a16b81bddf82011718ce3243f270f45f1f1
+sourceHarnessRevision: content-sha256:a025abffa19e91c778ead415ecc15e61b07bc4d3cb1599f2ff45505404a9a45a
 disabledCapabilities: []
 capabilities:
 - capabilityId: framework:java:java-engineering-standard
   resolvedVersion: 0.4.0
-  contentHash: b226ed62d3b3e3710fb0a3611762864524ea94e8c15fe00a3b2b7e40943de666
+  contentHash: 4e5920ddd604d7905647af94eb460f7ab20124fb96ffdea73f50ed6efd5a4581
   sourceKind: EXTERNAL_CAPABILITY_PACK
   sourceRegistrationId: pack:java-engineering-standard
-  sourceCommit: 765e9d00a3173ecfe873c1646f5dbe375de677e7
-  sourceTree: d79644b05149419feba8cdd7860b7dbbb48e4961
-  resolvedContentDigest: sha256:b226ed62d3b3e3710fb0a3611762864524ea94e8c15fe00a3b2b7e40943de666
+  sourceCommit: 01d0e7d15ef9f6aa7814b0b001fa0b7c2c30e882
+  sourceTree: 4bfc51d75c9e01e585db4cc073f952043ea01393
+  resolvedContentDigest: sha256:4e5920ddd604d7905647af94eb460f7ab20124fb96ffdea73f50ed6efd5a4581
   validatorIdentity:
     relativePath: scripts/verify-capability-pack
     sha256: sha256:5bd70fd85092be6424410a42c0f0a1330820cc3d7d36bc1ee0e948958e54ee01
@@ -42,8 +42,8 @@ capabilities:
         sha256: sha256:5187065b1bb4bf7d0a139cc97b3fb19213ed3ee713a15d83b525760ed3d520fe
     gitHistoryContract: CANDIDATE_PARENT_TREE
     timeoutSeconds: 600
-  registrationFingerprint: sha256:08d11e4ad26b2d2a4d5eddd1186a54b720c5221027612b28a00a7047412c9074
-  sourceHarnessRevision: content-sha256:663c17b154a77b78af4d2040d96f2a16b81bddf82011718ce3243f270f45f1f1
+  registrationFingerprint: sha256:5257755a93fafa35f7cb40fcdcd0a50aaf829ec66848e50c8c3e5db9a879e92b
+  sourceHarnessRevision: content-sha256:a025abffa19e91c778ead415ecc15e61b07bc4d3cb1599f2ff45505404a9a45a
   resolvedBecause:
   - explicit-binding
-lockFingerprint: sha256:64f0837e0ba4afce65aebe06e53f1e5ff8e167cbabaab9b6bb23c9ab02f8f209
+lockFingerprint: sha256:72b8083dfd7f10f4dfad87dae4106c8f37d27cec5a27209ed9c653cf2ed35568

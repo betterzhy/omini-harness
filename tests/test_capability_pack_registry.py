@@ -26,8 +26,8 @@ REGISTRATION_ID = "pack:web-high-fidelity"
 FIXTURE_CONTENT_DIGEST = "sha256:42e88d096cd91ade629f1bb47474f24a7730c76c43cf250ae0bc549c30654cd7"
 JAVA_CAPABILITY_ID = "framework:java:java-engineering-standard"
 JAVA_REGISTRATION_ID = "pack:java-engineering-standard"
-JAVA_SOURCE_COMMIT = "765e9d00a3173ecfe873c1646f5dbe375de677e7"
-JAVA_SOURCE_TREE = "d79644b05149419feba8cdd7860b7dbbb48e4961"
+JAVA_SOURCE_COMMIT = "01d0e7d15ef9f6aa7814b0b001fa0b7c2c30e882"
+JAVA_SOURCE_TREE = "4bfc51d75c9e01e585db4cc073f952043ea01393"
 
 
 def _git(repository: Path, *arguments: str) -> str:

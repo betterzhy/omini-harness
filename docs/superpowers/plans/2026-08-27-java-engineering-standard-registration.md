@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 在不修改 Java Pack 的前提下，将固定 `java-engineering-standard` 0.4.0 来源注册到 Harness Capability Pack v2，并生成可验证的中立内部 lock 与 Codex Skill projection。
+**Goal:** 将固定 `java-engineering-standard` 0.4.0 来源注册到 Harness Capability Pack v2，并生成可验证的中立内部 lock 与 ChatGPT/Codex Skill projection。Java Pack 后续仅镜像 Harness 注册事实，不在本计划中重做 Pack Contract、Skill、Eval 或 Gate。
 
 **Architecture:** 扩展 Candidate A 的 external Pack Contract，使 Registry 可选择 source-tracked 或 Harness-declared manifest。两种模式共用 manifest Schema、Git object 内容选择、固定 Gate、locator-free fingerprint、v2 lock 与 projection 验证链。
 
@@ -22,10 +22,10 @@ registration 做选择性验证。该依赖链不改变 Java Pack、Cognitura �
 ## Global Constraints
 
 - Harness 起点固定为 `050c58c7b6e8786e653bc5e60f9ad5b26dc01820`。
-- 不修改 `/Users/yuzhuangzhuang/Projects/java-engineering-standard`。
+- 注册实现不修改 `/Users/yuzhuangzhuang/Projects/java-engineering-standard`；协调合入前允许另行审查并镜像 Harness 已分配的注册身份。
 - 不修改现有 Web Pack worktree，不改变 Web source-tracked manifest 行为。
 - locator 不进入 canonical registration fingerprint、v2 lock source revision 或 projection identity。
-- 不合并 main，不 push、发布、部署、安装 Skill 或接入真实项目。
+- 本计划的固定候选阶段不合并 main；后续本地合并须由用户另行授权。不得 push、发布、部署、安装 Skill 或接入真实项目。
 - 所有行为修改执行 RED → GREEN；完整回归只在候选稳定后运行一次。
 
 ---
@@ -157,12 +157,13 @@ git commit -m "feat(registry)!: 注册 Java Engineering Capability Pack"
 - Create: `examples/java-engineering-standard-registration-fixture/.agent-evolution/design-state.yaml`
 - Create: `examples/java-engineering-standard-registration-fixture/.agent-evolution/capabilities.yaml`
 - Create: `examples/java-engineering-standard-registration-fixture/.agent-evolution/capabilities.lock.yaml`
+- Create: `generated/projections/chatgpt/java-engineering-standard-registration-fixture/**`
 - Create: `generated/projections/codex/java-engineering-standard-registration-fixture/**`
 - Create: `tests/test_java_engineering_standard_registration_fixture.py`
 
 **Interfaces:**
 - Consumes: Task 2 active external registration.
-- Produces: reproducible v2 lock and Codex projection with byte-identical Java Skill.
+- Produces: reproducible v2 lock and ChatGPT/Codex projections with byte-identical Java Skill.
 
 - [ ] **Step 1: Write failing fixture test**
 
@@ -183,7 +184,7 @@ Expected: fixture paths are missing.
 
 - [ ] **Step 3: Build fixture, lock and projection**
 
-Use the existing Harness builders to generate the v2 lock and Codex projection; do not hand-edit
+Use the existing Harness builders to generate the v2 lock and both runtime projections; do not hand-edit
 fingerprints, digests or projection bytes.
 
 - [ ] **Step 4: Verify GREEN**
@@ -194,6 +195,7 @@ Run the Task 3 test and the focused projection/lock suites.
 
 ```bash
 git add examples/java-engineering-standard-registration-fixture \
+  generated/projections/chatgpt/java-engineering-standard-registration-fixture \
   generated/projections/codex/java-engineering-standard-registration-fixture \
   tests/test_java_engineering_standard_registration_fixture.py
 git commit -m "test(projection)!: 固定 Java Pack 中立投影证据"
@@ -225,8 +227,8 @@ PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 .venv/bin/pytest -q \
 
 ```bash
 bash /Users/yuzhuangzhuang/Projects/java-engineering-standard/scripts/verify-capability-pack \
-  765e9d00a3173ecfe873c1646f5dbe375de677e7 \
-  d79644b05149419feba8cdd7860b7dbbb48e4961
+  01d0e7d15ef9f6aa7814b0b001fa0b7c2c30e882 \
+  4bfc51d75c9e01e585db4cc073f952043ea01393
 ```
 
 - [ ] **Step 3: Run one complete Harness regression and static checks**

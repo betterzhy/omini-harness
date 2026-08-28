@@ -26,8 +26,8 @@
     kind: LOCAL_GIT
     repositoryId: java-engineering-standard
     repositoryPath: /Users/yuzhuangzhuang/Projects/java-engineering-standard
-    commit: 765e9d00a3173ecfe873c1646f5dbe375de677e7
-    tree: d79644b05149419feba8cdd7860b7dbbb48e4961
+    commit: 01d0e7d15ef9f6aa7814b0b001fa0b7c2c30e882
+    tree: 4bfc51d75c9e01e585db4cc073f952043ea01393
   contentDeclaration:
     kind: HARNESS_DECLARED_MANIFEST
     projectionContract: SELF_CONTAINED_SKILL_BUNDLE
@@ -64,7 +64,7 @@
         kind: FIXED_CANDIDATE_GATE
         path: scripts/verify-capability-pack
         argumentsContract: CANDIDATE_COMMIT_TREE
-  resolvedContentDigest: sha256:b226ed62d3b3e3710fb0a3611762864524ea94e8c15fe00a3b2b7e40943de666
+  resolvedContentDigest: sha256:4e5920ddd604d7905647af94eb460f7ab20124fb96ffdea73f50ed6efd5a4581
   validator:
     kind: FIXED_CANDIDATE_GATE
     relativePath: scripts/verify-capability-pack

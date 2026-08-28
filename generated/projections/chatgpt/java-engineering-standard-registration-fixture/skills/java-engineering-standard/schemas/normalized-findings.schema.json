@@ -1,0 +1,89 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://java-spec.local/schemas/normalized-findings.schema.json",
+  "title": "归一化代码质量 Finding",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "fingerprintAlgorithmVersion", "candidate", "reactorModules", "tool", "adapter", "moduleReports", "findings"],
+  "properties": {
+    "schemaVersion": {"const": 1},
+    "fingerprintAlgorithmVersion": {"const": "sha256-length-prefixed-v1"},
+    "candidate": {"$ref": "#/$defs/commit"},
+    "reactorModules": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/module"}},
+    "tool": {"$ref": "#/$defs/tool"},
+    "adapter": {"$ref": "#/$defs/adapter"},
+    "moduleReports": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/moduleReport"}},
+    "findings": {"type": "array", "items": {"$ref": "#/$defs/finding"}}
+  },
+  "$defs": {
+    "commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "modulePath": {"type": "string", "minLength": 1, "pattern": "^(?:\\.|(?!.*(?:^|/)\\.{1,2}(?:/|$))[^/\\\\]+(?:/[^/\\\\]+)*)$"},
+    "repositoryPath": {"type": "string", "minLength": 1, "pattern": "^(?!.*(?:^|/)\\.{1,2}(?:/|$))[^/\\\\]+(?:/[^/\\\\]+)*$"},
+    "module": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["modulePath", "qualityRole"],
+      "properties": {
+        "modulePath": {"$ref": "#/$defs/modulePath"},
+        "qualityRole": {"enum": ["source", "aggregator"]}
+      }
+    },
+    "tool": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "version", "rawFormat"],
+      "properties": {
+        "id": {"enum": ["checkstyle", "pmd", "spotbugs"]},
+        "version": {"type": "string", "minLength": 1},
+        "rawFormat": {"enum": ["checkstyle-xml", "pmd-xml", "spotbugs-xml"]}
+      }
+    },
+    "adapter": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "version", "sha256"],
+      "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "version": {"type": "string", "minLength": 1},
+        "sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "moduleReport": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["modulePath", "rawReportSha256"],
+      "properties": {
+        "modulePath": {"$ref": "#/$defs/modulePath"},
+        "rawReportSha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "sourceAnchor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "value"],
+      "properties": {
+        "kind": {"enum": ["symbol", "context"]},
+        "value": {"type": "string", "minLength": 1}
+      }
+    },
+    "finding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["modulePath", "toolId", "toolVersion", "toolRuleId", "relativePath", "messageKey", "sourceSet", "layerRole", "severity", "sourceAnchor", "fingerprint"],
+      "properties": {
+        "modulePath": {"$ref": "#/$defs/modulePath"},
+        "toolId": {"enum": ["checkstyle", "pmd", "spotbugs"]},
+        "toolVersion": {"type": "string", "minLength": 1},
+        "toolRuleId": {"type": "string", "minLength": 1},
+        "relativePath": {"$ref": "#/$defs/repositoryPath"},
+        "messageKey": {"type": "string", "minLength": 1},
+        "sourceSet": {"enum": ["main", "test"]},
+        "layerRole": {"enum": ["contract", "domain", "application", "adapter-in", "adapter-out", "runtime", "technical-support", "test-support", "unclassified"]},
+        "severity": {"enum": ["info", "warning", "error"]},
+        "sourceAnchor": {"$ref": "#/$defs/sourceAnchor"},
+        "fingerprint": {"$ref": "#/$defs/sha256"}
+      }
+    }
+  }
+}

@@ -1,0 +1,169 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://java-spec.local/schemas/module-boundaries.schema.json",
+  "title": "Java 项目模块边界登记",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "project", "contexts", "modules", "storageRoles", "runtimeAssemblies", "adapterSurfaces", "dependencyExceptions", "verification"],
+  "x-crossReferenceRules": [
+    "modules.contextId 必须为空或引用 contexts.id",
+    "contexts.publishedContracts 必须引用同 Context 且 role=contract 的 modules.id",
+    "contexts.storageRoles 必须引用 storageRoles.id",
+    "contexts.runtimeAssemblies 必须引用 runtimeAssemblies.id",
+    "modules.allowedDependencies 必须引用 modules.id",
+    "storageRoles.ownerContextId 必须引用 contexts.id",
+    "runtimeAssemblies.runtimeModuleId 必须引用 role=runtime 的 modules.id",
+    "runtimeAssemblies.assembledModules 必须引用 modules.id 并与 runtime Module 的 allowedDependencies 一致",
+    "adapterSurfaces.contextId 必须引用 contexts.id",
+    "adapterSurfaces.moduleId 必须引用 modules.id",
+    "dependencyExceptions.sourceModuleId 和 targetModuleId 必须引用 modules.id"
+  ],
+  "x-roleDependencyRules": [
+    "contract 禁止依赖已登记模块",
+    "domain 只可依赖同 Context 的 technical-support",
+    "application 只可依赖 contract、同 Context domain 或同 Context technical-support",
+    "adapter-in 和 adapter-out 只可依赖 contract、同 Context application、同 Context domain 或同 Context technical-support",
+    "runtime 只可装配非 runtime、非 test-support 模块",
+    "跨 Context 的非 runtime 依赖目标必须是 contract",
+    "allowedDependencies 与 prohibitedDependencies 禁止对同一 Module 或包产生冲突",
+    "当前活动标准的 dependencyExceptions 必须为空"
+  ],
+  "x-ownershipRules": [
+    "ownsFacts 在所有 Context 中必须唯一",
+    "同一 Context 的 ownsFacts 与 doesNotOwnFacts 禁止重叠",
+    "writableResources 在所有 Storage Role 中必须唯一"
+  ],
+  "x-adapterSurfaceRules": [
+    "adapterSurfaces.moduleId 必须指向 adapter-in 或 adapter-out",
+    "inbound 必须指向 adapter-in，outbound 必须指向 adapter-out",
+    "Surface contextId 必须与模块 contextId 相同"
+  ],
+  "properties": {
+    "schemaVersion": {"const": 1},
+    "project": {"type": "string", "minLength": 1},
+    "contexts": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "factOwner", "ownsFacts", "doesNotOwnFacts", "publishedContracts", "storageRoles", "runtimeAssemblies"],
+        "properties": {
+          "id": {"type": "string", "minLength": 1},
+          "factOwner": {"type": "string", "minLength": 1},
+          "ownsFacts": {"type": "array", "minItems": 1, "items": {"type": "string"}, "uniqueItems": true},
+          "doesNotOwnFacts": {"type": "array", "minItems": 1, "items": {"type": "string"}, "uniqueItems": true},
+          "publishedContracts": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+          "storageRoles": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+          "runtimeAssemblies": {"type": "array", "items": {"type": "string"}, "uniqueItems": true}
+        }
+      }
+    },
+    "modules": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "contextId", "role", "mavenArtifact", "basePackage", "exposedPackages", "allowedDependencies", "prohibitedDependencies"],
+        "properties": {
+          "id": {"type": "string", "minLength": 1},
+          "contextId": {"type": ["string", "null"], "minLength": 1},
+          "role": {"enum": ["contract", "domain", "application", "adapter-in", "adapter-out", "runtime", "technical-support", "test-support"]},
+          "mavenArtifact": {"type": "string", "minLength": 1},
+          "basePackage": {"type": "string", "minLength": 1},
+          "exposedPackages": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+          "allowedDependencies": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+          "prohibitedDependencies": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["kind", "target", "reason"],
+              "properties": {
+                "kind": {"enum": ["module", "package"]},
+                "target": {"type": "string", "minLength": 1},
+                "reason": {"type": "string", "minLength": 1}
+              }
+            }
+          }
+        }
+      }
+    },
+    "storageRoles": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "ownerContextId", "writableResources", "migrationOwner"],
+        "properties": {
+          "id": {"type": "string", "minLength": 1},
+          "ownerContextId": {"type": "string", "minLength": 1},
+          "writableResources": {"type": "array", "minItems": 1, "items": {"type": "string"}, "uniqueItems": true},
+          "migrationOwner": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "runtimeAssemblies": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "deploymentUnit", "runtimeModuleId", "assembledModules"],
+        "properties": {
+          "id": {"type": "string", "minLength": 1},
+          "deploymentUnit": {"type": "string", "minLength": 1},
+          "runtimeModuleId": {"type": "string", "minLength": 1},
+          "assembledModules": {"type": "array", "minItems": 1, "items": {"type": "string"}, "uniqueItems": true}
+        }
+      }
+    },
+    "adapterSurfaces": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "contextId", "moduleId", "direction", "kind", "protocolOrTechnology", "portOrContract", "authority"],
+        "properties": {
+          "id": {"type": "string", "minLength": 1},
+          "contextId": {"type": "string", "minLength": 1},
+          "moduleId": {"type": "string", "minLength": 1},
+          "direction": {"enum": ["inbound", "outbound"]},
+          "kind": {"enum": ["http", "message", "database", "third-party-sdk", "file", "cli", "scheduler"]},
+          "protocolOrTechnology": {"type": "string", "minLength": 1},
+          "portOrContract": {"type": "string", "minLength": 1},
+          "authority": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "dependencyExceptions": {
+      "type": "array",
+      "maxItems": 0,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "sourceModuleId", "targetModuleId", "ruleId", "adr", "owner", "expiresOn", "evidence"],
+        "properties": {
+          "id": {"type": "string", "minLength": 1},
+          "sourceModuleId": {"type": "string", "minLength": 1},
+          "targetModuleId": {"type": "string", "minLength": 1},
+          "ruleId": {"const": "ARCH-016"},
+          "adr": {"type": "string", "minLength": 1},
+          "owner": {"type": "string", "minLength": 1},
+          "expiresOn": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"},
+          "evidence": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "verification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["command", "evidence"],
+      "properties": {
+        "command": {"type": "string", "minLength": 1},
+        "evidence": {"type": "string", "minLength": 1}
+      }
+    }
+  }
+}

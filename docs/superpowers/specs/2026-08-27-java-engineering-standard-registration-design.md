@@ -89,7 +89,7 @@ resolver，禁止后续阶段退回到 locator 上的可变文件系统内容。
 ## 中立内部 fixture
 
 新增 `examples/java-engineering-standard-registration-fixture`，只用于证明 Registry →
-v2 lock → resolved context → Codex projection 的闭环。它不代表任何真实 Java 项目采用，
+v2 lock → resolved context → ChatGPT/Codex projection 的闭环。它不代表任何真实 Java 项目采用，
 不包含业务 Authority、Profile 选择、构建命令或项目完成状态。
 
 投影包含 Harness 声明活动范围内的 45 个固定来源 blob，以来源 Skill 为入口并保留相对资源
@@ -129,6 +129,7 @@ Contract、实现与注册：
 - `examples/java-engineering-standard-registration-fixture/.agent-evolution/design-state.yaml`
 - `examples/java-engineering-standard-registration-fixture/.agent-evolution/capabilities.yaml`
 - `examples/java-engineering-standard-registration-fixture/.agent-evolution/capabilities.lock.yaml`
+- `generated/projections/chatgpt/java-engineering-standard-registration-fixture/**`
 - `generated/projections/codex/java-engineering-standard-registration-fixture/**`
 
 测试：

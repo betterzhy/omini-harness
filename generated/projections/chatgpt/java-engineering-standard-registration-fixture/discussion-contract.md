@@ -15,7 +15,7 @@
 
 ## Scope
 - Produce: registration evidence
-- Runtime: CODEX
+- Runtime: CHATGPT
 
 ## Non-Goals
 - Do not silently change project decisions, topic closure state, or shared capability lifecycle.

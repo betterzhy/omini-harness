@@ -46,14 +46,14 @@
       "distributionStatus": "LOCAL_ONLY",
       "packVersion": "0.4.0",
       "registrationId": "pack:java-engineering-standard",
-      "resolvedContentDigest": "sha256:b226ed62d3b3e3710fb0a3611762864524ea94e8c15fe00a3b2b7e40943de666",
+      "resolvedContentDigest": "sha256:4e5920ddd604d7905647af94eb460f7ab20124fb96ffdea73f50ed6efd5a4581",
       "schemaVersion": "capability-pack-registration/v1",
       "source": {
-        "commit": "765e9d00a3173ecfe873c1646f5dbe375de677e7",
+        "commit": "01d0e7d15ef9f6aa7814b0b001fa0b7c2c30e882",
         "kind": "LOCAL_GIT",
         "repositoryId": "java-engineering-standard",
         "repositoryPath": "/Users/yuzhuangzhuang/Projects/java-engineering-standard",
-        "tree": "d79644b05149419feba8cdd7860b7dbbb48e4961"
+        "tree": "4bfc51d75c9e01e585db4cc073f952043ea01393"
       },
       "status": "ACTIVE",
       "validator": {
@@ -124,5 +124,5 @@
     }
   ],
   "schemaVersion": "capability-pack-registry/v1",
-  "sourceRevision": "content-sha256:52ee0cd3f457552e40a4d70eb6afe8f0a01f860bcb53cde3bc55f3299c2deb33"
+  "sourceRevision": "content-sha256:2ee74875acb90f5d7c035a33fcc2a614a901d190d8913efc3b948e91cbedf6b3"
 }

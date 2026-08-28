@@ -3,19 +3,19 @@
   "generatedFiles": [
     {
       "path": "discussion-contract.md",
-      "sha256": "35e72979142df45e1ec91dea9a754881a547152f5ef07b7d0acb17fe11bc9939"
+      "sha256": "4dbcff92278de295480f2587f02242022005debf83cdcabdcd26aca1ff7ce7b0"
     },
     {
-      "path": "repository-guidance.md",
-      "sha256": "07746167936eb39d12a8d465beaf8355744bd7eebbe5895db81fd76c41acfe54"
+      "path": "project-instructions.md",
+      "sha256": "f8d2a90e8d60e3f38cc3c9ef37746fb79777cd3968137ece5638040a62249dbd"
     },
     {
       "path": "resolved-context.json",
-      "sha256": "0bf9bd0ab93098bdd6002ad25876ad5af3b77a6be3ec734e12dd46a785df4e1d"
+      "sha256": "a1496d3d9ecfc5584e741e8785c085706b6332ac900fad7be0f7c9ad8404fcc1"
     },
     {
-      "path": "resolved-task-context.md",
-      "sha256": "96ab7df8e32136a2fc81c96e047f33d6a79dddf056a48418e2b148742ff69a5e"
+      "path": "resolved-context.md",
+      "sha256": "bd10a3e62be41f3d44a8b96fceb48b9f3b281e24a6a21c4aec09d9937a513129"
     },
     {
       "path": "skills/java-engineering-standard/AGENTS.md",
@@ -489,9 +489,9 @@
   "project": "java-engineering-standard-registration-fixture",
   "projectBindingHash": "82b51ec071edd06f14ec7f7efdd75693bd3f623f85f8fd5cb0454306054b95e0",
   "projectStateHash": "8df5a991ef9d060782a03981c1a5b1beb2e94ccfca24033d2ec3aae3c9ac7f76",
-  "projectionType": "CODEX_REPOSITORY_PACK",
-  "projectionVersion": "codex-project-pack/1",
-  "runtime": "CODEX",
+  "projectionType": "CHATGPT_PROJECT_PACK",
+  "projectionVersion": "chatgpt-project-pack/1",
+  "runtime": "CHATGPT",
   "schemaVersion": "runtime-projection-manifest/v1",
   "sourceCapabilities": [
     {
@@ -548,5 +548,5 @@
       "version": "0.4.0"
     }
   ],
-  "sourceResolutionId": "resolution:a31a2e1197349eeb389606c3"
+  "sourceResolutionId": "resolution:f2c26c9a8e3007eb31bd4c22"
 }

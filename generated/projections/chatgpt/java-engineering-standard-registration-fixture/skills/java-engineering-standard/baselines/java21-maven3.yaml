@@ -1,0 +1,186 @@
+schemaVersion: 2
+id: java21-maven3
+status: active
+standardVersion: 0.4.0
+lifecycle:
+  introducedOn: "2026-08-24"
+  revisedOn: "2026-08-25"
+  nextReviewOn: "2026-12-01"
+  replacement: null
+language:
+  release: 21
+  localDevelopment:
+    distribution: Eclipse Temurin
+    version: 21.0.7+6
+    validUntil: "2026-12-31"
+    purpose: short-term-existing-local-runtime
+  ciReleaseTarget:
+    distribution: Eclipse Temurin
+    version: 21.0.12.1+1
+build:
+  tool: Maven Wrapper
+  mavenVersion: 3.9.16
+  wrapperPluginVersion: 3.3.4
+  wrapperType: only-script
+  wrapperScriptSha256:
+    mvnw: cae96cef89ebea3531221f4ae17c23cf8edf67d00eae8306d4186ae1bbed4d02
+    mvnwCmd: 4a361e1374a3e5ad6d03e18e9adc0cf181ac5058ac6203b76f0ba3b456b56481
+  mavenDistribution:
+    url: https://repo.maven.apache.org/maven2/org/apache/maven/apache-maven/3.9.16/apache-maven-3.9.16-bin.zip
+    sha256: 5af3b743dd8b876b5c45da33b676251e5f1687712644abb4ee519ca56e1d89ce
+  compilerPluginVersion: 3.15.0
+  resourcesPluginVersion: 3.4.0
+  jarPluginVersion: 3.5.0
+  cleanPluginVersion: 3.2.0
+  installPluginVersion: 3.1.4
+  deployPluginVersion: 3.1.4
+  sitePluginVersion: 3.12.1
+  surefirePluginVersion: 3.5.5
+  failsafePluginVersion: 3.5.5
+  enforcerPluginVersion: 3.6.3
+  dependencyPluginVersion: 3.11.0
+  helpPluginVersion: 3.5.2
+qualityRunnerRuntime:
+  exactVersion: 3.4.10
+formatting:
+  spotlessMavenPluginVersion: 3.10.0
+  googleJavaFormatVersion: 1.36.1
+architectureTesting:
+  archUnitVersion: 1.5.0
+quality:
+  mavenCheckstylePluginVersion: 3.6.0
+  checkstyleVersion: 13.9.0
+  errorProneVersion: 2.50.0
+  mavenPmdPluginVersion: 3.28.0
+  pmdVersion: 7.26.0
+  spotbugsMavenPluginVersion: 4.10.4.0
+  hardErrorProneRuleIds:
+    - CollectionIncompatibleType
+    - InterruptedExceptionSwallowed
+    - InterruptedInCatchBlock
+  sourceRootInventory:
+    schemaVersion: 1
+    mavenVersion: 3.9.16
+    packagingTypes: [jar, pom]
+    effectivePomProducer:
+      groupId: org.apache.maven.plugins
+      artifactId: maven-help-plugin
+      version: 3.5.2
+      goal: effective-pom
+      mode: per-module-non-recursive
+    plugins:
+      - groupId: org.apache.maven.plugins
+        artifactId: maven-compiler-plugin
+        version: 3.15.0
+        allowedDependencies: []
+        executions:
+          - {id: default-compile, phase: compile, goals: [compile], packaging: [jar], qualityRoles: [source], sourceRootEffect: compiler-main}
+          - {id: default-testCompile, phase: test-compile, goals: [testCompile], packaging: [jar], qualityRoles: [source], sourceRootEffect: compiler-test}
+      - groupId: org.apache.maven.plugins
+        artifactId: maven-surefire-plugin
+        version: 3.5.5
+        allowedDependencies: []
+        executions:
+          - {id: default-test, phase: test, goals: [test], packaging: [jar], qualityRoles: [source], sourceRootEffect: none}
+      - groupId: org.apache.maven.plugins
+        artifactId: maven-failsafe-plugin
+        version: 3.5.5
+        allowedDependencies: []
+        executions:
+          - {id: null, phase: null, goals: [integration-test, verify], packaging: [jar, pom], qualityRoles: [source, aggregator], sourceRootEffect: none}
+      - groupId: org.apache.maven.plugins
+        artifactId: maven-enforcer-plugin
+        version: 3.6.3
+        allowedDependencies: []
+        executions:
+          - {id: enforce-toolchain-and-dependencies, phase: null, goals: [enforce], packaging: [jar, pom], qualityRoles: [source, aggregator], sourceRootEffect: none}
+      - groupId: com.diffplug.spotless
+        artifactId: spotless-maven-plugin
+        version: 3.10.0
+        allowedDependencies: []
+        executions:
+          - {id: spotless-check, phase: verify, goals: [check], packaging: [jar], qualityRoles: [source], sourceRootEffect: none}
+          - {id: spotless-check, phase: none, goals: [check], packaging: [pom], qualityRoles: [aggregator], sourceRootEffect: none}
+      - groupId: org.apache.maven.plugins
+        artifactId: maven-checkstyle-plugin
+        version: 3.6.0
+        allowedDependencies:
+          - {groupId: com.puppycrawl.tools, artifactId: checkstyle, version: 13.9.0, type: jar, classifier: null, scope: compile}
+        executions:
+          - {id: checkstyle-check, phase: verify, goals: [check], packaging: [jar], qualityRoles: [source], sourceRootEffect: none}
+          - {id: checkstyle-check, phase: none, goals: [check], packaging: [pom], qualityRoles: [aggregator], sourceRootEffect: none}
+      - groupId: org.apache.maven.plugins
+        artifactId: maven-pmd-plugin
+        version: 3.28.0
+        allowedDependencies:
+          - {groupId: net.sourceforge.pmd, artifactId: pmd-core, version: 7.26.0, type: jar, classifier: null, scope: compile}
+          - {groupId: net.sourceforge.pmd, artifactId: pmd-java, version: 7.26.0, type: jar, classifier: null, scope: compile}
+          - {groupId: net.sourceforge.pmd, artifactId: pmd-javascript, version: 7.26.0, type: jar, classifier: null, scope: compile}
+          - {groupId: net.sourceforge.pmd, artifactId: pmd-jsp, version: 7.26.0, type: jar, classifier: null, scope: compile}
+        executions:
+          - {id: pmd-observed-report, phase: verify, goals: [pmd], packaging: [jar], qualityRoles: [source], sourceRootEffect: none}
+          - {id: pmd-observed-report, phase: none, goals: [pmd], packaging: [pom], qualityRoles: [aggregator], sourceRootEffect: none}
+      - groupId: com.github.spotbugs
+        artifactId: spotbugs-maven-plugin
+        version: 4.10.4.0
+        allowedDependencies: []
+        executions:
+          - {id: spotbugs-observed-report, phase: verify, goals: [spotbugs], packaging: [jar], qualityRoles: [source], sourceRootEffect: none}
+          - {id: spotbugs-observed-report, phase: none, goals: [spotbugs], packaging: [pom], qualityRoles: [aggregator], sourceRootEffect: none}
+      - groupId: org.apache.maven.plugins
+        artifactId: maven-dependency-plugin
+        version: 3.11.0
+        allowedDependencies: []
+        executions:
+          - {id: analyze-dependencies, phase: verify, goals: [analyze-only], packaging: [jar, pom], qualityRoles: [source, aggregator], sourceRootEffect: none}
+      - groupId: org.apache.maven.plugins
+        artifactId: maven-clean-plugin
+        version: 3.2.0
+        allowedDependencies: []
+        executions:
+          - {id: default-clean, phase: clean, goals: [clean], packaging: [jar, pom], qualityRoles: [source, aggregator], sourceRootEffect: none}
+      - groupId: org.apache.maven.plugins
+        artifactId: maven-resources-plugin
+        version: 3.4.0
+        allowedDependencies: []
+        executions:
+          - {id: default-testResources, phase: process-test-resources, goals: [testResources], packaging: [jar], qualityRoles: [source], sourceRootEffect: none}
+          - {id: default-resources, phase: process-resources, goals: [resources], packaging: [jar], qualityRoles: [source], sourceRootEffect: none}
+      - groupId: org.apache.maven.plugins
+        artifactId: maven-jar-plugin
+        version: 3.5.0
+        allowedDependencies: []
+        executions:
+          - {id: default-jar, phase: package, goals: [jar], packaging: [jar], qualityRoles: [source], sourceRootEffect: none}
+      - groupId: org.apache.maven.plugins
+        artifactId: maven-install-plugin
+        version: 3.1.4
+        allowedDependencies: []
+        executions:
+          - {id: default-install, phase: install, goals: [install], packaging: [jar, pom], qualityRoles: [source, aggregator], sourceRootEffect: none}
+      - groupId: org.apache.maven.plugins
+        artifactId: maven-deploy-plugin
+        version: 3.1.4
+        allowedDependencies: []
+        executions:
+          - {id: default-deploy, phase: deploy, goals: [deploy], packaging: [jar, pom], qualityRoles: [source, aggregator], sourceRootEffect: none}
+      - groupId: org.apache.maven.plugins
+        artifactId: maven-site-plugin
+        version: 3.12.1
+        allowedDependencies: []
+        executions:
+          - {id: default-site, phase: site, goals: [site], packaging: [jar, pom], qualityRoles: [source, aggregator], sourceRootEffect: none}
+          - {id: default-deploy, phase: site-deploy, goals: [deploy], packaging: [jar, pom], qualityRoles: [source, aggregator], sourceRootEffect: none}
+ci:
+  runnerLabel: ubuntu-24.04
+  setupJavaDistribution: temurin
+  actions:
+    checkout:
+      version: 6.1.0
+      commit: d23441a48e516b6c34aea4fa41551a30e30af803
+    setupJava:
+      version: 5.7.0
+      commit: b6effb05e454b25005698d916606bdc6ffcbf961
+    setupRuby:
+      version: 1.321.0
+      commit: 95ef2b042f9d7a56d8268cba8559e2842e2ad01b

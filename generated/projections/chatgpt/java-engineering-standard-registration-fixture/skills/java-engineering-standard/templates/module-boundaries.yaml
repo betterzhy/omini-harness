@@ -1,0 +1,76 @@
+schemaVersion: 1
+project: __PROJECT_NAME__
+contexts:
+  - id: __CONTEXT_ID__
+    factOwner: __FACT_OWNER__
+    ownsFacts:
+      - __OWNED_FACT__
+    doesNotOwnFacts:
+      - __EXCLUDED_FACT__
+    publishedContracts:
+      - __MODULE_ID__
+    storageRoles:
+      - __STORAGE_ROLE_ID__
+    runtimeAssemblies:
+      - __RUNTIME_ASSEMBLY_ID__
+modules:
+  - id: __MODULE_ID__
+    contextId: __CONTEXT_ID__
+    role: contract
+    mavenArtifact: __GROUP_ID__:__ARTIFACT_ID__
+    basePackage: __BASE_PACKAGE__
+    exposedPackages:
+      - __BASE_PACKAGE__
+    allowedDependencies: []
+    prohibitedDependencies:
+      - kind: package
+        target: __PROHIBITED_PACKAGE__
+        reason: __PROHIBITION_REASON__
+  - id: __RUNTIME_MODULE_ID__
+    contextId: null
+    role: runtime
+    mavenArtifact: __GROUP_ID__:__RUNTIME_ARTIFACT_ID__
+    basePackage: __RUNTIME_BASE_PACKAGE__
+    exposedPackages: []
+    allowedDependencies:
+      - __MODULE_ID__
+      - __ADAPTER_MODULE_ID__
+    prohibitedDependencies: []
+  - id: __ADAPTER_MODULE_ID__
+    contextId: __CONTEXT_ID__
+    role: adapter-out
+    mavenArtifact: __GROUP_ID__:__ADAPTER_ARTIFACT_ID__
+    basePackage: __ADAPTER_BASE_PACKAGE__
+    exposedPackages: []
+    allowedDependencies:
+      - __MODULE_ID__
+    prohibitedDependencies:
+      - kind: module
+        target: __RUNTIME_MODULE_ID__
+        reason: Owner Module 禁止反向依赖 Runtime Module
+storageRoles:
+  - id: __STORAGE_ROLE_ID__
+    ownerContextId: __CONTEXT_ID__
+    writableResources:
+      - __OWNED_SCHEMA_TABLE_OR_STORE__
+    migrationOwner: __MIGRATION_OWNER__
+runtimeAssemblies:
+  - id: __RUNTIME_ASSEMBLY_ID__
+    deploymentUnit: __DEPLOYMENT_UNIT__
+    runtimeModuleId: __RUNTIME_MODULE_ID__
+    assembledModules:
+      - __MODULE_ID__
+      - __ADAPTER_MODULE_ID__
+adapterSurfaces:
+  - id: __ADAPTER_SURFACE_ID__
+    contextId: __CONTEXT_ID__
+    moduleId: __ADAPTER_MODULE_ID__
+    direction: outbound
+    kind: database
+    protocolOrTechnology: __PROTOCOL_OR_TECHNOLOGY__
+    portOrContract: __PORT_OR_CONTRACT__
+    authority: __ADAPTER_SURFACE_AUTHORITY__
+dependencyExceptions: []
+verification:
+  command: __ARCHITECTURE_VERIFICATION_COMMAND__
+  evidence: __ARCHITECTURE_VERIFICATION_EVIDENCE__

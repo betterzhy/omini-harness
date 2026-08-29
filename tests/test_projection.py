@@ -211,28 +211,87 @@ def test_projection_snapshots_external_skill_from_locked_git_blob(tmp_path: Path
     ] == [manifest["generatedSkills"][-1]]
 
 
+def test_projection_build_and_freshness_reuse_one_external_verification_session_without_output_drift(
+    tmp_path: Path,
+):
+    from evolution_harness.capability_pack_registry import CapabilityVerificationSession
+    from evolution_harness.projection import build_projection_pack, check_projection_freshness
+    from evolution_harness.resolver import resolve_design_context
+
+    root, project, _ = _external_pack_project(tmp_path)
+    request = {
+        "intent": "visual-reference-review",
+        "topic": "web-fidelity",
+        "requested_output": "review findings",
+        "runtime": "CODEX",
+    }
+    expected_resolved = resolve_design_context(root, project, **request)
+    expected_manifest = build_projection_pack(
+        root,
+        project,
+        expected_resolved,
+        runtime="CODEX",
+    )
+    pack = root / "generated/projections/codex/project-fixture"
+    expected_bytes = _file_snapshot(pack)
+
+    with CapabilityVerificationSession(
+        root,
+        allowed_capability_ids={EXTERNAL_CAPABILITY_ID},
+    ) as session:
+        resolved = resolve_design_context(
+            root,
+            project,
+            **request,
+            verification_session=session,
+        )
+        manifest = build_projection_pack(
+            root,
+            project,
+            resolved,
+            runtime="CODEX",
+            verification_session=session,
+        )
+        freshness = check_projection_freshness(
+            root,
+            project,
+            runtime="CODEX",
+            verification_session=session,
+        )
+        stats = session.stats
+
+    assert resolved == expected_resolved
+    assert manifest == expected_manifest
+    assert _file_snapshot(pack) == expected_bytes
+    assert manifest["capabilityLockFingerprint"] == resolved["capabilityLockFingerprint"]
+    assert freshness.fresh
+    assert stats.full_candidate_gate_count == 1
+    assert stats.isolated_checkout_count == 1
+
+
 def test_projection_build_rejects_external_identity_drift_after_blob_read_without_replacing_canonical(
     tmp_path: Path, monkeypatch
 ):
     from evolution_harness import projection
+    from evolution_harness.capability_pack_registry import VerifiedCapabilityPack
 
     root, project, source = _external_pack_project(tmp_path)
     resolved = _resolved(root, project, runtime="CODEX")
     projection.build_projection_pack(root, project, resolved, runtime="CODEX")
     pack = root / "generated/projections/codex/project-fixture"
     before = _file_snapshot(pack)
-    original_read = projection.read_registered_pack_blob
+    original_read = VerifiedCapabilityPack.read_blob
     advanced = False
 
-    def read_then_advance(registration, relative_path):
+    def read_then_advance(verified_pack, relative_path):
         nonlocal advanced
-        data = original_read(registration, relative_path)
+        data = original_read(verified_pack, relative_path)
         if not advanced:
             advanced = True
             _advance_external_pack_identity(root, project, source)
         return data
 
-    monkeypatch.setattr(projection, "read_registered_pack_blob", read_then_advance)
+    monkeypatch.setattr(VerifiedCapabilityPack, "read_blob", read_then_advance)
 
     with pytest.raises(projection.ProjectionError, match="external source identity drift"):
         projection.build_projection_pack(root, project, resolved, runtime="CODEX")
@@ -310,24 +369,25 @@ def test_projection_validation_rejects_external_identity_drift_after_blob_read(
     tmp_path: Path, monkeypatch
 ):
     from evolution_harness import projection
+    from evolution_harness.capability_pack_registry import VerifiedCapabilityPack
 
     root, project, source = _external_pack_project(tmp_path)
     resolved = _resolved(root, project, runtime="CODEX")
     projection.build_projection_pack(root, project, resolved, runtime="CODEX")
     pack = root / "generated/projections/codex/project-fixture"
     before = _file_snapshot(pack)
-    original_read = projection.read_registered_pack_blob
+    original_read = VerifiedCapabilityPack.read_blob
     advanced = False
 
-    def read_then_advance(registration, relative_path):
+    def read_then_advance(verified_pack, relative_path):
         nonlocal advanced
-        data = original_read(registration, relative_path)
+        data = original_read(verified_pack, relative_path)
         if not advanced:
             advanced = True
             _advance_external_pack_identity(root, project, source)
         return data
 
-    monkeypatch.setattr(projection, "read_registered_pack_blob", read_then_advance)
+    monkeypatch.setattr(VerifiedCapabilityPack, "read_blob", read_then_advance)
 
     with pytest.raises(projection.ProjectionError, match="external source identity drift"):
         projection.validate_projection_pack(root, project, pack, runtime="CODEX")

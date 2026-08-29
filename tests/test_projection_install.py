@@ -105,6 +105,45 @@ def test_external_pack_projection_apply_remains_disabled(tmp_path: Path):
     assert after == before
 
 
+def test_external_pack_install_dry_run_reuses_one_verification_session_without_plan_drift(
+    tmp_path: Path,
+):
+    from evolution_harness.capability_pack_registry import CapabilityVerificationSession
+    from evolution_harness.install import install_projection
+
+    root, _, source_root, pack = _external_pack(tmp_path)
+    target = tmp_path / "target"
+    target.mkdir()
+    expected_plan = install_projection(
+        root,
+        pack,
+        target,
+        source_root=source_root,
+        apply=False,
+    )
+
+    with CapabilityVerificationSession(
+        root,
+        allowed_capability_ids={EXTERNAL_CAPABILITY_ID},
+    ) as session:
+        plan = install_projection(
+            root,
+            pack,
+            target,
+            source_root=source_root,
+            apply=False,
+            verification_session=session,
+        )
+        stats = session.stats
+
+    assert plan == expected_plan
+    assert plan["mode"] == "DRY_RUN"
+    assert plan["gate"] == "PASS"
+    assert not (target / ".agents").exists()
+    assert stats.full_candidate_gate_count == 1
+    assert stats.isolated_checkout_count == 1
+
+
 def _materialize_fixture_projection(root: Path, pack: Path, target: Path) -> Path:
     from evolution_harness import install
     from evolution_harness.generated import deterministic_json_bytes

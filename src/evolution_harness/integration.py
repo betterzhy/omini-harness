@@ -128,6 +128,7 @@ def build_integration_projection(
         resolved,
         runtime=runtime,
         authority_snapshot=snapshot,
+        verification_session=verification_session,
     )
 
 
@@ -179,4 +180,5 @@ def check_integration_projection(
         runtime=runtime,
         authority_snapshot=snapshot,
         expected_resolution_id=expected_resolution_id,
+        verification_session=verification_session,
     )

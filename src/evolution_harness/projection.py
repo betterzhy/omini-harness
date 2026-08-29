@@ -4,6 +4,7 @@ import json
 import re
 import uuid
 from abc import ABC, abstractmethod
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -12,8 +13,8 @@ import yaml
 
 from .anchored_fs import AnchoredPathError, AnchoredRoot
 from .capability_pack_registry import (
-    read_registered_pack_blob,
-    read_registered_pack_blobs,
+    CapabilityVerificationSession,
+    VerifiedCapabilityPack,
 )
 from .discussion import materialize_discussion_contract
 from .generated import deterministic_json_bytes
@@ -21,7 +22,12 @@ from .hashing import canonical_json_bytes, file_sha256, sha256_bytes
 from .loader import load_capabilities
 from .paths import PathBoundaryError, resolve_without_symlinks, safe_relative_path
 from .process_lock import ProcessLockError, exclusive_process_lock, process_lock_identity
-from .project import load_project_state, verify_capability_lock
+from .project import (
+    VerifiedLockContext,
+    load_capability_lock,
+    load_project_state,
+    verify_capability_lock_context,
+)
 from .schema import SchemaStore
 
 AGENT_SKILL_PROJECTION_VERSION = "agent-skill-projection/1"
@@ -43,6 +49,14 @@ class ProjectionFreshness:
 
 def _sha256(data: bytes) -> str:
     return sha256_bytes(data)
+
+
+def _projection_data(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {key: _projection_data(item) for key, item in value.items()}
+    if isinstance(value, tuple):
+        return [_projection_data(item) for item in value]
+    return value
 
 
 def _projection_target(root: Path, runtime: str, project_id: str, *, must_exist: bool = False) -> Path:
@@ -226,6 +240,7 @@ def _verify_resolved_context(
     *,
     runtime: str,
     authority_snapshot: dict[str, Any] | None = None,
+    verification_session: CapabilityVerificationSession | None = None,
 ) -> None:
     from .resolver import resolve_design_context
 
@@ -256,6 +271,7 @@ def _verify_resolved_context(
             explicit_stage=resolved["stage"],
             reopen_signal=resolved.get("reopenSignal"),
             authority_snapshot=authority_snapshot,
+            verification_session=verification_session,
         )
     except (KeyError, TypeError, ValueError) as exc:
         raise ProjectionError("resolved context is invalid for the current resolver") from exc
@@ -365,9 +381,10 @@ def _render_skill(
 
 def _external_source_capability(
     selected: dict[str, Any],
-    locked: dict[str, Any],
-    registration: dict[str, Any],
+    locked: Mapping[str, Any],
+    verified_pack: VerifiedCapabilityPack,
 ) -> dict[str, Any]:
+    registration = verified_pack.registration
     if (
         selected.get("sourceKind") != "EXTERNAL_CAPABILITY_PACK"
         or selected.get("sourceRegistrationId") != locked["sourceRegistrationId"]
@@ -386,16 +403,17 @@ def _external_source_capability(
         "sourceCommit": locked["sourceCommit"],
         "sourceTree": locked["sourceTree"],
         "resolvedContentDigest": locked["resolvedContentDigest"],
-        "validatorIdentity": locked["validatorIdentity"],
+        "validatorIdentity": _projection_data(locked["validatorIdentity"]),
         "registrationFingerprint": locked["registrationFingerprint"],
     }
 
 
 def _external_skill_payload(
-    source: dict[str, Any], registration: dict[str, Any]
+    source: dict[str, Any], verified_pack: VerifiedCapabilityPack
 ) -> tuple[dict[str, bytes], dict[str, Any]]:
-    manifest = registration.get("manifest")
-    if not isinstance(manifest, dict):
+    registration = verified_pack.registration
+    manifest = verified_pack.manifest
+    if not isinstance(manifest, Mapping):
         raise ProjectionError("external capability pack manifest is unavailable")
     skill_name = manifest.get("skillName")
     skill_path = manifest.get("skillPath")
@@ -408,7 +426,7 @@ def _external_skill_payload(
     projection_contract = declaration.get("projectionContract")
     try:
         if projection_contract == "SELF_CONTAINED_SKILL_BUNDLE":
-            source_blobs = read_registered_pack_blobs(registration)
+            source_blobs = verified_pack.read_blobs()
             skill_bytes = source_blobs[skill_path]
             payloads: dict[str, bytes] = {}
             resource_files: list[dict[str, str]] = []
@@ -429,7 +447,7 @@ def _external_skill_payload(
                     }
                 )
         else:
-            skill_bytes = read_registered_pack_blob(registration, skill_path)
+            skill_bytes = verified_pack.read_blob(skill_path)
             payloads = {relative: skill_bytes}
             resource_files = []
         skill_text = skill_bytes.decode("utf-8", "strict")
@@ -477,26 +495,34 @@ def _external_skill_payload(
 def _verify_external_source_snapshot(
     repository_root: Path,
     project_root: Path,
-    expected_lock: dict[str, Any],
-    expected_verified: dict[str, dict[str, Any]],
+    expected_context: VerifiedLockContext,
+    *,
+    verification_session: CapabilityVerificationSession | None = None,
 ) -> None:
     external_ids = {
         item["capabilityId"]
-        for item in expected_lock["capabilities"]
+        for item in expected_context.lock["capabilities"]
         if item.get("sourceKind") == "EXTERNAL_CAPABILITY_PACK"
     }
     if not external_ids:
         return
+    if verification_session is None:
+        raise ProjectionError("external source verification session is unavailable")
     try:
-        live_lock, live_verified = verify_capability_lock(
-            repository_root, project_root
+        live_context = verify_capability_lock_context(
+            repository_root,
+            project_root,
+            verification_session=verification_session,
         )
     except Exception as exc:
         raise ProjectionError("external source identity drift during projection") from exc
-    if live_lock != expected_lock:
+    if live_context is not expected_context:
         raise ProjectionError("external source identity drift during projection")
     for capability_id in sorted(external_ids):
-        if live_verified.get(capability_id) != expected_verified.get(capability_id):
+        if (
+            live_context.verified_packs.get(capability_id)
+            is not expected_context.verified_packs.get(capability_id)
+        ):
             raise ProjectionError("external source identity drift during projection")
 
 
@@ -507,13 +533,38 @@ def _build_projection_pack_unlocked(
     *,
     runtime: str,
     authority_snapshot: dict[str, Any] | None = None,
+    verification_session: CapabilityVerificationSession | None = None,
 ) -> dict[str, Any]:
     root = Path(repository_root)
     project = Path(project_root)
     adapter = _adapter(runtime)
     if resolved_context.get("runtime") != runtime:
         raise ProjectionError("resolved context runtime does not match projection runtime")
-    lock, verified_entries = verify_capability_lock(root, project)
+    if verification_session is None:
+        declared_lock = load_capability_lock(root, project)
+        external_ids = {
+            item["capabilityId"]
+            for item in declared_lock["capabilities"]
+            if item.get("sourceKind") == "EXTERNAL_CAPABILITY_PACK"
+        }
+        with CapabilityVerificationSession(
+            root,
+            allowed_capability_ids=external_ids,
+        ) as private_session:
+            return _build_projection_pack_unlocked(
+                root,
+                project,
+                resolved_context,
+                runtime=runtime,
+                authority_snapshot=authority_snapshot,
+                verification_session=private_session,
+            )
+    lock_context = verify_capability_lock_context(
+        root,
+        project,
+        verification_session=verification_session,
+    )
+    lock = lock_context.lock
     if resolved_context.get("capabilityLockFingerprint") != lock["lockFingerprint"]:
         raise ProjectionError("resolved context capability lock is stale")
     if resolved_context.get("project") != lock["project"]:
@@ -524,6 +575,7 @@ def _build_projection_pack_unlocked(
         resolved_context,
         runtime=runtime,
         authority_snapshot=authority_snapshot,
+        verification_session=verification_session,
     )
     try:
         project_identity = safe_relative_path(resolved_context["project"], label="projection project")
@@ -537,11 +589,11 @@ def _build_projection_pack_unlocked(
     selected_index: dict[str, dict[str, Any]] = {}
     for item in sorted(resolved_context.get("selectedCapabilities", []), key=lambda value: value["id"]):
         if item.get("sourceKind") == "EXTERNAL_CAPABILITY_PACK":
-            registration = verified_entries.get(item["id"])
+            verified_pack = lock_context.verified_packs.get(item["id"])
             locked = locked_index.get(item["id"])
-            if registration is None or locked is None:
+            if verified_pack is None or locked is None:
                 raise ProjectionError(f"resolved external capability is not locked: {item['id']}")
-            source = _external_source_capability(item, locked, registration)
+            source = _external_source_capability(item, locked, verified_pack)
             source_capabilities.append(source)
             selected_index[item["id"]] = source
             continue
@@ -593,9 +645,9 @@ def _build_projection_pack_unlocked(
                 generated_skills: list[dict[str, Any]] = []
                 for source in source_capabilities:
                     if source.get("sourceKind") == "EXTERNAL_CAPABILITY_PACK":
-                        registration = verified_entries[source["id"]]
+                        verified_pack = lock_context.verified_packs[source["id"]]
                         skill_payloads, generated = _external_skill_payload(
-                            source, registration
+                            source, verified_pack
                         )
                         for relative, data in skill_payloads.items():
                             if relative in generated_payloads:
@@ -629,7 +681,10 @@ def _build_projection_pack_unlocked(
                     )
 
                 _verify_external_source_snapshot(
-                    root, project, lock, verified_entries
+                    root,
+                    project,
+                    lock_context,
+                    verification_session=verification_session,
                 )
 
                 generated_files = [
@@ -664,7 +719,10 @@ def _build_projection_pack_unlocked(
                     filesystem.write_bytes(f"{pack_relative}/{relative}", data)
 
                 _verify_external_source_snapshot(
-                    root, project, lock, verified_entries
+                    root,
+                    project,
+                    lock_context,
+                    verification_session=verification_session,
                 )
 
                 journal = {
@@ -684,7 +742,10 @@ def _build_projection_pack_unlocked(
                     filesystem.rename(target_relative, backup_relative)
                 filesystem.rename(pack_relative, target_relative)
                 _verify_external_source_snapshot(
-                    root, project, lock, verified_entries
+                    root,
+                    project,
+                    lock_context,
+                    verification_session=verification_session,
                 )
                 journal["phase"] = "COMMITTED"
                 filesystem.write_bytes(journal_relative, deterministic_json_bytes(journal))
@@ -714,6 +775,7 @@ def build_projection_pack(
     *,
     runtime: str,
     authority_snapshot: dict[str, Any] | None = None,
+    verification_session: CapabilityVerificationSession | None = None,
 ) -> dict[str, Any]:
     project_id = resolved_context.get("project", "invalid-project")
     target = Path(repository_root).resolve() / "generated" / "projections" / runtime.lower() / str(project_id)
@@ -726,6 +788,7 @@ def build_projection_pack(
                 resolved_context,
                 runtime=runtime,
                 authority_snapshot=authority_snapshot,
+                verification_session=verification_session,
             )
     except ProcessLockError as exc:
         raise ProjectionError(f"concurrent projection build rejected: {exc}") from exc
@@ -738,6 +801,7 @@ def validate_projection_pack(
     *,
     runtime: str,
     authority_snapshot: dict[str, Any] | None = None,
+    verification_session: CapabilityVerificationSession | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     root = Path(repository_root).resolve()
     project = Path(project_root)
@@ -759,7 +823,31 @@ def validate_projection_pack(
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     resolved = json.loads(context_path.read_text(encoding="utf-8"))
     SchemaStore(root).validate("core/schemas/runtime-projection-manifest.schema.json", manifest)
-    lock, verified_entries = verify_capability_lock(root, project)
+    if verification_session is None:
+        declared_lock = load_capability_lock(root, project)
+        external_ids = {
+            item["capabilityId"]
+            for item in declared_lock["capabilities"]
+            if item.get("sourceKind") == "EXTERNAL_CAPABILITY_PACK"
+        }
+        with CapabilityVerificationSession(
+            root,
+            allowed_capability_ids=external_ids,
+        ) as private_session:
+            return validate_projection_pack(
+                root,
+                project,
+                pack,
+                runtime=runtime,
+                authority_snapshot=authority_snapshot,
+                verification_session=private_session,
+            )
+    lock_context = verify_capability_lock_context(
+        root,
+        project,
+        verification_session=verification_session,
+    )
+    lock = lock_context.lock
     if resolved.get("project") != state["project"] or resolved.get("runtime") != runtime:
         raise ProjectionError("canonical projection resolved context identity mismatch")
     if resolved.get("capabilityLockFingerprint") != lock["lockFingerprint"]:
@@ -776,6 +864,7 @@ def validate_projection_pack(
         resolved,
         runtime=runtime,
         authority_snapshot=authority_snapshot,
+        verification_session=verification_session,
     )
     state_path = project / ".agent-evolution/design-state.yaml"
     binding_path = project / ".agent-evolution/capabilities.yaml"
@@ -788,11 +877,11 @@ def validate_projection_pack(
     source_capabilities: list[dict[str, Any]] = []
     for item in sorted(resolved.get("selectedCapabilities", []), key=lambda value: value["id"]):
         if item.get("sourceKind") == "EXTERNAL_CAPABILITY_PACK":
-            registration = verified_entries.get(item["id"])
+            verified_pack = lock_context.verified_packs.get(item["id"])
             locked = locked_index.get(item["id"])
-            if registration is None or locked is None:
+            if verified_pack is None or locked is None:
                 raise ProjectionError(f"canonical projection external lock drift: {item['id']}")
-            source = _external_source_capability(item, locked, registration)
+            source = _external_source_capability(item, locked, verified_pack)
             source_capabilities.append(source)
             selected_index[item["id"]] = source
             continue
@@ -822,7 +911,7 @@ def validate_projection_pack(
     for source in source_capabilities:
         if source.get("sourceKind") == "EXTERNAL_CAPABILITY_PACK":
             skill_payloads, generated = _external_skill_payload(
-                source, verified_entries[source["id"]]
+                source, lock_context.verified_packs[source["id"]]
             )
             for relative, data in skill_payloads.items():
                 if relative in expected_bytes:
@@ -873,7 +962,12 @@ def validate_projection_pack(
         path = pack / relative
         if path.read_bytes() != data:
             raise ProjectionError(f"canonical projection file bytes mismatch: {relative}")
-    _verify_external_source_snapshot(root, project, lock, verified_entries)
+    _verify_external_source_snapshot(
+        root,
+        project,
+        lock_context,
+        verification_session=verification_session,
+    )
     return manifest, resolved
 
 
@@ -884,6 +978,7 @@ def check_projection_freshness(
     runtime: str,
     authority_snapshot: dict[str, Any] | None = None,
     expected_resolution_id: str | None = None,
+    verification_session: CapabilityVerificationSession | None = None,
 ) -> ProjectionFreshness:
     root = Path(repository_root)
     project = Path(project_root)
@@ -902,6 +997,28 @@ def check_projection_freshness(
     manifest_path = pack / "projection-manifest.json"
     if not manifest_path.exists():
         return ProjectionFreshness(False, ("projection-missing",))
+    if verification_session is None:
+        try:
+            declared_lock = load_capability_lock(root, project)
+            external_ids = {
+                item["capabilityId"]
+                for item in declared_lock["capabilities"]
+                if item.get("sourceKind") == "EXTERNAL_CAPABILITY_PACK"
+            }
+        except Exception:
+            return ProjectionFreshness(False, ("projection-integrity-drift",))
+        with CapabilityVerificationSession(
+            root,
+            allowed_capability_ids=external_ids,
+        ) as private_session:
+            return check_projection_freshness(
+                root,
+                project,
+                runtime=runtime,
+                authority_snapshot=authority_snapshot,
+                expected_resolution_id=expected_resolution_id,
+                verification_session=private_session,
+            )
     try:
         manifest, _ = validate_projection_pack(
             root,
@@ -909,6 +1026,7 @@ def check_projection_freshness(
             pack,
             runtime=runtime,
             authority_snapshot=authority_snapshot,
+            verification_session=verification_session,
         )
     except Exception:
         return ProjectionFreshness(False, ("projection-integrity-drift",))
@@ -918,7 +1036,12 @@ def check_projection_freshness(
     if expected_resolution_id is not None and manifest.get("sourceResolutionId") != expected_resolution_id:
         reasons.add("resolution-context-drift")
     try:
-        lock, _ = verify_capability_lock(root, project)
+        lock_context = verify_capability_lock_context(
+            root,
+            project,
+            verification_session=verification_session,
+        )
+        lock = lock_context.lock
     except Exception:
         lock = None
         reasons.add("capability-lock-drift")

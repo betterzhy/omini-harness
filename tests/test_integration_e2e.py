@@ -222,6 +222,62 @@ def test_scenarios_reuse_one_external_pack_verification_session_without_output_d
     assert gate_count == 1
 
 
+def test_integration_projection_forwards_external_verification_session_across_build_and_freshness(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from evolution_harness import capability_pack_registry
+    from evolution_harness.capability_pack_registry import CapabilityVerificationSession
+    from evolution_harness.integration import (
+        build_integration_projection,
+        check_integration_projection,
+    )
+
+    root, integration, source, _ = _external_pack_fixture(tmp_path)
+    request = {
+        "intent": "visual-reference-review",
+        "topic": "web-fidelity",
+        "requested_output": "review findings",
+        "runtime": "CODEX",
+    }
+    real_gate = capability_pack_registry._run_candidate_gate
+    gate_count = 0
+
+    def counted_gate(*args, **kwargs):
+        nonlocal gate_count
+        gate_count += 1
+        return real_gate(*args, **kwargs)
+
+    monkeypatch.setattr(capability_pack_registry, "_run_candidate_gate", counted_gate)
+    with CapabilityVerificationSession(
+        root,
+        allowed_capability_ids={
+            "workflow:web-high-fidelity:reference-driven-visual-fidelity"
+        },
+    ) as session:
+        manifest = build_integration_projection(
+            root,
+            integration,
+            source,
+            **request,
+            verification_session=session,
+        )
+        freshness = check_integration_projection(
+            root,
+            integration,
+            source,
+            **request,
+            verification_session=session,
+        )
+        stats = session.stats
+
+    assert manifest["capabilityLockFingerprint"].startswith("sha256:")
+    assert freshness.fresh
+    assert stats.full_candidate_gate_count == 1
+    assert stats.isolated_checkout_count == 1
+    assert gate_count == 1
+
+
 def test_integration_intent_alias_selects_locked_capability_and_preserves_request_intent(
     tmp_path: Path,
 ):

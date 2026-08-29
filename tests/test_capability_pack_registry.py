@@ -16,12 +16,12 @@ import yaml
 
 from evolution_harness import capability_pack_registry
 from evolution_harness.capability_pack_registry import (
-    _directory_identity_digest,
     _registration_fingerprint,
     build_capability_pack_registry,
     get_registered_capability_pack,
     load_capability_pack_registrations,
 )
+from evolution_harness.toolchain_profile import directory_identity_digest
 
 
 CAPABILITY_ID = "workflow:web-high-fidelity:reference-driven-visual-fidelity"
@@ -568,7 +568,7 @@ def test_candidate_gate_uses_registered_host_home_offline_cache_contract(
     }.items():
         registration["validator"]["toolchain"][name] = {
             "absolutePath": str(path),
-            "sha256": _directory_identity_digest(path),
+            "sha256": directory_identity_digest(path),
         }
     registration["validator"]["sha256"] = "sha256:" + hashlib.sha256(
         validator.read_bytes()
@@ -655,7 +655,7 @@ def test_registry_rejects_registered_toolchain_digest_drift(
         "mavenHome": maven_home,
         "mavenRepository": repository,
     }.items():
-        toolchain[name] = {"absolutePath": str(path), "sha256": _directory_identity_digest(path)}
+        toolchain[name] = {"absolutePath": str(path), "sha256": directory_identity_digest(path)}
     if drift in {"javac", "mvn"}:
         executable_paths[drift].chmod(0o755)
         executable_paths[drift].write_bytes(b"replaced executable")

@@ -4,7 +4,6 @@ import hashlib
 import os
 import platform
 import signal
-import stat
 import subprocess
 import sys
 import tempfile
@@ -24,6 +23,13 @@ import yaml
 from .generated import write_generated_json
 from .hashing import canonical_json_bytes, sha256_bytes
 from .schema import SchemaStore, SchemaValidationError
+from .toolchain_profile import (
+    VerifiedToolchain,
+    directory_identity_digest as _directory_identity_digest,
+    load_toolchain_binding,
+    load_toolchain_profile,
+    verify_profile_toolchain,
+)
 
 
 _REGISTRATION_SCHEMA = "core/schemas/capability-pack-registration.schema.json"
@@ -64,14 +70,6 @@ _GIT_ENVIRONMENT = {
     "GIT_OPTIONAL_LOCKS": "0",
     "GIT_TERMINAL_PROMPT": "0",
 }
-
-
-@dataclass(frozen=True, slots=True)
-class VerifiedToolchain:
-    command_paths: tuple[Path, ...]
-    command_digests: tuple[tuple[str, str], ...]
-    directory_identities: tuple[tuple[str, Path, str], ...]
-    environment: Mapping[str, str]
 
 
 @dataclass(frozen=True, slots=True)
@@ -496,78 +494,16 @@ def _run_candidate_gate(
     return subprocess.CompletedProcess(arguments, process.returncode, stdout, stderr)
 
 
-def _directory_identity_digest(root: Path) -> str:
-    if (
-        not root.is_absolute()
-        or root.is_symlink()
-        or not root.is_dir()
-        or root.resolve(strict=True) != root
-    ):
-        raise ValueError("capability pack validator toolchain directory is unavailable or unsafe")
-    if os.access(root, os.W_OK):
-        raise ValueError("capability pack validator toolchain directory is writable")
-    entries: list[dict[str, str]] = [
-        {
-            "path": ".",
-            "type": "directory",
-            "mode": format(stat.S_IMODE(root.lstat().st_mode), "04o"),
-        }
-    ]
-    for path in sorted(root.rglob("*"), key=lambda item: item.relative_to(root).as_posix().encode("utf-8")):
-        relative = path.relative_to(root).as_posix()
-        before = path.lstat()
-        if stat.S_ISLNK(before.st_mode):
-            raise ValueError("capability pack validator toolchain directory contains symlink")
-        if stat.S_ISDIR(before.st_mode):
-            if os.access(path, os.W_OK):
-                raise ValueError("capability pack validator toolchain directory is writable")
-            entries.append(
-                {
-                    "path": relative,
-                    "type": "directory",
-                    "mode": format(stat.S_IMODE(before.st_mode), "04o"),
-                }
-            )
-            continue
-        if not stat.S_ISREG(before.st_mode):
-            raise ValueError("capability pack validator toolchain directory contains special file")
-        if os.access(path, os.W_OK):
-            raise ValueError("capability pack validator toolchain file is writable")
-        data = path.read_bytes()
-        after = path.lstat()
-        identity = (
-            before.st_dev,
-            before.st_ino,
-            before.st_mode,
-            before.st_size,
-            before.st_mtime_ns,
-        )
-        if identity != (
-            after.st_dev,
-            after.st_ino,
-            after.st_mode,
-            after.st_size,
-            after.st_mtime_ns,
-        ):
-            raise ValueError("capability pack validator toolchain directory changed during hashing")
-        entries.append(
-            {
-                "path": relative,
-                "type": "file",
-                "mode": format(stat.S_IMODE(before.st_mode), "04o"),
-                "sha256": sha256_bytes(data),
-            }
-        )
-    return "sha256:" + sha256_bytes(canonical_json_bytes(entries))
-
-
-def _verify_validator_toolchain(
+def _verify_legacy_validator_toolchain(
     registration: Mapping[str, Any],
 ) -> VerifiedToolchain:
     validator = registration["validator"]
     contract = validator.get("environmentContract", "SANITIZED")
     if contract == "SANITIZED":
         return VerifiedToolchain(
+            profile_id=None,
+            profile_digest=None,
+            binding_witness=None,
             command_paths=(),
             command_digests=(),
             directory_identities=(),
@@ -626,11 +562,31 @@ def _verify_validator_toolchain(
     environment["LANG"] = "en_US.UTF-8"
     environment["LC_ALL"] = "en_US.UTF-8"
     return VerifiedToolchain(
+        profile_id=None,
+        profile_digest=None,
+        binding_witness=None,
         command_paths=tuple(paths),
         command_digests=tuple(command_digests),
         directory_identities=tuple(directory_identities),
         environment=MappingProxyType(environment),
     )
+
+
+def _verify_validator_toolchain(
+    repository_root: Path,
+    registration: Mapping[str, Any],
+) -> VerifiedToolchain:
+    contract = registration["validator"].get("environmentContract", "SANITIZED")
+    if contract in {"SANITIZED", "REGISTERED_TOOLCHAIN_OFFLINE_CACHE"}:
+        return _verify_legacy_validator_toolchain(registration)
+    if contract != "MANAGED_TOOLCHAIN_PROFILE":
+        raise ValueError("capability pack validator environment contract is unsupported")
+    reference = registration["validator"]["toolchainProfile"]
+    profile = load_toolchain_profile(
+        repository_root, reference["profileId"], reference["profileDigest"]
+    )
+    binding = load_toolchain_binding(repository_root, reference["profileId"])
+    return verify_profile_toolchain(repository_root, profile, binding)
 
 
 def _validator_environment(
@@ -642,10 +598,11 @@ def _validator_environment(
 
 
 def _recheck_validator_toolchain(
+    repository_root: Path,
     registration: Mapping[str, Any],
     expected: VerifiedToolchain,
 ) -> None:
-    actual = _verify_validator_toolchain(registration)
+    actual = _verify_validator_toolchain(repository_root, registration)
     if actual != expected:
         raise ValueError(
             "capability pack validator toolchain identity changed during candidate Gate"
@@ -1394,7 +1351,7 @@ def _materialize_verified_capability_pack(
         locator_fingerprint,
     ) = prepared
     _assert_pack_source_content(source, registration, manifest, entries, selected)
-    toolchain = _verify_validator_toolchain(registration)
+    toolchain = _verify_validator_toolchain(repository_root, registration)
     session._record(
         "toolchain_directory_digest_count",
         len(toolchain.directory_identities),
@@ -1434,7 +1391,7 @@ def _materialize_verified_capability_pack(
             len(toolchain.directory_identities),
             key=key,
         )
-        _recheck_validator_toolchain(registration, toolchain)
+        _recheck_validator_toolchain(repository_root, registration, toolchain)
         _require_fixed_git_identity(checkout, registration)
         _require_no_hidden_index_flags(checkout)
         _require_clean_source(checkout, manifest)

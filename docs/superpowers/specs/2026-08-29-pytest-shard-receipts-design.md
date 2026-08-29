@@ -2,15 +2,36 @@
 
 ## Status and dependency
 
-This specification is the second, separately reviewable candidate in the approved
-External Pack performance repair. It depends on the operation-scoped verification
-session defined by
-`2026-08-29-external-pack-validation-lifecycle-scaling-design.md`.
+This specification is a deferred research/design artifact, not an approved
+implementation candidate. The External Pack Phase 1 repair may register cost markers,
+decompose the Pay pilot nodes, and share one serial operation-scoped verification
+session, but it must not implement this custom shard/receipt subsystem.
 
-It changes test topology and operational receipt semantics, not Pack identity,
-candidate-Gate trust, project Authority, or projection behavior. It must not begin
-until the validation-session candidate has stable focused tests. The two candidates
-may be benchmarked together, but they retain separate WriteSets and review evidence.
+Any future proposal to reactivate this specification requires explicit user approval,
+an independent design review, and a new Exact WriteSet after the operation-scoped
+verification session defined by
+`2026-08-29-external-pack-validation-lifecycle-scaling-design.md` is implemented and
+benchmarked.
+
+It would change operational receipt semantics, not Pack identity, candidate-Gate
+trust, project Authority, or projection behavior. It must not begin merely because
+the validation-session candidate is green. A demonstrated CI interruption/recovery
+or audit requirement is also required so that this subsystem does not become a new
+Harness maintenance burden without a concrete consumer need.
+
+Before reactivation, the design must additionally close these review findings:
+
+- fixed-candidate Candidate/Parent/Tree must be derived from the actual Git graph,
+  equal the execution HEAD/tree/parent, and require a clean tracked/untracked
+  worktree rather than accepting caller-supplied labels;
+- a fixed-candidate `pack_e2e` PASS must require per-key verification statistics,
+  exactly one Gate/checkout and six directory digests for the one-key acceptance
+  path, and must reject skip/xfail rather than treating them as successful evidence;
+- diagnostic resume coverage must never aggregate across run IDs into a formal
+  fixed-candidate PASS;
+- marker collection must expose an explicit `unclassified/default` lane or measured
+  classification coverage; the initial pilot-only `fast` marker cannot be described
+  as the complete repository fast lane.
 
 ## Problem statement
 
@@ -24,27 +45,24 @@ progress log, or outer receipt that binds the run to HEAD/tree, selected node ID
 stdout/stderr, and exit status. `--last-failed` and `--stepwise` are developer
 conveniences, not a complete Gate receipt.
 
-## Goals
+## Goals if reactivated
 
-The implementation must:
+A separately approved future implementation would consume the Phase 1 cost markers,
+seven pilot nodes, and serial shared session as prerequisites. It would have to:
 
-1. provide explicit `fast`, `integration`, and `pack_e2e` cost lanes;
-2. give every Pay-Nexus scenario and the install plan its own stable pytest node ID;
-3. run the real Java Pack E2E lane serially with one shared
-   `CapabilityVerificationSession` per shard/process;
-4. collect the exact ordered node-ID set before execution and bind it into the shard
+1. collect the exact ordered node-ID set before execution and bind it into the shard
    receipt;
-5. flush node phase/results as tests execute so completed progress survives SIGINT or
+2. flush node phase/results as tests execute so completed progress survives SIGINT or
    process failure;
-6. preserve stdout, stderr, exit code/signal, timing, candidate identity, and summary
+3. preserve stdout, stderr, exit code/signal, timing, candidate identity, and summary
    counts for every completed or interrupted shard;
-7. continue later shards after an ordinary test failure while keeping each shard's
+4. continue later shards after an ordinary test failure while keeping each shard's
    independent exit status;
-8. aggregate a PASS only from complete, disjoint coverage of the expected node set
+5. aggregate a PASS only from complete, disjoint coverage of the expected node set
    with every shard PASS;
-9. keep receipts outside every Git worktree and prevent them from becoming Pack Gate
+6. keep receipts outside every Git worktree and prevent them from becoming Pack Gate
    trust or project Authority;
-10. add no plugin dependency unless built-in pytest hooks prove insufficient.
+7. add no plugin dependency unless built-in pytest hooks prove insufficient.
 
 ## Non-goals
 
@@ -62,7 +80,7 @@ This candidate will not:
 
 ## Considered approaches
 
-### A. Deterministic in-repository runner plus a minimal pytest hook plugin — selected
+### A. Deterministic in-repository runner plus a minimal pytest hook plugin — previously preferred
 
 Harness owns a small test runner and plugin. The runner fixes a node manifest,
 executes explicit shards, streams stdout/stderr, and writes an outer receipt. The
@@ -106,10 +124,12 @@ both `integration` and `pack_e2e`. The initial change marks only the External
 Pack/Pay pilot surface needed by this repair. It does not require a speculative
 all-repository reclassification.
 
-Canonical selections are explicit:
+Pilot selections are explicit; until repository-wide classification coverage is
+measured, unmarked tests remain an `unclassified/default` lane and `-m fast` must not
+be described as the complete repository fast-feedback Gate:
 
 ```text
-fast feedback                 -m fast
+pilot fast selection          -m fast
 normal integration            -m "integration and not pack_e2e"
 real Pack acceptance          -m pack_e2e    (serial, one process)
 complete regression           no marker exclusion
@@ -218,10 +238,11 @@ separately and remain part of `notRunOrIncompleteNodeIds`; they cannot support P
 Collection-time errors are shard infrastructure errors rather than synthetic node
 results.
 
-The run plan contains an explicit terminal-outcome policy. The default allows
+The run plan contains an explicit terminal-outcome policy. The diagnostic default allows
 `PASSED`, `SKIPPED`, and `XFAILED`, rejects `XPASSED`, and always rejects `FAILED`,
-`ERROR`, and `INCOMPLETE`. A fixed-candidate Gate may choose a stricter policy, but a
-receipt cannot weaken the policy fixed in its run plan.
+`ERROR`, and `INCOMPLETE`. A fixed-candidate `pack_e2e` Gate must allow only `PASSED`;
+`SKIPPED`, `XFAILED`, and `XPASSED` are non-PASS. A receipt cannot weaken the policy
+fixed in its run plan.
 
 ## Shard receipt
 
@@ -242,13 +263,17 @@ Each shard writes an immutable `pytest-shard-receipt/v1` JSON record containing:
 - receipt-directory-relative stdout, stderr, event-log, and optional JUnit paths plus
   SHA-256, size, device, and inode witnesses;
 - per-`PackVerificationKey` `VerificationStats` deltas from the Pack validation
-  session when present;
+  session; these are optional for diagnostic/non-Pack runs but mandatory for a
+  fixed-candidate `pack_e2e` run;
 - receipt self-digest over canonical JSON excluding the digest field.
 
 Receipt status rules are fail closed:
 
 - `PASS` requires exit code zero, complete exact node coverage, no failed/error/not-run
   node, matching collection/shard identity, and valid referenced file digests;
+- a fixed-candidate `pack_e2e` PASS additionally requires the actual clean execution
+  worktree HEAD/tree/parent to match the Git-derived Candidate/Tree/Parent, an
+  all-`PASSED` terminal policy, and exact per-key Gate/checkout/digest statistics;
 - any missing/truncated event log or mismatched node identity is `INFRA_ERROR` or
   `INTERRUPTED`, never PASS;
 - an interrupted receipt remains useful evidence of completed nodes but grants no
@@ -259,8 +284,13 @@ Receipt status rules are fail closed:
   exactly one valid PASS receipt must exist for every planned shard ID/index/count,
   and their disjoint node sets must union to the complete expected node set.
 
-The `runPlanDigest` is canonical JSON over Candidate/Parent/Tree, repository
-HEAD/tree/status digest, node-manifest digest and full ordered node set, normalized
+Candidate/Parent/Tree are never caller-supplied receipt labels. For a fixed-candidate
+run, the runner resolves them from the execution repository immediately before
+collection, verifies `Candidate == HEAD`, `Tree == Candidate^{tree}`, Parent is an
+actual direct parent selected by the run policy, and rejects detached identity drift
+or any dirty tracked/untracked state. The `runPlanDigest` is canonical JSON over these
+Git-derived Candidate/Parent/Tree values, repository HEAD/tree/status digest,
+node-manifest digest and full ordered node set, normalized
 command/markers/config root, environment allowlist digest, Python/pytest/plugin
 identities, outcome policy, and every shard ID/index/count/ordered node subset. A
 fixed-candidate Gate aggregates receipts from one run ID only; diagnostic recovery
@@ -316,10 +346,9 @@ approval, or cross-process trust token.
   does not fabricate a final receipt.
 - Resume selects only explicit not-run/failed node IDs from compatible receipts. It
   creates a new run/shard receipt and never mutates the original.
-- A resumed partial run is not equivalent to one complete fixed-candidate Gate unless
-  the aggregator verifies complete compatible coverage under the approved Gate
-  policy. The conservative default for final candidate review is still a fresh
-  complete run.
+- Resumed partial runs are diagnostic coverage only. They may never aggregate across
+  run IDs into a formal fixed-candidate Gate PASS. Final candidate review always uses
+  one fresh complete run ID.
 
 ## Test strategy
 
@@ -340,14 +369,18 @@ RED → GREEN tests must cover:
 - no later shard launch after user interruption;
 - aggregate rejection for overlap, gaps, different candidate/tree, different node
   manifest, changed command/environment, or non-PASS shard;
+- fixed-candidate rejection for caller-forged Candidate/Parent/Tree, mismatched
+  `HEAD`/`Candidate^{tree}`/actual parent, detached identity drift, dirty tracked or
+  untracked state, missing Pack statistics, Gate/digest ceiling violation, skip, or
+  xfail;
 - receipt root symlink/worktree/project-path rejection;
 - immutable prior receipt and new receipt on resume;
 - interrupted output reports completed/not-run node IDs without claiming PASS;
 - current full-regression command still collects the complete suite.
 
-## Acceptance
+## Acceptance if reactivated
 
-The combined validation-session and test-lane candidates must demonstrate:
+A separately approved future receipt candidate would have to demonstrate:
 
 - the six scenarios and install plan are independently visible/selectable nodes;
 - for the single Java `PackVerificationKey`, one serial `pack_e2e` shard records
@@ -367,11 +400,11 @@ The combined validation-session and test-lane candidates must demonstrate:
 
 ## Candidate implementation WriteSet
 
-The implementation plan must freeze its own Exact WriteSet after the validation
-session candidate stabilizes. The current candidate set is:
+There is no authorized implementation WriteSet while this design is deferred. If a
+future consumer need reactivates it, a new implementation plan must freeze its own
+Exact WriteSet after the validation-session candidate stabilizes. The historical
+candidate set below is informative only:
 
-- `pyproject.toml`
-- `tests/test_pay_nexus_java_capability_adoption_pilot.py`
 - `src/evolution_harness/pytest_receipt.py`
 - `src/evolution_harness/pytest_shard_runner.py`
 - `harness-test`, which only sets repository `PYTHONPATH` and invokes
@@ -393,17 +426,15 @@ No external dependency is added in the initial candidate. If pytest's documented
 hooks cannot provide the required flushed evidence, implementation stops and returns
 for approval before adding `pytest-reportlog`, xdist, or another plugin.
 
-## Delivery sequence
+## Historical delivery sequence if reactivated
 
-1. Add strict marker registration and RED collection tests.
-2. Parameterize the six scenarios and separate install planning.
-3. Bind the serial `pack_e2e` fixture to one explicit validation session and assert
-   Gate/digest counters.
-4. Implement collection/node/shard manifests and the flushed pytest event plugin.
-5. Implement the outer runner, signal handling, final receipt, and aggregation.
-6. Run deterministic failure/interruption/recovery tests.
-7. Run the combined benchmark and one stable complete regression.
-8. Fix Candidate/Parent/Tree and obtain the repository-required independent review.
+1. Confirm the Phase 1 markers, seven pilot nodes, and serial shared session remain
+   stable prerequisites without reopening their semantics.
+2. Implement collection/node/shard manifests and the flushed pytest event plugin.
+3. Implement the outer runner, signal handling, final receipt, and aggregation.
+4. Run deterministic failure/interruption/recovery tests.
+5. Run the combined benchmark and one stable complete regression.
+6. Fix Candidate/Parent/Tree and obtain the repository-required independent review.
 
 ## Stop conditions
 

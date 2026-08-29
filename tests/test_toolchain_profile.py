@@ -99,10 +99,13 @@ class ProfileHarness:
     def write_binding(self, toolchain_root: Path) -> None:
         path = binding_path(self.root, self.profile_id)
         path.parent.mkdir(parents=True, exist_ok=True)
+        if path.exists():
+            path.chmod(0o644)
         path.write_text(
             json.dumps(self.binding_record(toolchain_root)),
             encoding="utf-8",
         )
+        path.chmod(0o444)
 
     def load_profile(self):
         return load_toolchain_profile(self.root, self.profile_id, self.profile_digest)
@@ -696,3 +699,50 @@ def test_profile_verification_rejects_artifact_registry_drift_before_binding(
             profile_harness.profile_id,
             profile_harness.profile_digest,
         )
+
+
+def test_reordered_profile_map_keeps_canonical_command_resolution(
+    profile_harness: ProfileHarness,
+):
+    canonical = profile_harness.load_profile()
+    reordered = _thaw(canonical)
+    reordered["commands"] = dict(reversed(tuple(reordered["commands"].items())))
+    binding = profile_harness.binding(profile_harness.first_root)
+
+    first = verify_profile_toolchain(profile_harness.root, canonical, binding)
+    second = verify_profile_toolchain(profile_harness.root, reordered, binding)
+
+    assert first.profile_digest == second.profile_digest
+    assert first.command_paths == second.command_paths
+    assert first.command_digests == second.command_digests
+    assert first.environment["PATH"] == second.environment["PATH"]
+
+
+def test_profile_binding_rejects_shadowed_logical_command(
+    profile_harness: ProfileHarness,
+):
+    shadow = profile_harness.first_root / "bin/java"
+    shadow.parent.chmod(0o755)
+    shadow.write_bytes(
+        (profile_harness.first_root / "java/bin/java").read_bytes()
+    )
+    shadow.chmod(0o555)
+    shadow.parent.chmod(0o555)
+
+    with pytest.raises(ValueError, match="effective command resolution mismatch"):
+        verify_profile_toolchain(
+            profile_harness.root,
+            profile_harness.load_profile(),
+            profile_harness.binding(profile_harness.first_root),
+        )
+
+
+def test_toolchain_binding_rejects_writable_record(
+    profile_harness: ProfileHarness,
+):
+    profile_harness.write_binding(profile_harness.first_root)
+    path = binding_path(profile_harness.root, profile_harness.profile_id)
+    path.chmod(0o644)
+
+    with pytest.raises(ValueError, match="toolchain binding is writable"):
+        load_toolchain_binding(profile_harness.root, profile_harness.profile_id)

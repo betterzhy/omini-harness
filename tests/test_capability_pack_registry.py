@@ -3,7 +3,9 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import platform
 import signal
+import shlex
 import shutil
 import subprocess
 import time
@@ -21,7 +23,12 @@ from evolution_harness.capability_pack_registry import (
     get_registered_capability_pack,
     load_capability_pack_registrations,
 )
-from evolution_harness.toolchain_profile import directory_identity_digest
+from evolution_harness.hashing import canonical_json_bytes, sha256_bytes
+from evolution_harness.toolchain_profile import (
+    binding_path,
+    directory_identity_digest,
+    profile_digest,
+)
 
 
 CAPABILITY_ID = "workflow:web-high-fidelity:reference-driven-visual-fidelity"
@@ -273,6 +280,8 @@ def _write_test_schemas(root: Path, _source: Path) -> None:
     for name in [
         "capability-pack-manifest.schema.json",
         "capability-pack-registration.schema.json",
+        "capability-validator-toolchain-binding.schema.json",
+        "capability-validator-toolchain-registry.schema.json",
     ]:
         shutil.copy2(repository / "core/schemas" / name, destination / name)
 
@@ -289,6 +298,209 @@ def _harness_with_pack(tmp_path: Path) -> tuple[Path, Path, str, str]:
     _write_test_schemas(root, source)
     _write_registrations(root, [_registration(source, commit, tree)])
     return root, source, commit, tree
+
+
+def _make_toolchain_read_only(root: Path) -> None:
+    for path in sorted(root.rglob("*"), reverse=True):
+        path.chmod(0o555 if path.is_dir() or os.access(path, os.X_OK) else 0o444)
+    root.chmod(0o555)
+
+
+def _managed_profile_harness(
+    tmp_path: Path,
+    *,
+    mutate_binding_during_gate: bool = False,
+    mutate_profile_during_gate: bool = False,
+) -> tuple[Path, dict[str, Any]]:
+    root = tmp_path / "harness"
+    root.mkdir()
+    _git(root, "init", "-q")
+    source = tmp_path / "pack"
+    source.mkdir()
+    _write_valid_pack(source)
+    _write_test_schemas(root, source)
+
+    managed_store = root / ".worktrees/.capability-pack-cache/store"
+    first = managed_store / "first"
+    second = managed_store / "second"
+    executable = b"#!/bin/sh\nexit 0\n"
+    relative_commands = {
+        "ruby": "bin/ruby",
+        "rg": "bin/rg",
+        "java": "java/bin/java",
+        "javac": "java/bin/javac",
+        "mvn": "home/.m2/wrapper/dists/apache-maven/fixture/bin/mvn",
+    }
+    for relative in relative_commands.values():
+        path = first / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(executable)
+        path.chmod(0o555)
+    shadow_bash = first / "bin/bash"
+    shadow_bash.write_bytes(b"#!/bin/sh\nexit 97\n")
+    shadow_bash.chmod(0o555)
+    maven_home = first / "home/.m2/wrapper/dists/apache-maven/fixture"
+    (maven_home / "lib").mkdir()
+    (maven_home / "lib/core.jar").write_bytes(b"core")
+    repository = first / "home/.m2/repository"
+    (repository / "org/example/tool/1.0").mkdir(parents=True)
+    (repository / "org/example/tool/1.0/tool.jar").write_bytes(b"tool")
+    shutil.copytree(first, second)
+    _make_toolchain_read_only(first)
+    _make_toolchain_read_only(second)
+
+    platform_identity = {
+        "os": platform.system().lower(),
+        "architecture": platform.machine().lower(),
+    }
+    command_digest = "sha256:" + sha256_bytes(executable)
+    artifact = {
+        "artifactId": "artifact:ripgrep:test:darwin-arm64",
+        "kind": "OFFICIAL_RELEASE_ARCHIVE",
+        "platform": platform_identity,
+        "sourceUri": "https://example.invalid/ripgrep.tar.gz",
+        "archiveFormat": "TAR_GZ",
+        "archiveSha256": "sha256:" + "1" * 64,
+        "extractedRoot": "ripgrep-test",
+        "extractedFiles": {"rg": command_digest},
+        "provenancePolicy": "OFFICIAL_GITHUB_RELEASE_ARCHIVE_SHA256",
+    }
+    artifact_digest = "sha256:" + sha256_bytes(canonical_json_bytes(artifact))
+    profile_id = "toolchain-profile:test:darwin-arm64:v1"
+    profile = {
+        "schemaVersion": "capability-validator-toolchain-profile/v1",
+        "profileId": profile_id,
+        "environmentAdapter": "JAVA_MAVEN_OFFLINE_V1",
+        "platform": platform_identity,
+        "commands": {
+            name: {
+                "artifactId": (
+                    artifact["artifactId"] if name == "rg" else f"artifact:{name}:test"
+                ),
+                "fileName": name,
+                "sha256": command_digest,
+                "bindingPolicy": (
+                    "HARNESS_MANAGED_STORE" if name == "rg" else "HOST_ATTESTED"
+                ),
+                **({"artifactDigest": artifact_digest} if name == "rg" else {}),
+            }
+            for name in ("ruby", "rg", "java", "javac", "mvn")
+        },
+        "directories": {
+            "javaHome": {
+                "artifactId": "artifact:java:test",
+                "sha256": directory_identity_digest(first / "java"),
+                "bindingPolicy": "HOST_ATTESTED",
+            },
+            "mavenHome": {
+                "artifactId": "artifact:maven:test",
+                "sha256": directory_identity_digest(maven_home),
+                "bindingPolicy": "HARNESS_MANAGED_CACHE",
+            },
+            "mavenRepository": {
+                "artifactId": "artifact:maven-repository:test",
+                "sha256": directory_identity_digest(repository),
+                "bindingPolicy": "HARNESS_MANAGED_CACHE",
+            },
+        },
+        "relationships": {
+            "javaHomeCommands": ["java", "javac"],
+            "mavenHomeCommand": "mvn",
+            "mavenRepositoryLayout": "DOT_M2_REPOSITORY",
+        },
+    }
+    registry_path = root / "core/registries/capability-validator-toolchains.yaml"
+    registry_path.parent.mkdir(parents=True)
+    registry = {
+        "schemaVersion": "capability-validator-toolchain-registry/v1",
+        "artifacts": [artifact],
+        "profiles": [profile],
+    }
+    registry_path.write_text(
+        yaml.safe_dump(registry, sort_keys=False),
+        encoding="utf-8",
+    )
+
+    def binding_record(toolchain_root: Path) -> dict[str, Any]:
+        return {
+            "schemaVersion": "capability-validator-toolchain-binding/v1",
+            "profileId": profile_id,
+            "commands": {
+                name: str(toolchain_root / relative)
+                for name, relative in relative_commands.items()
+            },
+            "directories": {
+                "javaHome": str(toolchain_root / "java"),
+                "mavenHome": str(
+                    toolchain_root
+                    / "home/.m2/wrapper/dists/apache-maven/fixture"
+                ),
+                "mavenRepository": str(toolchain_root / "home/.m2/repository"),
+            },
+        }
+
+    binding_file = binding_path(root, profile_id)
+    binding_file.parent.mkdir(parents=True)
+    binding_file.write_text(json.dumps(binding_record(first)), encoding="utf-8")
+    binding_file.chmod(0o444)
+
+    expected_commands = {
+        name: first / relative for name, relative in relative_commands.items()
+    }
+    expected_path = ":".join(
+        dict.fromkeys(
+            [str(path.parent) for path in expected_commands.values()]
+            + ["/usr/bin", "/bin", "/usr/sbin", "/sbin"]
+        )
+    )
+    lines = [
+        "#!/usr/bin/env bash",
+        "set -euo pipefail",
+        f"[ \"$PATH\" = {shlex.quote(expected_path)} ]",
+        f"[ \"$HOME\" = {shlex.quote(str(first / 'home'))} ]",
+        f"[ \"$JAVA_HOME\" = {shlex.quote(str(first / 'java'))} ]",
+        f"[ \"$(command -v bash)\" = {shlex.quote(str(shadow_bash))} ]",
+    ]
+    lines.extend(
+        f"[ \"$(command -v {name})\" = {shlex.quote(str(path))} ]"
+        for name, path in expected_commands.items()
+    )
+    if mutate_binding_during_gate:
+        replacement = json.dumps(binding_record(second))
+        lines.extend(
+            [
+                f"/bin/chmod 0644 {shlex.quote(str(binding_file))}",
+                f"printf '%s' {shlex.quote(replacement)} > {shlex.quote(str(binding_file))}",
+                f"/bin/chmod 0444 {shlex.quote(str(binding_file))}",
+            ]
+        )
+    if mutate_profile_during_gate:
+        replacement_registry = deepcopy(registry)
+        replacement_registry["profiles"][0]["commands"]["ruby"]["sha256"] = (
+            "sha256:" + "0" * 64
+        )
+        replacement = json.dumps(replacement_registry)
+        lines.append(
+            f"printf '%s' {shlex.quote(replacement)} > {shlex.quote(str(registry_path))}"
+        )
+    validator = source / "scripts/verify-capability-pack"
+    validator.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    validator.chmod(0o755)
+    _git(source, "init", "-q")
+    _git(source, "config", "user.name", "Pack Test")
+    _git(source, "config", "user.email", "pack-test@example.invalid")
+    _git(source, "add", "-A")
+    _git(source, "commit", "-qm", "test: managed profile Gate")
+    commit = _git(source, "rev-parse", "HEAD")
+    tree = _git(source, "rev-parse", "HEAD^{tree}")
+    registration = _registration(source, commit, tree)
+    registration["validator"]["environmentContract"] = "MANAGED_TOOLCHAIN_PROFILE"
+    registration["validator"]["toolchainProfile"] = {
+        "profileId": profile_id,
+        "profileDigest": profile_digest(profile),
+    }
+    _write_registrations(root, [registration])
+    return root, registration
 
 
 def _replace(path: Path, old: str, new: str) -> None:
@@ -598,6 +810,44 @@ def test_candidate_gate_uses_registered_host_home_offline_cache_contract(
         trusted_maven_home,
         trusted_home / ".m2/repository",
     ] * 2
+
+
+def test_managed_profile_candidate_gate_uses_attested_resolution_and_absolute_bash(
+    tmp_path: Path,
+):
+    root, expected = _managed_profile_harness(tmp_path)
+
+    actual = get_registered_capability_pack(root, CAPABILITY_ID)
+
+    assert actual == expected
+
+
+def test_managed_profile_candidate_gate_rejects_binding_relocation_during_gate(
+    tmp_path: Path,
+):
+    root, _ = _managed_profile_harness(
+        tmp_path, mutate_binding_during_gate=True
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="toolchain identity changed during candidate Gate",
+    ):
+        get_registered_capability_pack(root, CAPABILITY_ID)
+
+
+def test_managed_profile_candidate_gate_rejects_profile_drift_during_gate(
+    tmp_path: Path,
+):
+    root, _ = _managed_profile_harness(
+        tmp_path, mutate_profile_during_gate=True
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="toolchain profile identity mismatch",
+    ):
+        get_registered_capability_pack(root, CAPABILITY_ID)
 
 
 @pytest.mark.parametrize(

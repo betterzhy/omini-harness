@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import platform
+import shutil
 import stat
 import subprocess
 from collections.abc import Mapping
@@ -28,6 +29,12 @@ TOOLCHAIN_BINDING_SCHEMA = (
 MANAGED_CACHE_RELATIVE = Path(".worktrees/.capability-pack-cache")
 
 _SYSTEM_PATH_ENTRIES = ("/usr/bin", "/bin", "/usr/sbin", "/sbin")
+_JAVA_MAVEN_OFFLINE_V1_COMMAND_ORDER = ("ruby", "rg", "java", "javac", "mvn")
+_JAVA_MAVEN_OFFLINE_V1_DIRECTORY_ORDER = (
+    "javaHome",
+    "mavenHome",
+    "mavenRepository",
+)
 _SANITIZED_ENVIRONMENT = {
     "PATH": ":".join(_SYSTEM_PATH_ENTRIES),
     "HOME": "/var/empty",
@@ -127,11 +134,20 @@ def _file_identity(value: os.stat_result) -> tuple[int, int, int, int, int]:
     )
 
 
-def _read_immutable_regular_file(path: Path, *, message: str) -> bytes:
+def _read_immutable_regular_file(
+    path: Path,
+    *,
+    message: str,
+    writable_message: str | None = None,
+) -> bytes:
     try:
         before = path.lstat()
         if path.is_symlink() or not stat.S_ISREG(before.st_mode):
             raise ValueError(message)
+        if writable_message is not None and (
+            stat.S_IMODE(before.st_mode) & 0o222 or os.access(path, os.W_OK)
+        ):
+            raise ValueError(writable_message)
         flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
         descriptor = os.open(path, flags)
     except (OSError, ValueError) as exc:
@@ -306,7 +322,9 @@ def load_toolchain_binding(repository_root: Path, profile_id: str) -> ToolchainB
     except OSError as exc:
         raise ValueError("capability pack toolchain binding is unavailable or unsafe") from exc
     data = _read_immutable_regular_file(
-        path, message="capability pack toolchain binding is unavailable or unsafe"
+        path,
+        message="capability pack toolchain binding is unavailable or unsafe",
+        writable_message="capability pack toolchain binding is writable",
     )
     try:
         binding = json.loads(data.decode("utf-8", "strict"))
@@ -472,6 +490,34 @@ def _platform_identity() -> dict[str, str]:
     return {"os": platform.system().lower(), "architecture": architecture}
 
 
+def _java_maven_offline_command_resolution(
+    profile: Mapping[str, Any],
+    by_name: Mapping[str, Path],
+    path_entries: tuple[str, ...],
+) -> None:
+    verified_directories = tuple(
+        dict.fromkeys(
+            str(by_name[name].parent)
+            for name in _JAVA_MAVEN_OFFLINE_V1_COMMAND_ORDER
+        )
+    )
+    effective_path = ":".join(path_entries)
+    for name in _JAVA_MAVEN_OFFLINE_V1_COMMAND_ORDER:
+        expected = by_name[name]
+        file_name = profile["commands"][name]["fileName"]
+        for directory in verified_directories:
+            candidate = Path(directory) / file_name
+            if candidate.exists() and candidate != expected:
+                raise ValueError(
+                    "capability pack validator effective command resolution mismatch"
+                )
+        resolved = shutil.which(file_name, path=effective_path)
+        if resolved is None or Path(resolved) != expected:
+            raise ValueError(
+                "capability pack validator effective command resolution mismatch"
+            )
+
+
 def verify_profile_toolchain(
     repository_root: Path,
     profile: Mapping[str, Any],
@@ -490,13 +536,19 @@ def verify_profile_toolchain(
         or set(directory_bindings) != set(profile["directories"])
     ):
         raise ValueError("capability pack toolchain binding is incomplete")
+    adapter = profile["environmentAdapter"]
+    if adapter != "JAVA_MAVEN_OFFLINE_V1":
+        raise ValueError(
+            "capability pack validator toolchain environment adapter is unsupported"
+        )
 
     common_root = _git_common_repository_root(Path(repository_root))
     managed_cache = common_root / MANAGED_CACHE_RELATIVE
     paths: list[Path] = []
     command_digests: list[tuple[str, str]] = []
     by_name: dict[str, Path] = {}
-    for name, identity in profile["commands"].items():
+    for name in _JAVA_MAVEN_OFFLINE_V1_COMMAND_ORDER:
+        identity = profile["commands"][name]
         if identity["bindingPolicy"] == "HARNESS_MANAGED_STORE":
             find_toolchain_artifact(
                 repository_root, identity["artifactId"], identity["artifactDigest"]
@@ -510,7 +562,8 @@ def verify_profile_toolchain(
 
     directories: dict[str, Path] = {}
     directory_identities: list[tuple[str, Path, str]] = []
-    for name, identity in profile["directories"].items():
+    for name in _JAVA_MAVEN_OFFLINE_V1_DIRECTORY_ORDER:
+        identity = profile["directories"][name]
         path = _normalized_binding_path(directory_bindings[name])
         _require_policy_containment(path, identity["bindingPolicy"], managed_cache)
         digest = directory_identity_digest(path)
@@ -521,11 +574,6 @@ def verify_profile_toolchain(
         directories[name] = path
         directory_identities.append((name, path, digest))
 
-    adapter = profile["environmentAdapter"]
-    if adapter != "JAVA_MAVEN_OFFLINE_V1":
-        raise ValueError(
-            "capability pack validator toolchain environment adapter is unsupported"
-        )
     java = by_name["java"]
     javac = by_name["javac"]
     mvn = by_name["mvn"]
@@ -549,9 +597,13 @@ def verify_profile_toolchain(
         raise ValueError("capability pack validator host HOME is unavailable or unsafe")
 
     environment = dict(_SANITIZED_ENVIRONMENT)
-    path_entries = [str(path.parent) for path in paths]
-    path_entries.extend(_SYSTEM_PATH_ENTRIES)
-    environment["PATH"] = ":".join(dict.fromkeys(path_entries))
+    path_entries = tuple(
+        dict.fromkeys(
+            [str(path.parent) for path in paths] + list(_SYSTEM_PATH_ENTRIES)
+        )
+    )
+    _java_maven_offline_command_resolution(profile, by_name, path_entries)
+    environment["PATH"] = ":".join(path_entries)
     environment["HOME"] = str(host_home)
     environment["JAVA_HOME"] = str(directories["javaHome"])
     environment["LANG"] = "en_US.UTF-8"

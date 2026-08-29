@@ -36,6 +36,7 @@ _REGISTRATION_SCHEMA = "core/schemas/capability-pack-registration.schema.json"
 _MANIFEST_SCHEMA = "core/schemas/capability-pack-manifest.schema.json"
 _REGISTRY_SOURCE = "core/registries/capability-packs.yaml"
 CAPABILITY_PACK_VALIDATION_ABI = "v1"
+_CANDIDATE_GATE_INTERPRETER = "/bin/bash"
 _GIT_ENVIRONMENT = {
     "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
     "HOME": "/var/empty",
@@ -1377,7 +1378,7 @@ def _materialize_verified_capability_pack(
             raise ValueError("capability pack executed validator identity mismatch")
         session._record("full_candidate_gate_count", key=key)
         completed = _run_candidate_gate(
-            ["bash", str(validator_path), commit, tree],
+            [_CANDIDATE_GATE_INTERPRETER, str(validator_path), commit, tree],
             cwd=checkout,
             timeout=registration["validator"].get("timeoutSeconds", 300),
             environment=_validator_environment(registration, toolchain),

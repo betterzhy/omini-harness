@@ -97,6 +97,9 @@ This candidate will not:
 - automatically parallelize external candidate Gates;
 - repair the Pay-Nexus-specific `originalSourceRoot` / replacement-root validator
   correctness defect;
+- optimize `controlled_coordinator.py` operations in Phase 1. Coordinator calls keep
+  current private-session/full-validation behavior and are recorded as residual cost;
+  a later optimization requires its own R2 scope and tests;
 - add Bazel, SLSA, OPA, Temporal, a remote CAS, pytest-xdist, or another framework.
 
 ## Considered approaches
@@ -223,10 +226,13 @@ successful result is never reinterpreted as having run on a later toolchain stat
   expected fixed Pack identity without rerunning the candidate Gate.
 
 Pack bytes must not be read from the mutable discovery locator after verification.
-The session owns retained checkout context managers through one `ExitStack`. Close is
-idempotent, excludes new/in-flight users, waits for any current verifier, and unwinds
-all retained checkouts even if one cleanup reports an error. Cleanup failure makes the
-owning operation fail; it never leaves a verified object usable.
+Each verified Pack entry owns its checkout cleanup context. The session registers
+completed entry cleanup owners under its mutex, then invokes every cleanup serially in
+reverse registration order during close. It does not assume that `ExitStack` or any
+checkout context manager is thread-safe. Close is idempotent, excludes new/in-flight
+users, waits for every current user, and unwinds all retained checkouts even if one
+cleanup reports an error. Cleanup failure makes the owning operation fail; it never
+leaves a verified object usable.
 
 ### `VerifiedLockContext`
 
@@ -344,9 +350,10 @@ in-flight owner may finish cleanup but must not publish a newly verified entry a
 that transition. All waiters observe a failure, never a partially published object.
 Close atomically enters `CLOSING`, rejects new leases and verification owners, waits
 for all existing leases across all keys to reach zero, and only then unwinds the
-entire `ExitStack`. Cleanup attempts every retained checkout even when one cleanup
-fails; cleanup errors are aggregated, all trusted maps/tokens are invalidated, and no
-verified object remains usable. This is process-local single-flight only.
+mutex-protected cleanup-owner list serially. Cleanup attempts every retained checkout
+even when one cleanup fails; cleanup errors are aggregated, all trusted maps/tokens
+are invalidated, and no verified object remains usable. This is process-local
+single-flight only.
 
 The optional keyword-only `verification_session` is propagated through:
 
@@ -358,10 +365,27 @@ The optional keyword-only `verification_session` is propagated through:
 - `resolve_design_context`;
 - `resolve_integration_context`;
 - `run_integration_scenario`;
+- `load_project_registration`, `check_project_registration`, and
+  `resolve_registered_integration`;
 - projection build, validation, and freshness;
 - integration projection/freshness;
 - projection install planning;
 - structural assurance paths that validate multiple Packs/projects in one command.
+
+Registered-integration CLI operations have an explicit two-stage bootstrap to avoid
+a session-capacity circular dependency:
+
+1. a structural pre-read schema-validates the project registration, resolves the
+   integration/control-plane roots, schema-validates the lock and extracts its
+   declared external capability IDs without running `verify_capability_lock()` or
+   treating any result as trusted;
+2. the top-level CLI operation creates a session bounded by that immutable ID set,
+   then reruns full project-registration and lock verification with the session before
+   passing the same session and verified integration root downstream.
+
+Any drift between pre-read and full verification fails closed. The pre-read cannot
+create a `VerifiedLockContext`, return a verified Pack, or skip any existing
+registration/path/integration identity check.
 
 The serial Pay-Nexus `pack_e2e` module fixture is the explicit owner that surrounds
 the six parameterized scenario operations and the separate install-plan operation.
@@ -384,6 +408,11 @@ CLI dispatch path that itself sequences multiple independent operations needs to
 the session in `cli.py`. In particular, both `projection build` and
 `projection build --check` must create one session around `_resolve()` plus
 `build_projection_pack()` / `check_projection_freshness()` and pass it to both.
+Likewise, registered `integration inspect`, `integration resolve`, and `integration
+projection` / `integration projection --check` commands must create one session
+around project-registration precheck and the downstream Authority/resolution/
+projection operation. `_registered_integration_root()` must consume or propagate that
+session rather than starting an independent full lock verification.
 This is internal wiring only: arguments, stdout/stderr, exit codes, serialized output,
 and public schemas remain unchanged. Ordinary independent CLI processes never share
 validation trust.
@@ -497,6 +526,8 @@ Implementation follows RED → GREEN. Deterministic tests must cover:
   objects, and report a non-PASS operation;
 - compound CLI projection build/check performs one Gate for one exact Pack key and
   preserves existing CLI bytes, exit status, and error behavior;
+- a registered-project Integration CLI precheck plus inspect/resolve/projection
+  operation shares one session and records one Gate for one exact Pack key;
 - strict marker registration rejects typos, `pack_e2e` remains serial, unmarked tests
   remain in an explicit default/unclassified lane, and the complete regression still
   collects every test without marker exclusion.
@@ -549,6 +580,7 @@ current candidate set is:
 - `src/evolution_harness/projection.py`
 - `src/evolution_harness/install.py`
 - `src/evolution_harness/assurance.py`
+- `src/evolution_harness/registration.py`
 - `src/evolution_harness/cli.py` for internal session ownership/propagation only;
   no command, flag, output, exit-code, or schema change
 - `pyproject.toml` for strict `fast`, `integration`, and `pack_e2e` marker
@@ -563,6 +595,7 @@ current candidate set is:
 - `tests/test_projection_install.py`
 - `tests/test_integration_e2e.py`
 - `tests/test_assurance_cli.py`
+- `tests/test_project_registration.py`
 - `tests/test_pay_nexus_java_capability_adoption_pilot.py`
 - `tests/test_cognitura_integration_fixture.py`
 - `tests/test_e2e.py`
@@ -575,7 +608,7 @@ The candidate must not modify:
 - public CLI commands, arguments, output/exit semantics, and schemas;
 - any external Pack repository;
 - Pay-Nexus Authority or project files;
-- coordinator receipt/store code.
+- coordinator receipt/store code and `src/evolution_harness/controlled_coordinator.py`.
 
 If implementation proves that a schema, generated artifact, external repository,
 persistent state, or new dependency is necessary, work stops and the scope returns
@@ -590,7 +623,8 @@ for renewed design approval.
 3. Introduce `CapabilityVerificationSession` and `VerifiedCapabilityPack`, retaining
    one isolated checkout per exact Pack identity.
 4. Introduce `VerifiedLockContext` and propagate the explicit session through
-   resolver, projection, freshness, integration, install, and assurance.
+   resolver, project registration, projection, freshness, integration, install,
+   assurance, and compound CLI owners.
 5. Run focused regressions and existing mutation/rollback tests after each behavior
    slice.
 6. Register strict cost markers, parameterize the six Pay scenarios into stable

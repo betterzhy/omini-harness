@@ -9,6 +9,7 @@ import pytest
 import yaml
 
 from evolution_harness.schema import SchemaStore
+from evolution_harness.scenario import run_integration_scenario
 
 
 CAPABILITY_ID = "framework:java:java-engineering-standard"
@@ -24,6 +25,14 @@ AUTHORITY_SET_DIGEST = "sha256:65437c8d988c241735cd9be19b3f3a8384b0b992b32955412
 PAY_REPOSITORY = Path("/Users/yuzhuangzhuang/Projects/pay-nexus")
 PAY_SOURCE_COMMIT = "050438405f76dbd1fb7bf13317b9f9d569760a53"
 PAY_SOURCE_TREE = "735541356cabf7501547192e4972f8b236befe18"
+PAY_SCENARIOS = (
+    "closed-architecture-protection",
+    "consumed-stage-does-not-authorize-wave0",
+    "current-authority-denies-execution",
+    "next-slice-readiness-resolution",
+    "review-go-does-not-authorize",
+    "stage4-stop-replay",
+)
 
 
 def _yaml(path: Path) -> dict:
@@ -63,6 +72,19 @@ def pay_source(tmp_path_factory: pytest.TempPathFactory) -> Path:
         b"",
     )
     return target
+
+
+@pytest.fixture(scope="module")
+def pay_verification_session():
+    from evolution_harness.capability_pack_registry import CapabilityVerificationSession
+
+    root = Path(__file__).parents[1]
+    with CapabilityVerificationSession(
+        root,
+        allowed_capability_ids={CAPABILITY_ID},
+    ) as session:
+        yield session
+    assert session.stats.active_use_lease_count == 0
 
 
 def test_pay_nexus_sidecar_binds_exact_java_v2_lock():
@@ -164,26 +186,39 @@ def test_pay_nexus_projection_contains_byte_identical_java_bundle():
     assert not any("temp-input" in item["path"] for item in manifest["generatedFiles"])
 
 
-def test_pay_nexus_scenarios_and_install_plan_remain_read_only(
-    tmp_path: Path, pay_source: Path
+@pytest.mark.integration
+@pytest.mark.pack_e2e
+@pytest.mark.parametrize("scenario_stem", PAY_SCENARIOS, ids=PAY_SCENARIOS)
+def test_pay_nexus_scenario_remains_read_only(
+    scenario_stem: str,
+    pay_source: Path,
+    pay_verification_session,
 ):
-    from evolution_harness.install import install_projection
-    from evolution_harness.scenario import run_integration_scenario
-
     root = Path(__file__).parents[1]
     integration = root / "integrations/pay-nexus-shadow"
     before = _git_state(pay_source)
-    results = [
-        run_integration_scenario(root, integration, pay_source, scenario)
-        for scenario in sorted((integration / "scenarios").glob("*.yaml"))
-    ]
-    assert len(results) == 6
-    failures = {
-        result["scenarioId"]: [check for check in result["checks"] if not check["pass"]]
-        for result in results
-        if result["gate"] != "PASS"
-    }
-    assert failures == {}
+    result = run_integration_scenario(
+        root,
+        integration,
+        pay_source,
+        integration / "scenarios" / f"{scenario_stem}.yaml",
+        verification_session=pay_verification_session,
+    )
+    assert result["gate"] == "PASS"
+    assert before == _git_state(pay_source)
+
+
+@pytest.mark.integration
+@pytest.mark.pack_e2e
+def test_pay_nexus_install_plan_remains_read_only(
+    tmp_path: Path,
+    pay_source: Path,
+    pay_verification_session,
+):
+    from evolution_harness.install import install_projection
+
+    root = Path(__file__).parents[1]
+    before = _git_state(pay_source)
     target = tmp_path / "dry-run-target"
     target.mkdir()
     plan = install_projection(
@@ -191,8 +226,17 @@ def test_pay_nexus_scenarios_and_install_plan_remain_read_only(
         root / "generated/projections/codex/pay-nexus-shadow",
         target,
         source_root=pay_source,
+        verification_session=pay_verification_session,
     )
     assert plan["gate"] == "PASS"
     assert plan["mode"] == "DRY_RUN"
     assert len(plan["actions"]) == 46
     assert before == _git_state(pay_source)
+    stats = pay_verification_session.stats
+    assert stats.full_candidate_gate_count == 1
+    assert stats.isolated_checkout_count == 1
+    assert stats.toolchain_directory_digest_count == 6
+    assert stats.by_pack
+    assert stats.full_candidate_gate_count <= 2
+    assert stats.isolated_checkout_count <= 2
+    assert stats.toolchain_directory_digest_count <= 12

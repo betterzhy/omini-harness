@@ -5,7 +5,9 @@ from typing import Any
 
 import yaml
 
+from .capability_pack_registry import CapabilityVerificationSession
 from .paths import resolve_without_symlinks
+from .projection import ProjectionFreshness
 from .schema import SchemaStore
 
 
@@ -53,6 +55,7 @@ def resolve_integration_context(
     runtime: str,
     explicit_stage: str | None = None,
     reopen_signal: str | None = None,
+    verification_session: CapabilityVerificationSession | None = None,
 ) -> dict[str, Any]:
     from .authority import build_authority_snapshot
     from .resolver import resolve_design_context
@@ -82,6 +85,7 @@ def resolve_integration_context(
         explicit_stage=explicit_stage,
         reopen_signal=reopen_signal,
         authority_snapshot=snapshot,
+        verification_session=verification_session,
     )
     if resolved["project"] != config["projectId"]:
         raise ValueError("control-plane project does not match integration project")
@@ -99,6 +103,7 @@ def build_integration_projection(
     runtime: str,
     explicit_stage: str | None = None,
     reopen_signal: str | None = None,
+    verification_session: CapabilityVerificationSession | None = None,
 ) -> dict[str, Any]:
     from .authority import build_authority_snapshot
     from .projection import build_projection_pack
@@ -114,6 +119,7 @@ def build_integration_projection(
         runtime=runtime,
         explicit_stage=explicit_stage,
         reopen_signal=reopen_signal,
+        verification_session=verification_session,
     )
     snapshot = build_authority_snapshot(repository_root, integration_root, source_root)
     return build_projection_pack(
@@ -136,9 +142,10 @@ def check_integration_projection(
     requested_output: str | None = None,
     explicit_stage: str | None = None,
     reopen_signal: str | None = None,
-):
+    verification_session: CapabilityVerificationSession | None = None,
+) -> ProjectionFreshness:
     from .authority import build_authority_snapshot
-    from .projection import ProjectionFreshness, check_projection_freshness
+    from .projection import check_projection_freshness
 
     loaded = load_integration(repository_root, integration_root)
     if runtime != loaded["config"]["runtime"]:
@@ -163,6 +170,7 @@ def check_integration_projection(
             runtime=runtime,
             explicit_stage=explicit_stage,
             reopen_signal=reopen_signal,
+            verification_session=verification_session,
         )
         expected_resolution_id = resolved["resolutionId"]
     return check_projection_freshness(

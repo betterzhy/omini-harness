@@ -114,6 +114,62 @@ def test_resolver_selects_locked_external_pack_from_verified_registration(tmp_pa
     }
 
 
+def test_resolver_reuses_one_external_pack_verification_session_without_output_drift(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from evolution_harness import capability_pack_registry
+    from evolution_harness.capability_pack_registry import CapabilityVerificationSession
+    from evolution_harness.generated import deterministic_json_bytes
+
+    root, project, _ = _external_pack_project(tmp_path)
+    expected = _resolve(
+        root,
+        project,
+        intent="visual-reference-review",
+        topic="web-fidelity",
+        requested_output="review findings",
+        runtime="CODEX",
+    )
+    real_gate = capability_pack_registry._run_candidate_gate
+    gate_count = 0
+
+    def counted_gate(*args, **kwargs):
+        nonlocal gate_count
+        gate_count += 1
+        return real_gate(*args, **kwargs)
+
+    monkeypatch.setattr(capability_pack_registry, "_run_candidate_gate", counted_gate)
+    with CapabilityVerificationSession(
+        root,
+        allowed_capability_ids={EXTERNAL_CAPABILITY_ID},
+    ) as session:
+        first = _resolve(
+            root,
+            project,
+            intent="visual-reference-review",
+            topic="web-fidelity",
+            requested_output="review findings",
+            runtime="CODEX",
+            verification_session=session,
+        )
+        second = _resolve(
+            root,
+            project,
+            intent="visual-reference-review",
+            topic="web-fidelity",
+            requested_output="review findings",
+            runtime="CODEX",
+            verification_session=session,
+        )
+        stats = session.stats
+
+    assert deterministic_json_bytes(first) == deterministic_json_bytes(expected)
+    assert deterministic_json_bytes(second) == deterministic_json_bytes(expected)
+    assert stats.full_candidate_gate_count == 1
+    assert gate_count == 1
+
+
 def test_resolver_rejects_mutable_external_pack_checkout_drift(tmp_path: Path):
     root, project, source = _external_pack_project(tmp_path)
     skill_path = source / "skills/web-high-fidelity/SKILL.md"

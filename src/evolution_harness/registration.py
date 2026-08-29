@@ -10,6 +10,7 @@ import yaml
 
 from .anchored_fs import AnchoredPathError, AnchoredRoot
 from .capability_pack_registry import CapabilityVerificationSession
+from .hashing import canonical_json_bytes, sha256_bytes
 from .integration import load_integration
 from .paths import PathBoundaryError, resolve_without_symlinks
 from .project import load_capability_lock, verify_capability_lock
@@ -31,6 +32,9 @@ class ProjectRegistrationBootstrap:
     registration_path: Path | None
     integration_root: Path
     control_plane_root: Path
+    registration_witness: str
+    integration_witness: str
+    capability_lock_witness: str
     allowed_capability_ids: frozenset[str]
 
 
@@ -108,6 +112,21 @@ def _load_project_registration_structure(
         registration_path=registration_path,
         integration_root=integration_root,
         control_plane_root=integration["controlPlaneRoot"],
+        registration_witness="sha256:"
+        + sha256_bytes(canonical_json_bytes(registration)),
+        integration_witness="sha256:"
+        + sha256_bytes(
+            canonical_json_bytes(
+                {
+                    "config": integration["config"],
+                    "authorityMap": integration["authorityMap"],
+                    "integrationRoot": str(integration_root),
+                    "controlPlaneRoot": str(integration["controlPlaneRoot"]),
+                }
+            )
+        ),
+        capability_lock_witness="sha256:"
+        + sha256_bytes(canonical_json_bytes(lock)),
         allowed_capability_ids=frozenset(
             item["capabilityId"]
             for item in lock["capabilities"]
@@ -139,16 +158,18 @@ def _bootstrap_registered_integration(
     return bootstrap
 
 
-def _same_bootstrap_roots(
-    bootstrap: ProjectRegistrationBootstrap,
-    loaded: dict[str, Any],
-) -> bool:
-    return (
-        loaded["sourceRoot"] == bootstrap.source_root
-        and loaded["registrationPath"] == bootstrap.registration_path
-        and loaded["integrationRoot"] == bootstrap.integration_root
-        and loaded["integration"]["controlPlaneRoot"] == bootstrap.control_plane_root
+def _require_unchanged_bootstrap(
+    initial: ProjectRegistrationBootstrap,
+    live: ProjectRegistrationBootstrap,
+    verification_session: CapabilityVerificationSession,
+) -> None:
+    if initial == live:
+        return
+    error = ProjectRegistrationError(
+        "project registration structural witness changed during verification"
     )
+    verification_session._poison(error)
+    raise error
 
 
 def _load_project_registration_verified(
@@ -206,10 +227,16 @@ def load_project_registration(
             bootstrap.source_root,
             verification_session=private_session,
         )
-        if not _same_bootstrap_roots(bootstrap, loaded):
-            raise ProjectRegistrationError(
-                "project registration roots changed during verification"
-            )
+        live_bootstrap = _bootstrap_registered_integration(
+            bootstrap.repository_root,
+            bootstrap.source_root,
+            None,
+        )
+        _require_unchanged_bootstrap(
+            bootstrap,
+            live_bootstrap,
+            private_session,
+        )
         return loaded
 
 
@@ -311,10 +338,14 @@ def registered_integration_operation(
             explicit_integration,
             verification_session=verification_session,
         )
-        if not _same_bootstrap_roots(bootstrap, loaded):
-            error = ProjectRegistrationError(
-                "project registration roots changed during verification"
-            )
-            verification_session._poison(error)
-            raise error
+        live_bootstrap = _bootstrap_registered_integration(
+            bootstrap.repository_root,
+            bootstrap.source_root,
+            explicit_integration,
+        )
+        _require_unchanged_bootstrap(
+            bootstrap,
+            live_bootstrap,
+            verification_session,
+        )
         yield loaded, verification_session

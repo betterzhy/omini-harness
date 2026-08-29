@@ -508,6 +508,121 @@ def test_registered_cli_fails_closed_when_lock_drifts_between_bootstrap_and_live
     )
 
 
+@pytest.mark.parametrize(
+    ("mutation", "expected_gate_count"),
+    [("external-removal", 0), ("same-id-lock-replacement", 1)],
+)
+def test_registered_cli_fails_closed_on_structurally_valid_bootstrap_live_identity_drift(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    mutation: str,
+    expected_gate_count: int,
+):
+    from evolution_harness import capability_pack_registry, registration
+    from evolution_harness.project import (
+        build_capability_lock,
+        capability_lock_fingerprint,
+    )
+
+    root, _, source = _external_registered_fixture(tmp_path)
+    real_bootstrap = registration._bootstrap_registered_integration
+    real_gate = capability_pack_registry._run_candidate_gate
+    gate_count = 0
+    mutated = False
+
+    def counted_gate(*args, **kwargs):
+        nonlocal gate_count
+        gate_count += 1
+        return real_gate(*args, **kwargs)
+
+    def coordinated_drift(*args, **kwargs):
+        nonlocal mutated
+        bootstrap = real_bootstrap(*args, **kwargs)
+        if mutated:
+            return bootstrap
+        mutated = True
+        binding_path = (
+            bootstrap.control_plane_root / ".agent-evolution/capabilities.yaml"
+        )
+        binding = yaml.safe_load(binding_path.read_text(encoding="utf-8"))
+        capability_id = "workflow:web-high-fidelity:reference-driven-visual-fidelity"
+        binding["capabilities"].remove(capability_id)
+        if mutation == "same-id-lock-replacement":
+            binding["extensions"].append(capability_id)
+        binding_path.write_text(
+            yaml.safe_dump(binding, sort_keys=False), encoding="utf-8"
+        )
+
+        if mutation == "external-removal":
+            lock = build_capability_lock(
+                bootstrap.repository_root,
+                bootstrap.control_plane_root,
+                write=True,
+            )
+        else:
+            lock_path = (
+                bootstrap.control_plane_root
+                / ".agent-evolution/capabilities.lock.yaml"
+            )
+            lock = yaml.safe_load(lock_path.read_text(encoding="utf-8"))
+            external = next(
+                item
+                for item in lock["capabilities"]
+                if item["capabilityId"] == capability_id
+            )
+            external["resolvedBecause"] = ["project-extension"]
+            lock["lockFingerprint"] = capability_lock_fingerprint(lock)
+            lock_path.write_text(
+                yaml.safe_dump(lock, sort_keys=False), encoding="utf-8"
+            )
+
+        registration_path = source / ".agent-evolution/registration.yaml"
+        registration_value = yaml.safe_load(
+            registration_path.read_text(encoding="utf-8")
+        )
+        registration_value["capabilityLockFingerprint"] = lock["lockFingerprint"]
+        registration_path.write_text(
+            yaml.safe_dump(registration_value, sort_keys=False), encoding="utf-8"
+        )
+        return bootstrap
+
+    monkeypatch.setattr(capability_pack_registry, "_run_candidate_gate", counted_gate)
+    monkeypatch.setattr(
+        registration, "_bootstrap_registered_integration", coordinated_drift
+    )
+    result = _invoke_cli(
+        capsys,
+        root,
+        "integration",
+        "inspect",
+        "--source",
+        str(source),
+        "--format",
+        "json",
+    )
+
+    assert result == (
+        1,
+        json.dumps(
+            {
+                "schemaVersion": "harness-cli/v1",
+                "ok": False,
+                "command": "integration inspect",
+                "data": {
+                    "code": "INTERNAL_ERROR",
+                    "message": "project registration structural witness changed during verification",
+                },
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+        + "\n",
+        "",
+    )
+    assert gate_count == expected_gate_count
+
+
 def test_registered_cli_discovery_requires_registration_without_explicit_integration(tmp_path: Path):
     repository = Path(__file__).parents[1]
     source = _source_fixture(tmp_path)

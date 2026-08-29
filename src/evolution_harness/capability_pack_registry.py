@@ -23,8 +23,10 @@ import yaml
 from .generated import write_generated_json
 from .hashing import canonical_json_bytes, sha256_bytes
 from .schema import SchemaStore, SchemaValidationError
+from .toolchain_provisioning import missing_toolchain_binding_message
 from .toolchain_profile import (
     VerifiedToolchain,
+    binding_path,
     directory_identity_digest as _directory_identity_digest,
     load_toolchain_binding,
     load_toolchain_profile,
@@ -586,7 +588,17 @@ def _verify_validator_toolchain(
     profile = load_toolchain_profile(
         repository_root, reference["profileId"], reference["profileDigest"]
     )
-    binding = load_toolchain_binding(repository_root, reference["profileId"])
+    local_binding_path = binding_path(repository_root, reference["profileId"])
+    try:
+        binding = load_toolchain_binding(repository_root, reference["profileId"])
+    except ValueError as exc:
+        if (
+            str(exc)
+            == "capability pack toolchain binding is unavailable or unsafe"
+            and not local_binding_path.exists()
+        ):
+            raise ValueError(missing_toolchain_binding_message(profile)) from exc
+        raise
     return verify_profile_toolchain(repository_root, profile, binding)
 
 

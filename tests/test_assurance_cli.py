@@ -8,9 +8,12 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
 import yaml
 
 from capability_pack_test_support import JAVA_CAPABILITY_ID, retain_web_registration_fixture
+from evolution_harness.cli import main
+from test_toolchain_provisioning import make_provision_harness
 
 
 EXTERNAL_CAPABILITY_ID = "workflow:web-high-fidelity:reference-driven-visual-fidelity"
@@ -644,3 +647,150 @@ def test_engineering_compat_cli_doctor_preserves_domain_boundary(tmp_path: Path)
     payload = json.loads(result.stdout)
     assert payload["ok"] is True
     assert payload["data"]["engineeringDomain"] == "PASS"
+
+
+def _toolchain_bind_arguments(harness) -> list[str]:
+    arguments: list[str] = []
+    for name, path in harness.explicit_bindings.items():
+        arguments.extend(["--bind", f"{name}={path}"])
+    return arguments
+
+
+def test_toolchain_provision_dry_run_performs_no_io(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+):
+    harness = make_provision_harness(tmp_path)
+    monkeypatch.setattr(
+        "evolution_harness.toolchain_provisioning.urlopen",
+        lambda *_args, **_kwargs: pytest.fail("network used"),
+    )
+
+    result = main(
+        [
+            "--repository-root",
+            str(harness.root),
+            "toolchain",
+            "provision",
+            "--profile",
+            harness.profile_id,
+            *_toolchain_bind_arguments(harness),
+            "--format",
+            "json",
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert result == 0
+    assert payload["schemaVersion"] == "harness-cli/v1"
+    assert payload["command"] == "toolchain provision"
+    assert payload["data"]["apply"] is False
+    assert not harness.binding_path.exists()
+    assert not harness.published_root.exists()
+
+
+def test_toolchain_provision_apply_uses_offline_archive(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+):
+    harness = make_provision_harness(tmp_path)
+    monkeypatch.setattr(
+        "evolution_harness.toolchain_provisioning.urlopen",
+        lambda *_args, **_kwargs: pytest.fail("network used"),
+    )
+
+    result = main(
+        [
+            "--repository-root",
+            str(harness.root),
+            "toolchain",
+            "provision",
+            "--profile",
+            harness.profile_id,
+            "--archive",
+            str(harness.archive_path),
+            *_toolchain_bind_arguments(harness),
+            "--apply",
+            "--format",
+            "json",
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert result == 0
+    assert payload["ok"] is True
+    assert payload["data"]["apply"] is True
+    assert harness.binding_path.is_file()
+    assert harness.published_root.is_dir()
+
+
+def test_toolchain_status_missing_binding_is_deterministic_and_offline(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+):
+    harness = make_provision_harness(tmp_path)
+    monkeypatch.setattr(
+        "evolution_harness.toolchain_provisioning.urlopen",
+        lambda *_args, **_kwargs: pytest.fail("network used"),
+    )
+
+    result = main(
+        [
+            "--repository-root",
+            str(harness.root),
+            "toolchain",
+            "status",
+            "--profile",
+            harness.profile_id,
+            "--format",
+            "json",
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert result == 0
+    assert payload["data"]["status"] == "MISSING"
+    assert (
+        "harness toolchain provision --profile "
+        "toolchain-profile:test:darwin-arm64:v1 --apply"
+    ) in payload["data"]["message"]
+
+
+@pytest.mark.parametrize(
+    ("bindings", "message"),
+    [
+        (["ruby=/absolute/ruby", "ruby=/absolute/other"], "duplicate toolchain binding"),
+        (["unknown=/absolute/value"], "unknown toolchain binding"),
+        (["ruby=relative/ruby"], "toolchain binding path must be absolute"),
+        (["ruby"], "toolchain binding must use NAME=ABSOLUTE_PATH"),
+    ],
+)
+def test_toolchain_provision_rejects_invalid_bindings(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    bindings: list[str],
+    message: str,
+):
+    harness = make_provision_harness(tmp_path)
+    arguments = [
+        "--repository-root",
+        str(harness.root),
+        "toolchain",
+        "provision",
+        "--profile",
+        harness.profile_id,
+    ]
+    for binding in bindings:
+        arguments.extend(["--bind", binding])
+    arguments.extend(["--format", "json"])
+
+    result = main(arguments)
+
+    payload = json.loads(capsys.readouterr().out)
+    assert result == 1
+    assert payload["schemaVersion"] == "harness-cli/v1"
+    assert payload["ok"] is False
+    assert message in payload["data"]["message"]

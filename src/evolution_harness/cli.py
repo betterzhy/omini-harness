@@ -41,6 +41,11 @@ from .registry import build_all_registries, build_design_registry
 from .resolver import resolve_design_context
 from .revalidation import check_revalidation
 from .scenario import run_integration_scenario
+from .toolchain_provisioning import (
+    plan_toolchain_provision,
+    provision_toolchain,
+    toolchain_status,
+)
 
 
 def _load_yaml(path: str | Path) -> dict[str, Any]:
@@ -110,6 +115,21 @@ def _add_integration_resolution_args(parser: argparse.ArgumentParser) -> None:
 def _add_coordination_mutation_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--source", required=True)
     parser.add_argument("--request", required=True)
+
+
+def _parse_toolchain_bindings(values: list[str]) -> dict[str, Path]:
+    bindings: dict[str, Path] = {}
+    for value in values:
+        name, separator, raw_path = value.partition("=")
+        if not separator or not name or not raw_path:
+            raise ValueError("toolchain binding must use NAME=ABSOLUTE_PATH")
+        if name in bindings:
+            raise ValueError(f"duplicate toolchain binding: {name}")
+        path = Path(raw_path)
+        if not path.is_absolute():
+            raise ValueError(f"toolchain binding path must be absolute: {name}")
+        bindings[name] = path
+    return bindings
 
 
 def _coordination_command_from_argv(argv: list[str]) -> str | None:
@@ -186,6 +206,10 @@ def build_parser(
     p = sub.add_parser("validate"); p.add_argument("--check-generated", action="store_true"); p.add_argument("--project", action="append"); _add_format(p)
     p = sub.add_parser("list"); p.add_argument("--kind"); _add_format(p)
     p = sub.add_parser("show"); p.add_argument("id"); p.add_argument("--version"); _add_format(p)
+
+    p = sub.add_parser("toolchain"); s = p.add_subparsers(dest="action", required=True)
+    q = s.add_parser("status"); q.add_argument("--profile", required=True); _add_format(q)
+    q = s.add_parser("provision"); q.add_argument("--profile", required=True); q.add_argument("--archive"); q.add_argument("--bind", action="append", default=[]); q.add_argument("--apply", action="store_true"); _add_format(q)
 
     p = sub.add_parser("registry"); s = p.add_subparsers(dest="action", required=True); q = s.add_parser("build"); q.add_argument("--check", action="store_true"); _add_format(q)
     p = sub.add_parser("catalog"); s = p.add_subparsers(dest="action", required=True); q = s.add_parser("build"); q.add_argument("--check", action="store_true"); _add_format(q)
@@ -264,6 +288,19 @@ def main(argv=None) -> int:
             if not entries:
                 return _emit({"code": "NOT_FOUND", "message": args.id}, fmt=fmt, ok=False, command=command)
             return _emit(entries[-1], fmt=fmt, command=command)
+        if args.command == "toolchain" and args.action == "status":
+            return _emit(
+                toolchain_status(root, args.profile), fmt=fmt, command=command
+            )
+        if args.command == "toolchain" and args.action == "provision":
+            bindings = _parse_toolchain_bindings(args.bind)
+            archive = Path(args.archive) if args.archive is not None else None
+            data = (
+                provision_toolchain(root, args.profile, bindings, archive)
+                if args.apply
+                else plan_toolchain_provision(root, args.profile, bindings, archive)
+            )
+            return _emit(data, fmt=fmt, command=command)
         if args.command == "registry":
             expected = build_all_registries(root, write=not args.check)
             ok = True

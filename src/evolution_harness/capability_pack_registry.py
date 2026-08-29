@@ -2,16 +2,21 @@ from __future__ import annotations
 
 import hashlib
 import os
+import platform
 import signal
 import stat
 import subprocess
+import sys
 import tempfile
+import threading
 import unicodedata
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from contextlib import contextmanager
+from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from types import MappingProxyType
+from types import TracebackType
 from typing import Any
 
 import yaml
@@ -24,6 +29,7 @@ from .schema import SchemaStore, SchemaValidationError
 _REGISTRATION_SCHEMA = "core/schemas/capability-pack-registration.schema.json"
 _MANIFEST_SCHEMA = "core/schemas/capability-pack-manifest.schema.json"
 _REGISTRY_SOURCE = "core/registries/capability-packs.yaml"
+CAPABILITY_PACK_VALIDATION_ABI = "v1"
 _GIT_ENVIRONMENT = {
     "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
     "HOME": "/var/empty",
@@ -66,6 +72,362 @@ class VerifiedToolchain:
     command_digests: tuple[tuple[str, str], ...]
     directory_identities: tuple[tuple[str, Path, str], ...]
     environment: Mapping[str, str]
+
+
+@dataclass(frozen=True, slots=True)
+class PackVerificationKey:
+    capability_id: str
+    registration_id: str
+    digest: str
+
+
+@dataclass(frozen=True, slots=True)
+class VerificationStats:
+    full_candidate_gate_count: int
+    isolated_checkout_count: int
+    toolchain_directory_digest_count: int
+    verified_pack_count: int
+    verified_lock_count: int
+    pack_reuse_hit_count: int
+    lock_reuse_hit_count: int
+    source_recheck_count: int
+    registration_recheck_count: int
+    lock_witness_recheck_count: int
+    active_use_lease_count: int
+    by_pack: Mapping[str, Mapping[str, int]]
+    by_lock: Mapping[str, Mapping[str, int]]
+
+
+def _freeze(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return MappingProxyType({key: _freeze(item) for key, item in value.items()})
+    if isinstance(value, list):
+        return tuple(_freeze(item) for item in value)
+    if isinstance(value, tuple):
+        return tuple(_freeze(item) for item in value)
+    return value
+
+
+def _thaw(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {key: _thaw(item) for key, item in value.items()}
+    if isinstance(value, tuple):
+        return [_thaw(item) for item in value]
+    return deepcopy(value)
+
+
+@dataclass(frozen=True, slots=True)
+class VerifiedCapabilityPack:
+    key: PackVerificationKey
+    registration: Mapping[str, Any]
+    manifest: Mapping[str, Any]
+    selected_entries: tuple[tuple[str, str, str, str], ...]
+    verified_toolchain: VerifiedToolchain
+    _checkout_root: Path
+    _locator_bound_fingerprint: str
+    _session: CapabilityVerificationSession
+    _session_token: object
+
+    def registration_copy(self) -> dict[str, Any]:
+        return self._session._copy_verified_registration(self)
+
+    def lock_entry_copy(self) -> dict[str, Any]:
+        return self._session._copy_verified_lock_entry(self)
+
+    def read_blob(self, relative_path: str) -> bytes:
+        return self._session._read_verified_blob(self, relative_path)
+
+    def read_blobs(self) -> dict[str, bytes]:
+        return self._session._read_verified_blobs(self)
+
+    def recheck(self) -> None:
+        self._session._recheck_verified_pack(self)
+
+
+@dataclass(slots=True)
+class _PackFlight:
+    condition: threading.Condition
+    state: str = "VERIFYING"
+    value: VerifiedCapabilityPack | None = None
+    error: BaseException | None = None
+
+
+class CapabilityVerificationSession:
+    """Operation-scoped owner of verified Pack and lock contexts."""
+
+    def __init__(
+        self,
+        repository_root: Path,
+        *,
+        allowed_capability_ids: Iterable[str],
+    ) -> None:
+        supplied_root = Path(repository_root)
+        try:
+            resolved_root = supplied_root.resolve(strict=True)
+        except OSError as exc:
+            raise ValueError("capability verification repository root is unavailable") from exc
+        if not resolved_root.is_dir():
+            raise ValueError("capability verification repository root is unavailable")
+        allowed = frozenset(allowed_capability_ids)
+        if any(not isinstance(value, str) or not value for value in allowed):
+            raise ValueError("capability verification allowed capability ID is invalid")
+        self._repository_root = resolved_root
+        self._allowed_capability_ids = allowed
+        self._token = object()
+        self._state = "OPEN"
+        self._mutex = threading.RLock()
+        self._drained = threading.Condition(self._mutex)
+        self._flights: dict[PackVerificationKey, _PackFlight] = {}
+        self._identity_by_slot: dict[str, PackVerificationKey] = {}
+        self._verified: dict[PackVerificationKey, VerifiedCapabilityPack] = {}
+        self._cleanups: list[Callable[[], object]] = []
+        self._active_use_lease_count = 0
+        self._counts = {
+            "full_candidate_gate_count": 0,
+            "isolated_checkout_count": 0,
+            "toolchain_directory_digest_count": 0,
+            "verified_pack_count": 0,
+            "verified_lock_count": 0,
+            "pack_reuse_hit_count": 0,
+            "lock_reuse_hit_count": 0,
+            "source_recheck_count": 0,
+            "registration_recheck_count": 0,
+            "lock_witness_recheck_count": 0,
+        }
+        self._by_pack: dict[str, dict[str, int]] = {}
+        self._by_lock: dict[str, dict[str, int]] = {}
+
+    def __enter__(self) -> CapabilityVerificationSession:
+        with self._mutex:
+            if self._state != "OPEN":
+                raise ValueError(
+                    f"capability verification session is {self._state.lower()}"
+                )
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> bool:
+        del exc_type, exc, traceback
+        self.close()
+        return False
+
+    @property
+    def stats(self) -> VerificationStats:
+        with self._mutex:
+            by_pack = MappingProxyType(
+                {
+                    key: MappingProxyType(dict(values))
+                    for key, values in self._by_pack.items()
+                }
+            )
+            by_lock = MappingProxyType(
+                {
+                    key: MappingProxyType(dict(values))
+                    for key, values in self._by_lock.items()
+                }
+            )
+            return VerificationStats(
+                **self._counts,
+                active_use_lease_count=self._active_use_lease_count,
+                by_pack=by_pack,
+                by_lock=by_lock,
+            )
+
+    def _record(
+        self,
+        name: str,
+        amount: int = 1,
+        *,
+        key: PackVerificationKey | None = None,
+    ) -> None:
+        with self._mutex:
+            self._counts[name] += amount
+            if key is not None:
+                values = self._by_pack.setdefault(key.digest, {})
+                values[name] = values.get(name, 0) + amount
+
+    def _require_request_locked(self, repository_root: Path, capability_id: str) -> None:
+        try:
+            requested_root = Path(repository_root).resolve(strict=True)
+        except OSError as exc:
+            raise ValueError("capability verification repository root is unavailable") from exc
+        if requested_root != self._repository_root:
+            raise ValueError("capability verification session repository root mismatch")
+        if capability_id not in self._allowed_capability_ids:
+            raise ValueError(
+                f"capability is not allowed by verification session: {capability_id}"
+            )
+        if self._state != "OPEN":
+            raise ValueError(
+                f"capability verification session is {self._state.lower()}"
+            )
+
+    @contextmanager
+    def _operation_lease(
+        self, repository_root: Path, capability_ids: Iterable[str]
+    ) -> Iterator[None]:
+        requested_ids = frozenset(capability_ids)
+        with self._mutex:
+            try:
+                requested_root = Path(repository_root).resolve(strict=True)
+            except OSError as exc:
+                raise ValueError(
+                    "capability verification repository root is unavailable"
+                ) from exc
+            if requested_root != self._repository_root:
+                raise ValueError("capability verification session repository root mismatch")
+            missing = requested_ids - self._allowed_capability_ids
+            if missing:
+                raise ValueError(
+                    "capability is not allowed by verification session: "
+                    + sorted(missing)[0]
+                )
+            if self._state != "OPEN":
+                raise ValueError(
+                    f"capability verification session is {self._state.lower()}"
+                )
+            self._active_use_lease_count += 1
+        try:
+            yield
+        finally:
+            with self._mutex:
+                self._active_use_lease_count -= 1
+                if self._active_use_lease_count == 0:
+                    self._drained.notify_all()
+
+    @contextmanager
+    def _request_lease(
+        self, repository_root: Path, capability_id: str
+    ) -> Iterator[None]:
+        with self._operation_lease(repository_root, {capability_id}):
+            yield
+
+    @contextmanager
+    def _verified_lease(self, pack: VerifiedCapabilityPack) -> Iterator[None]:
+        with self._mutex:
+            if pack._session is not self or pack._session_token is not self._token:
+                raise ValueError("foreign verified capability pack")
+            self._require_request_locked(
+                self._repository_root, pack.key.capability_id
+            )
+            if self._verified.get(pack.key) is not pack:
+                raise ValueError("foreign or invalidated verified capability pack")
+            self._active_use_lease_count += 1
+        try:
+            yield
+        finally:
+            with self._mutex:
+                self._active_use_lease_count -= 1
+                if self._active_use_lease_count == 0:
+                    self._drained.notify_all()
+
+    def _poison(self, error: BaseException) -> None:
+        with self._mutex:
+            if self._state == "OPEN":
+                self._state = "FAILED"
+            failed_keys: list[PackVerificationKey] = []
+            for key, flight in self._flights.items():
+                if flight.state == "VERIFYING":
+                    flight.error = error
+                    flight.condition.notify_all()
+                    failed_keys.append(key)
+            for key in failed_keys:
+                self._flights.pop(key, None)
+
+    def _copy_verified_registration(
+        self, pack: VerifiedCapabilityPack
+    ) -> dict[str, Any]:
+        with self._verified_lease(pack):
+            return _thaw(pack.registration)
+
+    def _copy_verified_lock_entry(
+        self, pack: VerifiedCapabilityPack
+    ) -> dict[str, Any]:
+        with self._verified_lease(pack):
+            return {
+                **_thaw(pack.registration),
+                "sourceKind": "EXTERNAL_CAPABILITY_PACK",
+                "registrationFingerprint": pack._locator_bound_fingerprint,
+                "manifest": _thaw(pack.manifest),
+            }
+
+    def _read_verified_blob(
+        self, pack: VerifiedCapabilityPack, relative_path: str
+    ) -> bytes:
+        with self._verified_lease(pack):
+            safe_path = validate_relative_pack_path(relative_path)
+            self._recheck_pack_under_lease(pack)
+            _, mode, object_type, object_id = _entry_by_path(
+                list(pack.selected_entries), safe_path
+            )
+            if mode not in {"100644", "100755"} or object_type != "blob":
+                raise ValueError(
+                    "capability pack requested path is not a tracked regular file"
+                )
+            data = _blob(pack._checkout_root, object_id)
+            self._recheck_pack_under_lease(pack)
+            return data
+
+    def _read_verified_blobs(
+        self, pack: VerifiedCapabilityPack
+    ) -> dict[str, bytes]:
+        with self._verified_lease(pack):
+            self._recheck_pack_under_lease(pack)
+            blobs = {
+                relative: _blob(pack._checkout_root, object_id)
+                for relative, _, _, object_id in pack.selected_entries
+            }
+            self._recheck_pack_under_lease(pack)
+            return blobs
+
+    def _recheck_pack_under_lease(self, pack: VerifiedCapabilityPack) -> None:
+        try:
+            _recheck_verified_pack_witness(pack)
+        except BaseException as exc:
+            self._poison(exc)
+            raise
+        self._record("registration_recheck_count", key=pack.key)
+        self._record("source_recheck_count", key=pack.key)
+
+    def _recheck_verified_pack(self, pack: VerifiedCapabilityPack) -> None:
+        with self._verified_lease(pack):
+            self._recheck_pack_under_lease(pack)
+
+    def close(self) -> None:
+        with self._mutex:
+            if self._state == "CLOSED":
+                return
+            if self._state == "CLOSING":
+                while self._state != "CLOSED":
+                    self._drained.wait()
+                return
+            self._state = "CLOSING"
+            for flight in self._flights.values():
+                flight.condition.notify_all()
+            while self._active_use_lease_count:
+                self._drained.wait()
+            cleanups = list(reversed(self._cleanups))
+            self._cleanups.clear()
+            self._verified.clear()
+            self._flights.clear()
+            self._identity_by_slot.clear()
+        errors: list[Exception] = []
+        for cleanup in cleanups:
+            try:
+                cleanup()
+            except Exception as exc:
+                errors.append(exc)
+        with self._mutex:
+            self._state = "CLOSED"
+            self._drained.notify_all()
+        if errors:
+            raise ExceptionGroup(
+                "capability pack retained checkout cleanup failed", errors
+            )
 
 
 def _run(
@@ -719,7 +1081,139 @@ def _worktree_validator_path(source: Path, relative_path: str) -> Path:
     return current
 
 
-def _validate_registration(repository_root: Path, registration: dict[str, Any]) -> dict[str, Any]:
+def _canonical_registration_identity_record(
+    registration: Mapping[str, Any],
+) -> dict[str, Any]:
+    source = registration["source"]
+    validator = registration["validator"]
+    identity = {
+        "schemaVersion": registration["schemaVersion"],
+        "registrationId": registration["registrationId"],
+        "capabilityId": registration["capabilityId"],
+        "packVersion": registration["packVersion"],
+        "status": registration["status"],
+        "distributionStatus": registration["distributionStatus"],
+        "source": {
+            "kind": source["kind"],
+            "repositoryId": source["repositoryId"],
+            "commit": source["commit"],
+            "tree": source["tree"],
+        },
+        "resolvedContentDigest": registration["resolvedContentDigest"],
+        "validator": {
+            "kind": validator["kind"],
+            "relativePath": validator["relativePath"],
+            "sha256": validator["sha256"],
+            "argumentsContract": validator["argumentsContract"],
+            **(
+                {"environmentContract": validator["environmentContract"]}
+                if "environmentContract" in validator
+                else {}
+            ),
+            **(
+                {"toolchain": _thaw(validator["toolchain"])}
+                if "toolchain" in validator
+                else {}
+            ),
+            **(
+                {"gitHistoryContract": validator["gitHistoryContract"]}
+                if "gitHistoryContract" in validator
+                else {}
+            ),
+            **(
+                {"timeoutSeconds": validator["timeoutSeconds"]}
+                if "timeoutSeconds" in validator
+                else {}
+            ),
+        },
+    }
+    if "contentDeclaration" in registration:
+        identity["contentDeclaration"] = _thaw(registration["contentDeclaration"])
+    return identity
+
+
+def _registration_fingerprint(registration: Mapping[str, Any]) -> str:
+    identity = _canonical_registration_identity_record(registration)
+    return "sha256:" + sha256_bytes(canonical_json_bytes(identity))
+
+
+def _locator_bound_blob_access_fingerprint(
+    registration: Mapping[str, Any],
+) -> str:
+    return "sha256:" + sha256_bytes(canonical_json_bytes(registration))
+
+
+def _manifest_identity_digest(
+    source: Path,
+    entries: list[tuple[str, str, str, str]],
+    registration: Mapping[str, Any],
+    manifest: Mapping[str, Any],
+) -> str:
+    tracked_path = _tracked_manifest_path(registration)
+    if tracked_path is None:
+        data = canonical_json_bytes(manifest)
+    else:
+        _, _, _, object_id = _entry_by_path(entries, tracked_path)
+        data = _blob(source, object_id)
+    return "sha256:" + sha256_bytes(data)
+
+
+def _pack_verification_key(
+    registration: Mapping[str, Any],
+    manifest_digest: str,
+) -> PackVerificationKey:
+    identity = _canonical_registration_identity_record(registration)
+    fingerprint = _registration_fingerprint(registration)
+    machine = unicodedata.normalize("NFKC", platform.machine()).strip().lower()
+    record = {
+        "validationAbi": CAPABILITY_PACK_VALIDATION_ABI,
+        "canonicalRegistrationIdentity": identity,
+        "registrationFingerprint": fingerprint,
+        "registrationId": registration["registrationId"],
+        "capabilityId": registration["capabilityId"],
+        "packVersion": registration["packVersion"],
+        "sourceCommit": registration["source"]["commit"],
+        "sourceTree": registration["source"]["tree"],
+        "resolvedContentDigest": registration["resolvedContentDigest"],
+        "manifestDigest": manifest_digest,
+        "validator": {
+            "sha256": registration["validator"]["sha256"],
+            "argumentsContract": registration["validator"]["argumentsContract"],
+            "gitHistoryContract": registration["validator"].get(
+                "gitHistoryContract", "CANDIDATE_ONLY"
+            ),
+            "environmentContract": registration["validator"].get(
+                "environmentContract", "SANITIZED"
+            ),
+            "timeoutSeconds": registration["validator"].get("timeoutSeconds", 300),
+            "toolchain": registration["validator"].get("toolchain"),
+        },
+        "platform": {
+            "osName": os.name,
+            "sysPlatform": sys.platform,
+            "machine": machine,
+        },
+    }
+    return PackVerificationKey(
+        capability_id=registration["capabilityId"],
+        registration_id=registration["registrationId"],
+        digest="sha256:" + sha256_bytes(canonical_json_bytes(record)),
+    )
+
+
+def _prepare_pack_snapshot(
+    repository_root: Path,
+    registration: Mapping[str, Any],
+) -> tuple[
+    PackVerificationKey,
+    Path,
+    str,
+    str,
+    list[tuple[str, str, str, str]],
+    dict[str, Any],
+    list[tuple[str, str, str, str]],
+    str,
+]:
     source = _source_root(registration["source"]["repositoryPath"])
     commit, tree = _require_fixed_git_identity(source, registration)
     entries = _tree_entries(source, commit)
@@ -730,6 +1224,68 @@ def _validate_registration(repository_root: Path, registration: dict[str, Any]) 
         manifest,
         tracked_manifest_path=_tracked_manifest_path(registration),
     )
+    manifest_digest = _manifest_identity_digest(
+        source, entries, registration, manifest
+    )
+    key = _pack_verification_key(registration, manifest_digest)
+    locator_fingerprint = _locator_bound_blob_access_fingerprint(registration)
+    return (
+        key,
+        source,
+        commit,
+        tree,
+        entries,
+        manifest,
+        selected,
+        locator_fingerprint,
+    )
+
+
+def _selected_registration(
+    repository_root: Path,
+    capability_id: str,
+    *,
+    registration_id: str | None = None,
+    expected_locator_fingerprint: str | None = None,
+    active_only: bool,
+) -> dict[str, Any]:
+    matches = [
+        registration
+        for registration in load_capability_pack_registrations(repository_root)
+        if registration["capabilityId"] == capability_id
+        and (registration_id is None or registration["registrationId"] == registration_id)
+        and (not active_only or registration["status"] == "ACTIVE")
+    ]
+    if expected_locator_fingerprint is not None:
+        exact = [
+            registration
+            for registration in matches
+            if _locator_bound_blob_access_fingerprint(registration)
+            == expected_locator_fingerprint
+        ]
+        if exact:
+            return exact[0]
+    if len(matches) != 1:
+        if active_only and not matches:
+            raise KeyError(
+                "active capability pack registration not found or ambiguous: "
+                + capability_id
+            )
+        if active_only:
+            raise ValueError(f"duplicate active capability pack ID: {capability_id}")
+        raise ValueError(
+            f"capability pack registration not found or ambiguous: {capability_id}"
+        )
+    return matches[0]
+
+
+def _assert_pack_source_content(
+    source: Path,
+    registration: Mapping[str, Any],
+    manifest: Mapping[str, Any],
+    entries: list[tuple[str, str, str, str]],
+    selected: list[tuple[str, str, str, str]],
+) -> None:
     _require_no_hidden_index_flags(source)
     _require_clean_source(source, manifest)
     content_digest = _digest_entries(source, selected)
@@ -746,19 +1302,114 @@ def _validate_registration(repository_root: Path, registration: dict[str, Any]) 
     if validator_digest != registration["validator"]["sha256"]:
         raise ValueError("capability pack validator identity mismatch")
 
-    with _isolated_fixed_checkout(
+
+def _recheck_verified_pack_witness(pack: VerifiedCapabilityPack) -> None:
+    root = pack._session._repository_root
+    registrations = load_capability_pack_registrations(root)
+    if pack.registration["status"] == "ACTIVE":
+        active_matches = [
+            item
+            for item in registrations
+            if item["capabilityId"] == pack.key.capability_id
+            and item["status"] == "ACTIVE"
+        ]
+        if len(active_matches) > 1:
+            raise ValueError(
+                f"duplicate active capability pack ID: {pack.key.capability_id}"
+            )
+        if not active_matches:
+            raise ValueError("capability pack active registration identity drift")
+    identity_matches = [
+        item
+        for item in registrations
+        if item["capabilityId"] == pack.key.capability_id
+        and item["registrationId"] == pack.key.registration_id
+    ]
+    if len(identity_matches) != 1:
+        raise ValueError(
+            "capability pack registration not found or ambiguous: "
+            + pack.key.capability_id
+        )
+    registration = identity_matches[0]
+    if _registration_fingerprint(registration) != _registration_fingerprint(
+        pack.registration
+    ):
+        raise ValueError("capability pack registration identity drift")
+    if (
+        _locator_bound_blob_access_fingerprint(registration)
+        != pack._locator_bound_fingerprint
+    ):
+        raise ValueError("capability pack source locator identity drift")
+    (
+        key,
+        source,
+        _commit,
+        _tree,
+        entries,
+        manifest,
+        selected,
+        _locator,
+    ) = _prepare_pack_snapshot(root, registration)
+    if key != pack.key:
+        raise ValueError("capability pack verification identity drift")
+    if manifest != _thaw(pack.manifest):
+        raise ValueError("capability pack manifest provenance drift")
+    if tuple(selected) != pack.selected_entries:
+        raise ValueError("capability pack selected object identity drift")
+    _assert_pack_source_content(source, registration, manifest, entries, selected)
+
+
+def _materialize_verified_capability_pack(
+    session: CapabilityVerificationSession,
+    repository_root: Path,
+    registration: dict[str, Any],
+    prepared: tuple[
+        PackVerificationKey,
+        Path,
+        str,
+        str,
+        list[tuple[str, str, str, str]],
+        dict[str, Any],
+        list[tuple[str, str, str, str]],
+        str,
+    ],
+) -> tuple[VerifiedCapabilityPack, Callable[[], object]]:
+    (
+        key,
+        source,
+        commit,
+        tree,
+        entries,
+        manifest,
+        selected,
+        locator_fingerprint,
+    ) = prepared
+    _assert_pack_source_content(source, registration, manifest, entries, selected)
+    toolchain = _verify_validator_toolchain(registration)
+    session._record(
+        "toolchain_directory_digest_count",
+        len(toolchain.directory_identities),
+        key=key,
+    )
+
+    checkout_owner = _isolated_fixed_checkout(
         source,
         commit,
         tree,
         registration["validator"].get("gitHistoryContract", "CANDIDATE_ONLY"),
-    ) as checkout:
+    )
+    checkout = checkout_owner.__enter__()
+    session._record("isolated_checkout_count", key=key)
+    retained = False
+    try:
         _require_no_hidden_index_flags(checkout)
         _require_clean_source(checkout, manifest)
+        validator_relative = registration["validator"]["relativePath"]
         validator_path = _worktree_validator_path(checkout, validator_relative)
         executed_validator_digest = "sha256:" + sha256_bytes(validator_path.read_bytes())
         if executed_validator_digest != registration["validator"]["sha256"]:
             raise ValueError("capability pack executed validator identity mismatch")
-        toolchain = _verify_validator_toolchain(registration)
+        session._record("full_candidate_gate_count", key=key)
         completed = _run_candidate_gate(
             ["bash", str(validator_path), commit, tree],
             cwd=checkout,
@@ -769,15 +1420,142 @@ def _validate_registration(repository_root: Path, registration: dict[str, Any]) 
             raise ValueError("capability pack candidate Gate failed")
         if "sha256:" + sha256_bytes(validator_path.read_bytes()) != executed_validator_digest:
             raise ValueError("capability pack validator changed during candidate Gate")
+        session._record(
+            "toolchain_directory_digest_count",
+            len(toolchain.directory_identities),
+            key=key,
+        )
         _recheck_validator_toolchain(registration, toolchain)
         _require_fixed_git_identity(checkout, registration)
         _require_no_hidden_index_flags(checkout)
         _require_clean_source(checkout, manifest)
 
-    _require_fixed_git_identity(source, registration)
-    _require_no_hidden_index_flags(source)
-    _require_clean_source(source, manifest)
-    return registration
+        _require_fixed_git_identity(source, registration)
+        _require_no_hidden_index_flags(source)
+        _require_clean_source(source, manifest)
+        pack = VerifiedCapabilityPack(
+            key=key,
+            registration=_freeze(deepcopy(registration)),
+            manifest=_freeze(deepcopy(manifest)),
+            selected_entries=tuple(selected),
+            verified_toolchain=toolchain,
+            _checkout_root=checkout,
+            _locator_bound_fingerprint=locator_fingerprint,
+            _session=session,
+            _session_token=session._token,
+        )
+        _recheck_verified_pack_witness(pack)
+        session._record("registration_recheck_count", key=key)
+        session._record("source_recheck_count", key=key)
+        retained = True
+        return pack, lambda: checkout_owner.__exit__(None, None, None)
+    finally:
+        if not retained:
+            checkout_owner.__exit__(None, None, None)
+
+
+def _get_verified_capability_pack(
+    repository_root: Path,
+    capability_id: str,
+    *,
+    verification_session: CapabilityVerificationSession,
+    _registration: dict[str, Any] | None = None,
+) -> VerifiedCapabilityPack:
+    session = verification_session
+    with session._request_lease(repository_root, capability_id):
+        try:
+            registration = (
+                deepcopy(_registration)
+                if _registration is not None
+                else _selected_registration(
+                    session._repository_root,
+                    capability_id,
+                    active_only=True,
+                )
+            )
+            prepared = _prepare_pack_snapshot(session._repository_root, registration)
+        except BaseException as exc:
+            session._poison(exc)
+            raise
+        key = prepared[0]
+        slot = key.capability_id
+        owner = False
+        with session._mutex:
+            if session._state != "OPEN":
+                raise ValueError(
+                    f"capability verification session is {session._state.lower()}"
+                )
+            prior = session._identity_by_slot.get(slot)
+            if prior is not None and prior != key:
+                error = ValueError(
+                    "capability pack identity changed within verification session"
+                )
+                session._poison(error)
+                raise error
+            session._identity_by_slot.setdefault(slot, key)
+            flight = session._flights.get(key)
+            if flight is None:
+                flight = _PackFlight(threading.Condition(session._mutex))
+                session._flights[key] = flight
+                owner = True
+            else:
+                while flight.state == "VERIFYING" and session._state == "OPEN":
+                    flight.condition.wait()
+                if flight.error is not None:
+                    raise flight.error
+                if flight.state != "VERIFIED" or flight.value is None:
+                    raise ValueError(
+                        f"capability verification session is {session._state.lower()}"
+                    )
+                pack = flight.value
+        if not owner:
+            session._recheck_pack_under_lease(pack)
+            session._record("pack_reuse_hit_count", key=key)
+            return pack
+        try:
+            pack, cleanup = _materialize_verified_capability_pack(
+                session, session._repository_root, registration, prepared
+            )
+        except BaseException as exc:
+            session._poison(exc)
+            raise
+        publish_error: BaseException | None = None
+        with session._mutex:
+            if session._state != "OPEN":
+                publish_error = ValueError(
+                    f"capability verification session is {session._state.lower()}"
+                )
+                flight.error = publish_error
+                flight.condition.notify_all()
+            else:
+                session._cleanups.append(cleanup)
+                session._verified[key] = pack
+                flight.value = pack
+                flight.state = "VERIFIED"
+                session._counts["verified_pack_count"] += 1
+                values = session._by_pack.setdefault(key.digest, {})
+                values["verified_pack_count"] = values.get("verified_pack_count", 0) + 1
+                flight.condition.notify_all()
+        if publish_error is not None:
+            cleanup()
+            raise publish_error
+        return pack
+
+
+def _validate_registration(
+    repository_root: Path, registration: dict[str, Any]
+) -> dict[str, Any]:
+    with CapabilityVerificationSession(
+        repository_root,
+        allowed_capability_ids={registration["capabilityId"]},
+    ) as session:
+        pack = _get_verified_capability_pack(
+            repository_root,
+            registration["capabilityId"],
+            verification_session=session,
+            _registration=registration,
+        )
+        return pack.registration_copy()
 
 
 def _reject_duplicate_active_ids(entries: list[dict[str, Any]]) -> None:
@@ -810,42 +1588,92 @@ def _canonical_registry_entry(entry: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def build_capability_pack_registry(
-    repository_root: Path, *, write: bool = False
+    repository_root: Path,
+    *,
+    write: bool = False,
+    verification_session: CapabilityVerificationSession | None = None,
 ) -> dict[str, Any]:
     root = Path(repository_root)
     registrations = load_capability_pack_registrations(root)
-    entries = [_validate_registration(root, item) for item in registrations]
-    _reject_duplicate_active_ids(entries)
-    entries.sort(key=lambda entry: entry["registrationId"])
-    canonical_entries = [_canonical_registry_entry(entry) for entry in entries]
-    result = {
-        "schemaVersion": "capability-pack-registry/v1",
-        "sourceRevision": "content-sha256:"
-        + sha256_bytes(canonical_json_bytes(canonical_entries)),
-        "entries": entries,
-    }
-    if write:
-        write_generated_json(
-            root / "generated/registries/capability-pack-registry.json", result
-        )
-    return result
+    capability_counts: dict[str, int] = {}
+    for registration in registrations:
+        capability_id = registration["capabilityId"]
+        capability_counts[capability_id] = capability_counts.get(capability_id, 0) + 1
+
+    def build(session: CapabilityVerificationSession) -> dict[str, Any]:
+        entries: list[dict[str, Any]] = []
+        for item in registrations:
+            capability_id = item["capabilityId"]
+            if capability_counts[capability_id] > 1:
+                with CapabilityVerificationSession(
+                    root, allowed_capability_ids={capability_id}
+                ) as child:
+                    pack = _get_verified_capability_pack(
+                        root,
+                        capability_id,
+                        verification_session=child,
+                        _registration=item,
+                    )
+                    entries.append(pack.registration_copy())
+                continue
+            pack = _get_verified_capability_pack(
+                root,
+                capability_id,
+                verification_session=session,
+                _registration=item,
+            )
+            entries.append(pack.registration_copy())
+        _reject_duplicate_active_ids(entries)
+        entries.sort(key=lambda entry: entry["registrationId"])
+        canonical_entries = [_canonical_registry_entry(entry) for entry in entries]
+        result = {
+            "schemaVersion": "capability-pack-registry/v1",
+            "sourceRevision": "content-sha256:"
+            + sha256_bytes(canonical_json_bytes(canonical_entries)),
+            "entries": entries,
+        }
+        if write:
+            write_generated_json(
+                root / "generated/registries/capability-pack-registry.json", result
+            )
+        return result
+
+    if verification_session is None:
+        with CapabilityVerificationSession(
+            root,
+            allowed_capability_ids={
+                registration["capabilityId"] for registration in registrations
+            },
+        ) as private_session:
+            with private_session._operation_lease(root, capability_counts):
+                return build(private_session)
+    with verification_session._operation_lease(root, capability_counts):
+        return build(verification_session)
 
 
 def get_registered_capability_pack(
-    repository_root: Path, capability_id: str
+    repository_root: Path,
+    capability_id: str,
+    *,
+    verification_session: CapabilityVerificationSession | None = None,
 ) -> dict[str, Any]:
-    matches = [
-        entry
-        for entry in load_capability_pack_registrations(Path(repository_root))
-        if entry["capabilityId"] == capability_id and entry["status"] == "ACTIVE"
-    ]
-    if not matches:
-        raise KeyError(
-            f"active capability pack registration not found or ambiguous: {capability_id}"
-        )
-    if len(matches) > 1:
-        raise ValueError(f"duplicate active capability pack ID: {capability_id}")
-    return _validate_registration(Path(repository_root), matches[0])
+    root = Path(repository_root)
+    if verification_session is None:
+        with CapabilityVerificationSession(
+            root, allowed_capability_ids={capability_id}
+        ) as private_session:
+            pack = _get_verified_capability_pack(
+                root,
+                capability_id,
+                verification_session=private_session,
+            )
+            return pack.registration_copy()
+    pack = _get_verified_capability_pack(
+        root,
+        capability_id,
+        verification_session=verification_session,
+    )
+    return pack.registration_copy()
 
 
 def _registration_record(registration: Mapping[str, Any]) -> dict[str, Any]:

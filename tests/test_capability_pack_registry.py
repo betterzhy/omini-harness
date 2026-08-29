@@ -17,8 +17,10 @@ import yaml
 from evolution_harness import capability_pack_registry
 from evolution_harness.capability_pack_registry import (
     _directory_identity_digest,
+    _registration_fingerprint,
     build_capability_pack_registry,
     get_registered_capability_pack,
+    load_capability_pack_registrations,
 )
 
 
@@ -387,14 +389,25 @@ def test_registry_canonical_revision_excludes_relocated_discovery_locator(
 
 
 def test_registration_fingerprint_binds_harness_declared_manifest(tmp_path: Path):
-    from evolution_harness.project import _registration_fingerprint
-
     source, commit, tree = _manifestless_pack_fixture(tmp_path)
     registration = _declared_manifest_registration(source, commit, tree)
     changed = deepcopy(registration)
     changed["contentDeclaration"]["manifest"]["displayName"] = "Changed"
 
     assert _registration_fingerprint(changed) != _registration_fingerprint(registration)
+
+
+def test_pack_owner_preserves_canonical_java_registration_fingerprint_bytes():
+    root = Path(__file__).parents[1]
+    registration = next(
+        item
+        for item in load_capability_pack_registrations(root)
+        if item["registrationId"] == JAVA_REGISTRATION_ID
+    )
+
+    assert _registration_fingerprint(registration) == (
+        "sha256:5257755a93fafa35f7cb40fcdcd0a50aaf829ec66848e50c8c3e5db9a879e92b"
+    )
 
 
 def test_repository_registry_registers_fixed_java_engineering_standard():
@@ -811,6 +824,44 @@ def test_registry_rejects_duplicate_active_capability_id(tmp_path: Path):
 
     with pytest.raises(ValueError, match="duplicate active capability pack ID"):
         build_capability_pack_registry(root, write=False)
+
+
+def test_registry_preserves_two_inactive_identities_with_bounded_child_sessions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    root, _, _, _ = _harness_with_pack(tmp_path)
+    first = _registered_entry(root)
+    first["status"] = "INACTIVE"
+    second = deepcopy(first)
+    second["registrationId"] = "pack:web-high-fidelity-legacy"
+    _write_registrations(root, [second, first])
+    real_gate = capability_pack_registry._run_candidate_gate
+    gate_count = 0
+
+    def counted_gate(*args, **kwargs):
+        nonlocal gate_count
+        gate_count += 1
+        return real_gate(*args, **kwargs)
+
+    monkeypatch.setattr(capability_pack_registry, "_run_candidate_gate", counted_gate)
+
+    registry = build_capability_pack_registry(root, write=False)
+
+    expected_entries = sorted([first, second], key=lambda item: item["registrationId"])
+    canonical_entries = deepcopy(expected_entries)
+    for entry in canonical_entries:
+        entry["source"].pop("repositoryPath")
+    expected_revision = "content-sha256:" + hashlib.sha256(
+        json.dumps(
+            canonical_entries,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ).encode("utf-8")
+    ).hexdigest()
+    assert registry["entries"] == expected_entries
+    assert registry["sourceRevision"] == expected_revision
+    assert gate_count == 2
 
 
 def test_registry_rejects_wrong_commit_tree_pair(tmp_path: Path):

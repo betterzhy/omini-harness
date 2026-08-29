@@ -499,3 +499,84 @@ def test_verification_session_rejects_every_changed_lock_witness_and_stays_poiso
 
     assert first_lock["lockFingerprint"]
     assert EXTERNAL_CAPABILITY_ID in first_entries
+
+
+@pytest.mark.parametrize(
+    ("failure", "message"),
+    [
+        ("invalid-schema", "schema validation failed"),
+        ("invalid-fingerprint", "fingerprint mismatch"),
+        ("changed-external-ids", "not allowed by verification session"),
+    ],
+)
+def test_verification_session_prelease_lock_failure_stays_poisoned_after_restore(
+    tmp_path: Path,
+    failure: str,
+    message: str,
+):
+    from evolution_harness.capability_pack_registry import CapabilityVerificationSession
+    from evolution_harness.project import build_capability_lock, verify_capability_lock
+    from evolution_harness.schema import SchemaValidationError
+
+    root, project = _project_selecting_registered_pack(tmp_path)
+    lock_path = project / ".agent-evolution/capabilities.lock.yaml"
+    with CapabilityVerificationSession(
+        root,
+        allowed_capability_ids={EXTERNAL_CAPABILITY_ID},
+    ) as session:
+        build_capability_lock(
+            root,
+            project,
+            write=True,
+            verification_session=session,
+        )
+        first_lock, first_entries = verify_capability_lock(
+            root,
+            project,
+            verification_session=session,
+        )
+        original = lock_path.read_bytes()
+        changed = yaml.safe_load(original)
+        if failure == "invalid-schema":
+            del changed["project"]
+        elif failure == "invalid-fingerprint":
+            changed["lockFingerprint"] = "sha256:" + "f" * 64
+        else:
+            external = next(
+                item
+                for item in changed["capabilities"]
+                if item["capabilityId"] == EXTERNAL_CAPABILITY_ID
+            )
+            external["capabilityId"] = (
+                "workflow:web-high-fidelity:unallowed-session-capability"
+            )
+            _resign_v2_lock(changed)
+        lock_path.write_text(
+            yaml.safe_dump(changed, sort_keys=False), encoding="utf-8"
+        )
+        try:
+            with pytest.raises(ValueError, match=message) as caught:
+                verify_capability_lock(
+                    root,
+                    project,
+                    verification_session=session,
+                )
+            if failure == "invalid-schema":
+                assert type(caught.value) is SchemaValidationError
+            else:
+                assert type(caught.value) is ValueError
+        finally:
+            lock_path.write_bytes(original)
+
+        with pytest.raises(ValueError, match="failed"):
+            verify_capability_lock(
+                root,
+                project,
+                verification_session=session,
+            )
+        snapshot = session.stats
+
+    assert first_lock["lockFingerprint"]
+    assert EXTERNAL_CAPABILITY_ID in first_entries
+    assert snapshot.full_candidate_gate_count == 1
+    assert snapshot.active_use_lease_count == 0

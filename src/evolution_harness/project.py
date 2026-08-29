@@ -661,18 +661,22 @@ def verify_capability_lock_context(
 ) -> VerifiedLockContext:
     root = Path(repository_root)
     project = Path(project_root)
-    declared_lock = load_capability_lock(root, project)
-    external_ids = {
-        item["capabilityId"]
-        for item in declared_lock["capabilities"]
-        if item.get("sourceKind") == "EXTERNAL_CAPABILITY_PACK"
-    }
-    with verification_session._operation_lease(root, external_ids):
-        return _verify_capability_lock_context(
-            root,
-            project,
-            verification_session=verification_session,
-        )
+    try:
+        declared_lock = load_capability_lock(root, project)
+        external_ids = {
+            item["capabilityId"]
+            for item in declared_lock["capabilities"]
+            if item.get("sourceKind") == "EXTERNAL_CAPABILITY_PACK"
+        }
+        with verification_session._operation_lease(root, external_ids):
+            return _verify_capability_lock_context(
+                root,
+                project,
+                verification_session=verification_session,
+            )
+    except BaseException as exc:
+        verification_session._poison(exc)
+        raise
 
 
 def verify_capability_lock(

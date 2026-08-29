@@ -795,7 +795,7 @@ def _publish_store(
     parent_descriptor: int,
     temp_name: str,
     final_name: str,
-) -> bool:
+) -> int:
     temp_identity = _directory_identity_digest_fd(temp_descriptor)
     current = _entry_lstat(parent_descriptor, final_name)
     if current is not None:
@@ -808,11 +808,14 @@ def _publish_store(
         except OSError as exc:
             raise ValueError("toolchain managed store identity conflict") from exc
         try:
+            if not _same_inode(current, os.fstat(final_descriptor)):
+                raise ValueError("toolchain managed store identity conflict")
             if _directory_identity_digest_fd(final_descriptor) != temp_identity:
                 raise ValueError("toolchain managed store identity conflict")
-        finally:
+        except BaseException:
             os.close(final_descriptor)
-        return False
+            raise
+        return final_descriptor
     os.replace(
         temp_name,
         final_name,
@@ -825,7 +828,13 @@ def _publish_store(
     if not _same_inode(os.fstat(temp_descriptor), installed):
         raise ValueError("toolchain managed store publication identity mismatch")
     os.fsync(parent_descriptor)
-    return True
+    final_descriptor = os.open(
+        final_name, _DIRECTORY_FLAGS, dir_fd=parent_descriptor
+    )
+    if not _same_inode(installed, os.fstat(final_descriptor)):
+        os.close(final_descriptor)
+        raise ValueError("toolchain managed store publication identity mismatch")
+    return final_descriptor
 
 
 def _remove_directory_contents(descriptor: int) -> None:
@@ -852,18 +861,26 @@ def _remove_directory_contents(descriptor: int) -> None:
             os.unlink(name, dir_fd=descriptor)
 
 
-def _remove_tree_at(parent_descriptor: int, name: str) -> None:
+def _remove_tree_at(
+    parent_descriptor: int,
+    name: str,
+    expected: os.stat_result,
+) -> None:
     current = _entry_lstat(parent_descriptor, name)
     if current is None:
         return
-    if not stat.S_ISDIR(current.st_mode):
-        os.unlink(name, dir_fd=parent_descriptor)
-        return
+    if not _same_inode(expected, current) or not stat.S_ISDIR(expected.st_mode):
+        raise ValueError("toolchain temporary cleanup identity mismatch")
     descriptor = os.open(name, _DIRECTORY_FLAGS, dir_fd=parent_descriptor)
     try:
+        if not _same_inode(expected, os.fstat(descriptor)):
+            raise ValueError("toolchain temporary cleanup identity mismatch")
         _remove_directory_contents(descriptor)
     finally:
         os.close(descriptor)
+    current = _entry_lstat(parent_descriptor, name)
+    if current is None or not _same_inode(expected, current):
+        raise ValueError("toolchain temporary cleanup identity mismatch")
     os.rmdir(name, dir_fd=parent_descriptor)
     os.fsync(parent_descriptor)
 
@@ -943,12 +960,62 @@ def _require_pinned_directory_at(
         os.close(current)
 
 
+def _require_public_store_identity(
+    filesystem_root_descriptor: int,
+    common_root_parts: tuple[str, ...],
+    common_root_descriptor: int,
+    store_parent_parts: tuple[str, ...],
+    store_parent_descriptor: int,
+    final_name: str,
+    final_descriptor: int,
+) -> None:
+    message = "toolchain public managed root identity changed"
+    public_common = _open_relative_directory(
+        filesystem_root_descriptor,
+        common_root_parts,
+        create=False,
+        message=message,
+    )
+    try:
+        if not _same_inode(os.fstat(common_root_descriptor), os.fstat(public_common)):
+            raise ValueError(message)
+        public_store_parent = _open_relative_directory(
+            public_common,
+            store_parent_parts,
+            create=False,
+            message=message,
+        )
+        try:
+            if not _same_inode(
+                os.fstat(store_parent_descriptor), os.fstat(public_store_parent)
+            ):
+                raise ValueError(message)
+            try:
+                public_final = os.open(
+                    final_name, _DIRECTORY_FLAGS, dir_fd=public_store_parent
+                )
+            except OSError as exc:
+                raise ValueError(message) from exc
+            try:
+                if not _same_inode(
+                    os.fstat(final_descriptor), os.fstat(public_final)
+                ):
+                    raise ValueError(message)
+            finally:
+                os.close(public_final)
+        finally:
+            os.close(public_store_parent)
+    finally:
+        os.close(public_common)
+
+
 def _write_binding(
     common_root_descriptor: int,
     path: Path,
     common_root: Path,
     record: Mapping[str, Any],
     verify_installed: Callable[[], Any],
+    verify_public_store: Callable[[], None],
 ) -> Any:
     try:
         relative_parent = path.parent.relative_to(common_root).parts
@@ -982,6 +1049,7 @@ def _write_binding(
         os.fsync(descriptor)
         expected = os.fstat(descriptor)
         try:
+            verify_public_store()
             os.replace(
                 temporary_name,
                 path.name,
@@ -1003,6 +1071,7 @@ def _write_binding(
                 parent,
                 "toolchain binding parent changed during publication",
             )
+            verify_public_store()
             return verified
         except BaseException as original:
             current = _entry_lstat(parent, path.name)
@@ -1071,11 +1140,24 @@ def provision_toolchain(
         raise ValueError("toolchain archive identity mismatch")
 
     common_root = record_path.parents[3]
-    common_root_descriptor = _open_absolute_directory(
+    common_root_parts = _absolute_parts(
         common_root, "toolchain managed root is unavailable or unsafe"
     )
+    filesystem_root_descriptor = os.open("/", _DIRECTORY_FLAGS)
+    try:
+        common_root_descriptor = _open_relative_directory(
+            filesystem_root_descriptor,
+            common_root_parts,
+            create=False,
+            message="toolchain managed root is unavailable or unsafe",
+        )
+    except BaseException:
+        os.close(filesystem_root_descriptor)
+        raise
     store_parent_descriptor = -1
     temp_descriptor = -1
+    published_descriptor = -1
+    temp_identity: os.stat_result | None = None
     temp_created = False
     temp_name = f".toolchain-provision-{uuid.uuid4().hex}"
     try:
@@ -1095,6 +1177,7 @@ def provision_toolchain(
         temp_descriptor = os.open(
             temp_name, _DIRECTORY_FLAGS, dir_fd=store_parent_descriptor
         )
+        temp_identity = os.fstat(temp_descriptor)
         extracted_tree = _extract_archive(data, temp_descriptor, artifact)
         temp_commands = _verify_extracted_commands(
             temp_descriptor, profile, managed, artifact
@@ -1102,7 +1185,7 @@ def provision_toolchain(
         _make_tree_read_only(temp_descriptor, extracted_tree, temp_commands)
         _verify_extracted_commands(temp_descriptor, profile, managed, artifact)
         _directory_identity_digest_fd(temp_descriptor)
-        _publish_store(
+        published_descriptor = _publish_store(
             temp_descriptor,
             store_parent_descriptor,
             temp_name,
@@ -1116,6 +1199,17 @@ def provision_toolchain(
         binding = _binding_object(record)
         verify_profile_toolchain(repository_root, profile, binding)
 
+        def verify_public_store() -> None:
+            _require_public_store_identity(
+                filesystem_root_descriptor,
+                common_root_parts,
+                common_root_descriptor,
+                store_parent_parts,
+                store_parent_descriptor,
+                final_root.name,
+                published_descriptor,
+            )
+
         def verify_installed():
             loaded = load_toolchain_binding(repository_root, profile_id)
             return verify_profile_toolchain(repository_root, profile, loaded)
@@ -1126,6 +1220,7 @@ def provision_toolchain(
             common_root,
             record,
             verify_installed,
+            verify_public_store,
         )
         return {
             "apply": True,
@@ -1137,15 +1232,26 @@ def provision_toolchain(
             "resolvedPaths": _resolved_paths(verified),
         }
     finally:
-        if temp_descriptor >= 0:
-            os.close(temp_descriptor)
         try:
-            if store_parent_descriptor >= 0 and temp_created:
-                _remove_tree_at(store_parent_descriptor, temp_name)
+            if (
+                store_parent_descriptor >= 0
+                and temp_created
+                and temp_identity is not None
+            ):
+                _remove_tree_at(
+                    store_parent_descriptor,
+                    temp_name,
+                    temp_identity,
+                )
         finally:
+            if published_descriptor >= 0:
+                os.close(published_descriptor)
+            if temp_descriptor >= 0:
+                os.close(temp_descriptor)
             if store_parent_descriptor >= 0:
                 os.close(store_parent_descriptor)
             os.close(common_root_descriptor)
+            os.close(filesystem_root_descriptor)
 
 
 def toolchain_status(repository_root: Path, profile_id: str) -> dict[str, Any]:

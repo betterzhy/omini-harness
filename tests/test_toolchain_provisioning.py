@@ -765,6 +765,48 @@ def test_store_parent_substitution_cannot_publish_outside_pinned_parent(
     assert not provision_harness.binding_path.exists()
 
 
+def test_identical_public_common_root_substitution_is_rejected(
+    provision_harness: ProvisionHarness,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+):
+    real_replace = os.replace
+    public_root = provision_harness.root
+    pinned_root = tmp_path / "harness-pinned"
+    substituted = False
+
+    def substitute_common_root(source, target, *args, **kwargs):
+        nonlocal substituted
+        result = real_replace(source, target, *args, **kwargs)
+        target_name = Path(target).name
+        if target_name == provision_harness.published_root.name and not substituted:
+            public_root.rename(pinned_root)
+            shutil.copytree(pinned_root, public_root, copy_function=shutil.copy2)
+            substituted = True
+        elif target_name == provision_harness.binding_path.name and substituted:
+            public_binding = provision_harness.binding_path
+            pinned_binding = pinned_root / public_binding.relative_to(public_root)
+            public_binding.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(pinned_binding, public_binding)
+            public_binding.chmod(0o444)
+        return result
+
+    monkeypatch.setattr(
+        "evolution_harness.toolchain_provisioning.os.replace",
+        substitute_common_root,
+    )
+
+    with pytest.raises(ValueError, match="public managed root identity changed"):
+        provision_toolchain(
+            public_root,
+            provision_harness.profile_id,
+            provision_harness.explicit_bindings,
+            provision_harness.archive(),
+        )
+
+    assert substituted is True
+
+
 def test_binding_parent_substitution_cannot_publish_outside_pinned_parent(
     provision_harness: ProvisionHarness,
     monkeypatch: pytest.MonkeyPatch,
@@ -809,6 +851,44 @@ def test_binding_parent_substitution_cannot_publish_outside_pinned_parent(
 
     assert substituted is True
     assert not (outside / provision_harness.binding_path.name).exists()
+
+
+def test_temp_cleanup_preserves_replacement_with_different_inode(
+    provision_harness: ProvisionHarness,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    real_extractfile = tarfile.TarFile.extractfile
+    replacement_marker: Path | None = None
+
+    def replace_temp_and_fail(archive: tarfile.TarFile, member: tarfile.TarInfo):
+        nonlocal replacement_marker
+        if member.name.endswith("/rg") and replacement_marker is None:
+            candidates = list(
+                provision_harness.published_root.parent.glob(
+                    ".toolchain-provision-*"
+                )
+            )
+            assert len(candidates) == 1
+            temp_root = candidates[0]
+            temp_root.rename(temp_root.with_name(temp_root.name + "-owned"))
+            temp_root.mkdir()
+            replacement_marker = temp_root / "unrelated.txt"
+            replacement_marker.write_text("preserve", encoding="utf-8")
+            raise OSError("injected extraction failure")
+        return real_extractfile(archive, member)
+
+    monkeypatch.setattr(tarfile.TarFile, "extractfile", replace_temp_and_fail)
+
+    with pytest.raises(ValueError, match="temporary cleanup identity mismatch"):
+        provision_toolchain(
+            provision_harness.root,
+            provision_harness.profile_id,
+            provision_harness.explicit_bindings,
+            provision_harness.archive(),
+        )
+
+    assert replacement_marker is not None
+    assert replacement_marker.read_text(encoding="utf-8") == "preserve"
 
 
 class _FakeSocket:

@@ -293,6 +293,15 @@ class CapabilityVerificationSession:
             self._active_use_lease_count += 1
         try:
             yield
+        except BaseException as exc:
+            self._poison(exc)
+            raise
+        else:
+            with self._mutex:
+                if self._state != "OPEN":
+                    raise ValueError(
+                        f"capability verification session is {self._state.lower()}"
+                    )
         finally:
             with self._mutex:
                 self._active_use_lease_count -= 1

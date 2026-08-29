@@ -5,6 +5,7 @@ import os
 import shutil
 import subprocess
 import threading
+from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
@@ -346,7 +347,7 @@ def test_registry_rejects_unlisted_declared_capability_before_any_gate(
     assert gates == 0
 
 
-def test_parent_session_close_waits_for_bounded_child_registry_validation(
+def test_parent_session_close_drains_child_validation_and_rejects_success(
     pack_harness: PackHarness, monkeypatch: pytest.MonkeyPatch
 ):
     first = pack_harness.registrations[0]
@@ -389,9 +390,157 @@ def test_parent_session_close_waits_for_bounded_child_registry_validation(
     release.set()
     builder.join(timeout=5)
     closer.join(timeout=5)
-    assert not failures
+    assert len(failures) == 1
+    assert "session is closing" in str(failures[0])
     assert closed.is_set()
     assert session.stats.active_use_lease_count == 0
+
+
+@pytest.mark.parametrize(
+    ("failure_phase", "expected_error"),
+    [
+        ("gate", ValueError),
+        ("recheck", RuntimeError),
+        ("cleanup", ExceptionGroup),
+    ],
+)
+def test_child_validation_failure_poisons_parent_and_prevents_verified_reuse(
+    pack_harness: PackHarness,
+    monkeypatch: pytest.MonkeyPatch,
+    failure_phase: str,
+    expected_error: type[BaseException],
+):
+    second_capability_id = pack_harness.second_capability_id
+    session = CapabilityVerificationSession(
+        pack_harness.root,
+        allowed_capability_ids={
+            pack_harness.capability_id,
+            second_capability_id,
+        },
+    )
+    _get_verified_capability_pack(
+        pack_harness.root,
+        second_capability_id,
+        verification_session=session,
+    )
+    first = pack_harness.registrations[0]
+    first["status"] = "INACTIVE"
+    legacy = deepcopy(first)
+    legacy["registrationId"] = "pack:synthetic-first-legacy"
+    pack_harness.registrations = [first, legacy, pack_harness.registrations[1]]
+    pack_harness.write()
+
+    with monkeypatch.context() as child_patch:
+        if failure_phase == "gate":
+            child_patch.setattr(
+                capability_pack_registry,
+                "_run_candidate_gate",
+                lambda *args, **kwargs: subprocess.CompletedProcess(
+                    args[0], 31, b"", b"child gate failed"
+                ),
+            )
+        elif failure_phase == "recheck":
+            real_recheck = capability_pack_registry._recheck_verified_pack_witness
+
+            def failed_recheck(pack):
+                real_recheck(pack)
+                raise RuntimeError("child recheck failed")
+
+            child_patch.setattr(
+                capability_pack_registry,
+                "_recheck_verified_pack_witness",
+                failed_recheck,
+            )
+        else:
+            real_checkout = capability_pack_registry._isolated_fixed_checkout
+
+            @contextmanager
+            def failed_cleanup(*args, **kwargs):
+                with real_checkout(*args, **kwargs) as checkout:
+                    yield checkout
+                raise RuntimeError("child cleanup failed")
+
+            child_patch.setattr(
+                capability_pack_registry,
+                "_isolated_fixed_checkout",
+                failed_cleanup,
+            )
+
+        with pytest.raises(expected_error):
+            build_capability_pack_registry(
+                pack_harness.root,
+                write=False,
+                verification_session=session,
+            )
+
+    with pytest.raises(ValueError, match="session is failed"):
+        get_registered_capability_pack(
+            pack_harness.root,
+            second_capability_id,
+            verification_session=session,
+        )
+    session.close()
+
+
+def test_parent_poisoned_while_child_only_build_is_in_flight_returns_no_success(
+    pack_harness: PackHarness, monkeypatch: pytest.MonkeyPatch
+):
+    second_capability_id = pack_harness.second_capability_id
+    session = CapabilityVerificationSession(
+        pack_harness.root,
+        allowed_capability_ids={
+            pack_harness.capability_id,
+            second_capability_id,
+        },
+    )
+    prior = _get_verified_capability_pack(
+        pack_harness.root,
+        second_capability_id,
+        verification_session=session,
+    )
+    first = pack_harness.registrations[0]
+    first["status"] = "INACTIVE"
+    legacy = deepcopy(first)
+    legacy["registrationId"] = "pack:synthetic-first-legacy"
+    pack_harness.registrations = [first, legacy]
+    pack_harness.write()
+    real_gate = capability_pack_registry._run_candidate_gate
+    gate_entered = threading.Event()
+    release_gate = threading.Event()
+
+    def blocked_gate(*args, **kwargs):
+        gate_entered.set()
+        assert release_gate.wait(timeout=5)
+        return real_gate(*args, **kwargs)
+
+    monkeypatch.setattr(capability_pack_registry, "_run_candidate_gate", blocked_gate)
+    results: list[dict[str, Any]] = []
+    failures: list[BaseException] = []
+
+    def build() -> None:
+        try:
+            results.append(
+                build_capability_pack_registry(
+                    pack_harness.root,
+                    write=False,
+                    verification_session=session,
+                )
+            )
+        except BaseException as exc:
+            failures.append(exc)
+
+    builder = threading.Thread(target=build)
+    builder.start()
+    assert gate_entered.wait(timeout=5)
+    with pytest.raises(ValueError, match="active registration identity drift"):
+        prior.recheck()
+    release_gate.set()
+    builder.join(timeout=10)
+    assert not builder.is_alive()
+    assert not results
+    assert len(failures) == 1
+    assert "session is failed" in str(failures[0])
+    session.close()
 
 
 def test_verified_pack_rejects_foreign_session_and_use_after_close(

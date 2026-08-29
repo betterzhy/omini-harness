@@ -3,22 +3,23 @@ from __future__ import annotations
 import hashlib
 import io
 import os
-import shutil
+import socket
 import stat
 import tarfile
-import tempfile
+import time
 import unicodedata
+import uuid
 from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import urlsplit
-from urllib.request import urlopen
+from urllib.request import HTTPRedirectHandler, build_opener
 
 from .hashing import canonical_json_bytes, sha256_bytes
 from .toolchain_profile import (
     ToolchainBinding,
     binding_path,
-    directory_identity_digest,
     find_toolchain_artifact,
     find_toolchain_profile,
     load_toolchain_binding,
@@ -29,6 +30,18 @@ from .toolchain_profile import (
 _MAX_DOWNLOAD_BYTES = 64 * 1024 * 1024
 _MAX_EXTRACTED_BYTES = 128 * 1024 * 1024
 _DOWNLOAD_TIMEOUT_SECONDS = 30
+_DOWNLOAD_CHUNK_BYTES = 64 * 1024
+_DIRECTORY_FLAGS = (
+    os.O_RDONLY
+    | getattr(os, "O_DIRECTORY", 0)
+    | getattr(os, "O_NOFOLLOW", 0)
+    | getattr(os, "O_CLOEXEC", 0)
+)
+_READ_FLAGS = (
+    os.O_RDONLY
+    | getattr(os, "O_NOFOLLOW", 0)
+    | getattr(os, "O_CLOEXEC", 0)
+)
 
 
 def _provision_command(profile_id: str) -> str:
@@ -51,6 +64,35 @@ def missing_toolchain_binding_message(profile: Mapping[str, Any]) -> str:
         f"platform={platform['os']}/{platform['architecture']}; "
         f"provision with: {_provision_command(profile['profileId'])}"
     )
+
+
+def binding_path_entry_exists(path: Path) -> bool:
+    """Return true for any leaf entry or unsafe parent, including dangling links."""
+    value = Path(path)
+    if not value.is_absolute() or any(
+        part in {"", ".", ".."} for part in value.parts[1:]
+    ):
+        return True
+    current = os.open("/", _DIRECTORY_FLAGS)
+    try:
+        for part in value.parts[1:-1]:
+            try:
+                following = os.open(part, _DIRECTORY_FLAGS, dir_fd=current)
+            except FileNotFoundError:
+                return False
+            except OSError:
+                return True
+            os.close(current)
+            current = following
+        try:
+            os.stat(value.name, dir_fd=current, follow_symlinks=False)
+        except FileNotFoundError:
+            return False
+        except OSError:
+            return True
+        return True
+    finally:
+        os.close(current)
 
 
 def _managed_commands(
@@ -182,63 +224,238 @@ def _file_identity(value: os.stat_result) -> tuple[int, int, int, int, int]:
     )
 
 
+def _same_inode(first: os.stat_result, second: os.stat_result) -> bool:
+    return (
+        first.st_dev,
+        first.st_ino,
+        stat.S_IFMT(first.st_mode),
+    ) == (
+        second.st_dev,
+        second.st_ino,
+        stat.S_IFMT(second.st_mode),
+    )
+
+
+def _absolute_parts(path: Path, message: str) -> tuple[str, ...]:
+    value = Path(path)
+    if (
+        not value.is_absolute()
+        or not value.parts[1:]
+        or any(part in {"", ".", ".."} for part in value.parts[1:])
+    ):
+        raise ValueError(message)
+    return value.parts[1:]
+
+
+def _open_absolute_directory(path: Path, message: str) -> int:
+    parts = _absolute_parts(path, message)
+    current = os.open("/", _DIRECTORY_FLAGS)
+    try:
+        for part in parts:
+            try:
+                following = os.open(part, _DIRECTORY_FLAGS, dir_fd=current)
+            except OSError as exc:
+                raise ValueError(message) from exc
+            os.close(current)
+            current = following
+        if not stat.S_ISDIR(os.fstat(current).st_mode):
+            raise ValueError(message)
+        return current
+    except BaseException:
+        os.close(current)
+        raise
+
+
+def _open_relative_directory(
+    root_descriptor: int,
+    parts: tuple[str, ...],
+    *,
+    create: bool,
+    message: str,
+) -> int:
+    if any(not part or part in {".", ".."} or "/" in part for part in parts):
+        raise ValueError(message)
+    current = os.dup(root_descriptor)
+    try:
+        for part in parts:
+            try:
+                following = os.open(part, _DIRECTORY_FLAGS, dir_fd=current)
+            except FileNotFoundError:
+                if not create:
+                    raise ValueError(message)
+                created = False
+                try:
+                    os.mkdir(part, 0o755, dir_fd=current)
+                    created = True
+                except FileExistsError:
+                    pass
+                except OSError as exc:
+                    raise ValueError(message) from exc
+                try:
+                    if created:
+                        os.fsync(current)
+                    following = os.open(part, _DIRECTORY_FLAGS, dir_fd=current)
+                except OSError as exc:
+                    raise ValueError(message) from exc
+            except OSError as exc:
+                raise ValueError(message) from exc
+            os.close(current)
+            current = following
+        return current
+    except BaseException:
+        os.close(current)
+        raise
+
+
+def _read_descriptor(
+    descriptor: int,
+    before: os.stat_result,
+    message: str,
+    *,
+    maximum_bytes: int | None = None,
+    limit_message: str | None = None,
+) -> bytes:
+    opened = os.fstat(descriptor)
+    if not stat.S_ISREG(opened.st_mode) or not _same_inode(opened, before):
+        raise ValueError(message)
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = os.read(descriptor, 1024 * 1024)
+        if not chunk:
+            break
+        total += len(chunk)
+        if maximum_bytes is not None and total > maximum_bytes:
+            raise ValueError(limit_message or message)
+        chunks.append(chunk)
+    after = os.fstat(descriptor)
+    if _file_identity(opened) != _file_identity(after):
+        raise ValueError(message)
+    return b"".join(chunks)
+
+
 def _read_local_archive(path: Path) -> bytes:
     value = Path(path)
     if not value.is_absolute():
         raise ValueError("toolchain archive path must be absolute")
+    parts = _absolute_parts(
+        value, "toolchain archive path is unavailable or unsafe"
+    )
+    parent = os.open("/", _DIRECTORY_FLAGS)
+    descriptor = -1
     try:
-        before = value.lstat()
-        if (
-            value.is_symlink()
-            or not stat.S_ISREG(before.st_mode)
-            or value.resolve(strict=True) != value
-        ):
-            raise ValueError("toolchain archive path is unavailable or unsafe")
-        if before.st_size > _MAX_DOWNLOAD_BYTES:
-            raise ValueError("toolchain archive exceeds 64 MiB")
-        flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
-        descriptor = os.open(value, flags)
-    except OSError as exc:
-        raise ValueError("toolchain archive path is unavailable or unsafe") from exc
-    try:
-        opened = os.fstat(descriptor)
-        if _file_identity(opened) != _file_identity(before):
-            raise ValueError("toolchain archive changed during reading")
-        chunks: list[bytes] = []
-        total = 0
-        while True:
-            chunk = os.read(descriptor, min(1024 * 1024, _MAX_DOWNLOAD_BYTES + 1 - total))
-            if not chunk:
-                break
-            total += len(chunk)
-            if total > _MAX_DOWNLOAD_BYTES:
+        try:
+            for part in parts[:-1]:
+                following = os.open(part, _DIRECTORY_FLAGS, dir_fd=parent)
+                os.close(parent)
+                parent = following
+            before = os.stat(parts[-1], dir_fd=parent, follow_symlinks=False)
+            if not stat.S_ISREG(before.st_mode):
+                raise ValueError("toolchain archive path is unavailable or unsafe")
+            if before.st_size > _MAX_DOWNLOAD_BYTES:
                 raise ValueError("toolchain archive exceeds 64 MiB")
-            chunks.append(chunk)
-        after_open = os.fstat(descriptor)
+            descriptor = os.open(parts[-1], _READ_FLAGS, dir_fd=parent)
+        except OSError as exc:
+            raise ValueError(
+                "toolchain archive path is unavailable or unsafe"
+            ) from exc
+        data = _read_descriptor(
+            descriptor,
+            before,
+            "toolchain archive changed during reading",
+            maximum_bytes=_MAX_DOWNLOAD_BYTES,
+            limit_message="toolchain archive exceeds 64 MiB",
+        )
+        try:
+            after_path = os.stat(parts[-1], dir_fd=parent, follow_symlinks=False)
+        except OSError as exc:
+            raise ValueError("toolchain archive changed during reading") from exc
+        if not _same_inode(before, after_path):
+            raise ValueError("toolchain archive changed during reading")
     finally:
-        os.close(descriptor)
-    try:
-        after_path = value.lstat()
-    except OSError as exc:
-        raise ValueError("toolchain archive changed during reading") from exc
-    if (
-        _file_identity(before) != _file_identity(after_open)
-        or _file_identity(before) != _file_identity(after_path)
-    ):
-        raise ValueError("toolchain archive changed during reading")
-    return b"".join(chunks)
+        if descriptor >= 0:
+            os.close(descriptor)
+        os.close(parent)
+    if len(data) > _MAX_DOWNLOAD_BYTES:
+        raise ValueError("toolchain archive exceeds 64 MiB")
+    return data
+
+
+class _RejectRedirects(HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        del req, fp, code, msg, headers, newurl
+        raise ValueError("toolchain artifact redirect is forbidden")
+
+
+def urlopen(url: str, *, timeout: float):
+    return build_opener(_RejectRedirects()).open(url, timeout=timeout)
+
+
+def _remaining_download_time(deadline: float) -> float:
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise ValueError(
+            "toolchain artifact download exceeded 30-second total deadline"
+        )
+    return remaining
+
+
+def _response_socket(response) -> Any:
+    candidates = (
+        getattr(getattr(getattr(response, "fp", None), "raw", None), "_sock", None),
+        getattr(getattr(response, "fp", None), "_sock", None),
+        getattr(getattr(response, "raw", None), "_sock", None),
+    )
+    for candidate in candidates:
+        if candidate is not None and callable(getattr(candidate, "settimeout", None)):
+            return candidate
+    raise ValueError("toolchain artifact download transport is unavailable")
 
 
 def _download_archive(artifact: Mapping[str, Any]) -> bytes:
     source_uri = artifact["sourceUri"]
     parsed = urlsplit(source_uri)
-    if parsed.scheme != "https" or not parsed.netloc or parsed.username or parsed.password:
+    if (
+        parsed.scheme != "https"
+        or not parsed.netloc
+        or parsed.username
+        or parsed.password
+        or parsed.fragment
+    ):
         raise ValueError("toolchain artifact source URI must be fixed HTTPS")
-    with urlopen(source_uri, timeout=_DOWNLOAD_TIMEOUT_SECONDS) as response:
-        data = response.read(_MAX_DOWNLOAD_BYTES + 1)
-    if len(data) > _MAX_DOWNLOAD_BYTES:
-        raise ValueError("toolchain artifact download exceeds 64 MiB")
-    return data
+    deadline = time.monotonic() + _DOWNLOAD_TIMEOUT_SECONDS
+    try:
+        with urlopen(source_uri, timeout=_DOWNLOAD_TIMEOUT_SECONDS) as response:
+            _remaining_download_time(deadline)
+            if (
+                callable(getattr(response, "geturl", None))
+                and response.geturl() != source_uri
+            ):
+                raise ValueError("toolchain artifact redirect is forbidden")
+            transport = _response_socket(response)
+            reader = getattr(response, "read1", None)
+            if not callable(reader):
+                reader = response.read
+            chunks: list[bytes] = []
+            total = 0
+            while True:
+                remaining = _remaining_download_time(deadline)
+                transport.settimeout(remaining)
+                chunk = reader(
+                    min(_DOWNLOAD_CHUNK_BYTES, _MAX_DOWNLOAD_BYTES + 1 - total)
+                )
+                _remaining_download_time(deadline)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > _MAX_DOWNLOAD_BYTES:
+                    raise ValueError("toolchain artifact download exceeds 64 MiB")
+                chunks.append(chunk)
+    except (TimeoutError, socket.timeout) as exc:
+        raise ValueError(
+            "toolchain artifact download exceeded 30-second total deadline"
+        ) from exc
+    return b"".join(chunks)
 
 
 def _safe_member_name(name: str) -> PurePosixPath:
@@ -287,13 +504,19 @@ def _inspect_archive(
 def _exclusive_write_member(
     archive: tarfile.TarFile,
     member: tarfile.TarInfo,
-    target: Path,
+    root_descriptor: int,
+    relative: PurePosixPath,
     extracted_total: int,
 ) -> int:
     source = archive.extractfile(member)
     if source is None:
         raise ValueError("toolchain archive regular file is unavailable")
-    target.parent.mkdir(parents=True, exist_ok=True)
+    parent = _open_relative_directory(
+        root_descriptor,
+        relative.parts[:-1],
+        create=True,
+        message="toolchain archive extraction parent is unsafe",
+    )
     flags = (
         os.O_WRONLY
         | os.O_CREAT
@@ -301,9 +524,16 @@ def _exclusive_write_member(
         | getattr(os, "O_CLOEXEC", 0)
         | getattr(os, "O_NOFOLLOW", 0)
     )
-    descriptor = os.open(target, flags, 0o600)
+    try:
+        descriptor = os.open(relative.name, flags, 0o600, dir_fd=parent)
+    except OSError:
+        os.close(parent)
+        source.close()
+        raise
     actual = 0
     try:
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            raise ValueError("toolchain archive extraction target is unsafe")
         while True:
             chunk = source.read(1024 * 1024)
             if not chunk:
@@ -319,88 +549,117 @@ def _exclusive_write_member(
         os.fsync(descriptor)
     finally:
         os.close(descriptor)
+        os.close(parent)
         source.close()
     if actual != member.size:
         raise ValueError("toolchain archive member size mismatch")
     return extracted_total
 
 
+@dataclass(frozen=True, slots=True)
+class _ExtractedTree:
+    files: tuple[PurePosixPath, ...]
+    directories: tuple[PurePosixPath, ...]
+    executable: Mapping[str, bool]
+
+
 def _extract_archive(
-    data: bytes, destination: Path, artifact: Mapping[str, Any]
-) -> dict[str, bool]:
+    data: bytes, destination_descriptor: int, artifact: Mapping[str, Any]
+) -> _ExtractedTree:
     try:
         with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as archive:
             inspected, executable = _inspect_archive(
                 archive, artifact["extractedRoot"]
             )
             extracted_total = 0
+            files: set[PurePosixPath] = set()
+            directories: set[PurePosixPath] = set()
             for member, relative in inspected:
-                target = destination.joinpath(*relative.parts)
-                if not target.is_relative_to(destination):
-                    raise ValueError("toolchain archive member path is unsafe")
                 if member.isdir():
-                    target.mkdir(parents=True, exist_ok=True)
+                    directory = _open_relative_directory(
+                        destination_descriptor,
+                        relative.parts,
+                        create=True,
+                        message="toolchain archive extraction directory is unsafe",
+                    )
+                    os.close(directory)
+                    directories.add(relative)
                     continue
                 extracted_total = _exclusive_write_member(
-                    archive, member, target, extracted_total
+                    archive,
+                    member,
+                    destination_descriptor,
+                    relative,
+                    extracted_total,
                 )
+                files.add(relative)
+                for depth in range(1, len(relative.parts)):
+                    directories.add(PurePosixPath(*relative.parts[:depth]))
     except (tarfile.TarError, EOFError) as exc:
         raise ValueError("toolchain archive is invalid") from exc
-    return executable
+    return _ExtractedTree(
+        files=tuple(sorted(files, key=lambda item: item.as_posix().encode("utf-8"))),
+        directories=tuple(
+            sorted(directories, key=lambda item: item.as_posix().encode("utf-8"))
+        ),
+        executable=executable,
+    )
 
 
-def _read_regular_file(path: Path, message: str) -> bytes:
+def _read_regular_file_at(
+    root_descriptor: int, relative: PurePosixPath, message: str
+) -> bytes:
+    parent = _open_relative_directory(
+        root_descriptor,
+        relative.parts[:-1],
+        create=False,
+        message=message,
+    )
+    descriptor = -1
     try:
-        before = path.lstat()
-        if path.is_symlink() or not stat.S_ISREG(before.st_mode):
+        try:
+            before = os.stat(relative.name, dir_fd=parent, follow_symlinks=False)
+            if not stat.S_ISREG(before.st_mode):
+                raise ValueError(message)
+            descriptor = os.open(relative.name, _READ_FLAGS, dir_fd=parent)
+        except OSError as exc:
+            raise ValueError(message) from exc
+        data = _read_descriptor(descriptor, before, message)
+        try:
+            after_path = os.stat(
+                relative.name, dir_fd=parent, follow_symlinks=False
+            )
+        except OSError as exc:
+            raise ValueError(message) from exc
+        if not _same_inode(before, after_path):
             raise ValueError(message)
-        descriptor = os.open(
-            path,
-            os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0),
-        )
-    except OSError as exc:
-        raise ValueError(message) from exc
-    try:
-        opened = os.fstat(descriptor)
-        if _file_identity(opened) != _file_identity(before):
-            raise ValueError(message)
-        chunks: list[bytes] = []
-        while True:
-            chunk = os.read(descriptor, 1024 * 1024)
-            if not chunk:
-                break
-            chunks.append(chunk)
-        after_open = os.fstat(descriptor)
     finally:
-        os.close(descriptor)
-    try:
-        after_path = path.lstat()
-    except OSError as exc:
-        raise ValueError(message) from exc
-    if (
-        _file_identity(before) != _file_identity(after_open)
-        or _file_identity(before) != _file_identity(after_path)
-    ):
-        raise ValueError(message)
-    return b"".join(chunks)
+        if descriptor >= 0:
+            os.close(descriptor)
+        os.close(parent)
+    return data
 
 
 def _verify_extracted_commands(
-    root: Path,
+    root_descriptor: int,
     profile: Mapping[str, Any],
     managed: Mapping[str, Mapping[str, Any]],
     artifact: Mapping[str, Any],
-) -> dict[str, Path]:
+) -> dict[str, PurePosixPath]:
     extracted = artifact.get("extractedFiles", {})
-    paths: dict[str, Path] = {}
+    paths: dict[str, PurePosixPath] = {}
     for name, identity in managed.items():
         file_name = identity["fileName"]
         expected = extracted.get(file_name)
         if expected is None or expected != identity["sha256"]:
             raise ValueError("toolchain artifact/profile extracted identity mismatch")
-        path = root / artifact["extractedRoot"] / file_name
+        path = PurePosixPath(artifact["extractedRoot"], file_name)
         digest = "sha256:" + sha256_bytes(
-            _read_regular_file(path, "toolchain extracted command is unavailable or unsafe")
+            _read_regular_file_at(
+                root_descriptor,
+                path,
+                "toolchain extracted command is unavailable or unsafe",
+            )
         )
         if digest != expected:
             raise ValueError("toolchain extracted command identity mismatch")
@@ -409,74 +668,204 @@ def _verify_extracted_commands(
 
 
 def _make_tree_read_only(
-    root: Path, executable: Mapping[str, bool], command_paths: Mapping[str, Path]
+    root_descriptor: int,
+    tree: _ExtractedTree,
+    command_paths: Mapping[str, PurePosixPath],
 ) -> None:
-    forced_executables = {path.relative_to(root).as_posix() for path in command_paths.values()}
-    for path in sorted(root.rglob("*"), reverse=True):
-        if path.is_dir():
-            path.chmod(0o555)
-        else:
-            relative = path.relative_to(root).as_posix()
-            path.chmod(0o555 if executable.get(relative, False) or relative in forced_executables else 0o444)
-    root.chmod(0o555)
-
-
-def _remove_temp_tree(root: Path) -> None:
-    if not root.exists():
-        return
-    for path in sorted(root.rglob("*"), reverse=True):
+    forced_executables = {path.as_posix() for path in command_paths.values()}
+    for relative in reversed(tree.files):
+        parent = _open_relative_directory(
+            root_descriptor,
+            relative.parts[:-1],
+            create=False,
+            message="toolchain extracted file parent is unsafe",
+        )
         try:
-            path.chmod(0o700 if path.is_dir() else 0o600)
-        except OSError:
-            pass
-    try:
-        root.chmod(0o700)
-    except OSError:
-        pass
-    shutil.rmtree(root)
-
-
-def _ensure_directory(path: Path, boundary: Path) -> None:
-    if not path.is_absolute() or not path.is_relative_to(boundary):
-        raise ValueError("toolchain managed cache path is unsafe")
-    current = boundary
-    for part in path.relative_to(boundary).parts:
-        current = current / part
-        try:
-            before = current.lstat()
-        except FileNotFoundError:
+            descriptor = os.open(relative.name, _READ_FLAGS, dir_fd=parent)
             try:
-                current.mkdir(mode=0o755)
-            except FileExistsError:
-                before = current.lstat()
-            else:
-                before = current.lstat()
-        if current.is_symlink() or not stat.S_ISDIR(before.st_mode):
-            raise ValueError("toolchain managed cache path is unsafe")
-        if current.resolve(strict=True) != current:
-            raise ValueError("toolchain managed cache path is unsafe")
+                mode = (
+                    0o555
+                    if tree.executable.get(relative.as_posix(), False)
+                    or relative.as_posix() in forced_executables
+                    else 0o444
+                )
+                os.fchmod(descriptor, mode)
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
+        finally:
+            os.close(parent)
+    for relative in sorted(
+        tree.directories, key=lambda item: len(item.parts), reverse=True
+    ):
+        descriptor = _open_relative_directory(
+            root_descriptor,
+            relative.parts,
+            create=False,
+            message="toolchain extracted directory is unsafe",
+        )
+        try:
+            os.fchmod(descriptor, 0o555)
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+    os.fchmod(root_descriptor, 0o555)
+    os.fsync(root_descriptor)
 
 
-def _same_directory_identity(first: Path, second: Path) -> bool:
+def _directory_identity_digest_fd(root_descriptor: int) -> str:
+    root = os.fstat(root_descriptor)
+    if not stat.S_ISDIR(root.st_mode) or stat.S_IMODE(root.st_mode) & 0o222:
+        raise ValueError("toolchain managed store identity conflict")
+    entries: list[dict[str, str]] = [
+        {
+            "path": ".",
+            "type": "directory",
+            "mode": format(stat.S_IMODE(root.st_mode), "04o"),
+        }
+    ]
+
+    def visit(directory_descriptor: int, prefix: PurePosixPath | None) -> None:
+        for name in sorted(
+            os.listdir(directory_descriptor), key=lambda item: item.encode("utf-8")
+        ):
+            relative = PurePosixPath(name) if prefix is None else prefix / name
+            before = os.stat(name, dir_fd=directory_descriptor, follow_symlinks=False)
+            if stat.S_ISLNK(before.st_mode):
+                raise ValueError("toolchain managed store identity conflict")
+            if stat.S_ISDIR(before.st_mode):
+                if stat.S_IMODE(before.st_mode) & 0o222:
+                    raise ValueError("toolchain managed store identity conflict")
+                child = os.open(name, _DIRECTORY_FLAGS, dir_fd=directory_descriptor)
+                try:
+                    if not _same_inode(before, os.fstat(child)):
+                        raise ValueError("toolchain managed store identity conflict")
+                    entries.append(
+                        {
+                            "path": relative.as_posix(),
+                            "type": "directory",
+                            "mode": format(stat.S_IMODE(before.st_mode), "04o"),
+                        }
+                    )
+                    visit(child, relative)
+                finally:
+                    os.close(child)
+                after_path = os.stat(
+                    name, dir_fd=directory_descriptor, follow_symlinks=False
+                )
+                if not _same_inode(before, after_path):
+                    raise ValueError("toolchain managed store identity conflict")
+                continue
+            if not stat.S_ISREG(before.st_mode) or stat.S_IMODE(before.st_mode) & 0o222:
+                raise ValueError("toolchain managed store identity conflict")
+            descriptor = os.open(name, _READ_FLAGS, dir_fd=directory_descriptor)
+            try:
+                data = _read_descriptor(
+                    descriptor, before, "toolchain managed store identity conflict"
+                )
+                after_path = os.stat(
+                    name, dir_fd=directory_descriptor, follow_symlinks=False
+                )
+                if not _same_inode(before, after_path):
+                    raise ValueError("toolchain managed store identity conflict")
+            finally:
+                os.close(descriptor)
+            entries.append(
+                {
+                    "path": relative.as_posix(),
+                    "type": "file",
+                    "mode": format(stat.S_IMODE(before.st_mode), "04o"),
+                    "sha256": sha256_bytes(data),
+                }
+            )
+
+    visit(root_descriptor, None)
+    return "sha256:" + sha256_bytes(canonical_json_bytes(entries))
+
+
+def _entry_lstat(parent_descriptor: int, name: str) -> os.stat_result | None:
     try:
-        return directory_identity_digest(first) == directory_identity_digest(second)
-    except ValueError as exc:
-        raise ValueError("toolchain managed store identity conflict") from exc
+        return os.stat(name, dir_fd=parent_descriptor, follow_symlinks=False)
+    except FileNotFoundError:
+        return None
 
 
-def _publish_store(temp_root: Path, final_root: Path, common_root: Path) -> bool:
-    _ensure_directory(final_root.parent, common_root)
-    if final_root.exists() or final_root.is_symlink():
-        if not _same_directory_identity(temp_root, final_root):
+def _publish_store(
+    temp_descriptor: int,
+    parent_descriptor: int,
+    temp_name: str,
+    final_name: str,
+) -> bool:
+    temp_identity = _directory_identity_digest_fd(temp_descriptor)
+    current = _entry_lstat(parent_descriptor, final_name)
+    if current is not None:
+        if not stat.S_ISDIR(current.st_mode):
             raise ValueError("toolchain managed store identity conflict")
+        try:
+            final_descriptor = os.open(
+                final_name, _DIRECTORY_FLAGS, dir_fd=parent_descriptor
+            )
+        except OSError as exc:
+            raise ValueError("toolchain managed store identity conflict") from exc
+        try:
+            if _directory_identity_digest_fd(final_descriptor) != temp_identity:
+                raise ValueError("toolchain managed store identity conflict")
+        finally:
+            os.close(final_descriptor)
         return False
-    try:
-        os.replace(temp_root, final_root)
-    except OSError:
-        if final_root.exists() and _same_directory_identity(temp_root, final_root):
-            return False
-        raise
+    os.replace(
+        temp_name,
+        final_name,
+        src_dir_fd=parent_descriptor,
+        dst_dir_fd=parent_descriptor,
+    )
+    installed = os.stat(
+        final_name, dir_fd=parent_descriptor, follow_symlinks=False
+    )
+    if not _same_inode(os.fstat(temp_descriptor), installed):
+        raise ValueError("toolchain managed store publication identity mismatch")
+    os.fsync(parent_descriptor)
     return True
+
+
+def _remove_directory_contents(descriptor: int) -> None:
+    os.fchmod(descriptor, 0o700)
+    for name in os.listdir(descriptor):
+        current = os.stat(name, dir_fd=descriptor, follow_symlinks=False)
+        if stat.S_ISDIR(current.st_mode):
+            child = os.open(name, _DIRECTORY_FLAGS, dir_fd=descriptor)
+            try:
+                _remove_directory_contents(child)
+            finally:
+                os.close(child)
+            os.rmdir(name, dir_fd=descriptor)
+        else:
+            try:
+                child = os.open(name, _READ_FLAGS, dir_fd=descriptor)
+            except OSError:
+                child = -1
+            if child >= 0:
+                try:
+                    os.fchmod(child, 0o600)
+                finally:
+                    os.close(child)
+            os.unlink(name, dir_fd=descriptor)
+
+
+def _remove_tree_at(parent_descriptor: int, name: str) -> None:
+    current = _entry_lstat(parent_descriptor, name)
+    if current is None:
+        return
+    if not stat.S_ISDIR(current.st_mode):
+        os.unlink(name, dir_fd=parent_descriptor)
+        return
+    descriptor = os.open(name, _DIRECTORY_FLAGS, dir_fd=parent_descriptor)
+    try:
+        _remove_directory_contents(descriptor)
+    finally:
+        os.close(descriptor)
+    os.rmdir(name, dir_fd=parent_descriptor)
+    os.fsync(parent_descriptor)
 
 
 def _binding_record(
@@ -512,13 +901,78 @@ def _binding_object(record: Mapping[str, Any]) -> ToolchainBinding:
     )
 
 
-def _write_binding(path: Path, record: Mapping[str, Any], common_root: Path) -> None:
-    _ensure_directory(path.parent, common_root)
-    descriptor, temporary_name = tempfile.mkstemp(
-        prefix=f".{path.name}.tmp-", dir=str(path.parent)
-    )
-    temporary = Path(temporary_name)
+def _rollback_binding(
+    parent_descriptor: int,
+    final_name: str,
+    installed_descriptor: int,
+    expected: os.stat_result,
+) -> None:
     try:
+        os.fchmod(installed_descriptor, 0o000)
+        os.fsync(installed_descriptor)
+    except OSError:
+        pass
+    current = _entry_lstat(parent_descriptor, final_name)
+    if current is None:
+        os.fsync(parent_descriptor)
+        return
+    if not _same_inode(expected, current):
+        raise ValueError("toolchain binding rollback identity cannot be proven")
+    os.unlink(final_name, dir_fd=parent_descriptor)
+    if _entry_lstat(parent_descriptor, final_name) is not None:
+        raise ValueError("toolchain binding rollback identity cannot be proven")
+    os.fsync(parent_descriptor)
+
+
+def _require_pinned_directory_at(
+    root_descriptor: int,
+    parts: tuple[str, ...],
+    expected_descriptor: int,
+    message: str,
+) -> None:
+    current = _open_relative_directory(
+        root_descriptor,
+        parts,
+        create=False,
+        message=message,
+    )
+    try:
+        if not _same_inode(os.fstat(expected_descriptor), os.fstat(current)):
+            raise ValueError(message)
+    finally:
+        os.close(current)
+
+
+def _write_binding(
+    common_root_descriptor: int,
+    path: Path,
+    common_root: Path,
+    record: Mapping[str, Any],
+    verify_installed: Callable[[], Any],
+) -> Any:
+    try:
+        relative_parent = path.parent.relative_to(common_root).parts
+    except ValueError as exc:
+        raise ValueError("toolchain binding path is outside managed root") from exc
+    parent = _open_relative_directory(
+        common_root_descriptor,
+        relative_parent,
+        create=True,
+        message="toolchain binding parent is unavailable or unsafe",
+    )
+    temporary_name = f".{path.name}.tmp-{uuid.uuid4().hex}"
+    flags = (
+        os.O_WRONLY
+        | os.O_CREAT
+        | os.O_EXCL
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+    descriptor = -1
+    expected: os.stat_result | None = None
+    replaced = False
+    try:
+        descriptor = os.open(temporary_name, flags, 0o600, dir_fd=parent)
         data = canonical_json_bytes(record)
         view = memoryview(data)
         while view:
@@ -526,20 +980,56 @@ def _write_binding(path: Path, record: Mapping[str, Any], common_root: Path) -> 
             view = view[written:]
         os.fchmod(descriptor, 0o444)
         os.fsync(descriptor)
-        os.close(descriptor)
-        descriptor = -1
-        os.replace(temporary, path)
-        directory_descriptor = os.open(path.parent, os.O_RDONLY)
+        expected = os.fstat(descriptor)
         try:
-            os.fsync(directory_descriptor)
-        finally:
-            os.close(directory_descriptor)
+            os.replace(
+                temporary_name,
+                path.name,
+                src_dir_fd=parent,
+                dst_dir_fd=parent,
+            )
+            replaced = True
+            installed = os.stat(path.name, dir_fd=parent, follow_symlinks=False)
+            if not _same_inode(expected, installed):
+                raise ValueError("toolchain binding publication identity mismatch")
+            os.fsync(parent)
+            verified = verify_installed()
+            installed = os.stat(path.name, dir_fd=parent, follow_symlinks=False)
+            if not _same_inode(expected, installed):
+                raise ValueError("toolchain binding publication identity mismatch")
+            _require_pinned_directory_at(
+                common_root_descriptor,
+                relative_parent,
+                parent,
+                "toolchain binding parent changed during publication",
+            )
+            return verified
+        except BaseException as original:
+            current = _entry_lstat(parent, path.name)
+            installed_here = current is not None and _same_inode(expected, current)
+            if replaced or installed_here:
+                try:
+                    _rollback_binding(parent, path.name, descriptor, expected)
+                except BaseException as rollback_error:
+                    raise ValueError(
+                        "toolchain binding write failed and rollback cannot be proven"
+                    ) from rollback_error
+            raise original
     finally:
         if descriptor >= 0:
             os.close(descriptor)
-        if temporary.exists():
-            temporary.chmod(0o600)
-            temporary.unlink()
+        temporary = _entry_lstat(parent, temporary_name)
+        if temporary is not None:
+            if stat.S_ISREG(temporary.st_mode):
+                temporary_descriptor = os.open(
+                    temporary_name, _READ_FLAGS, dir_fd=parent
+                )
+                try:
+                    os.fchmod(temporary_descriptor, 0o600)
+                finally:
+                    os.close(temporary_descriptor)
+            os.unlink(temporary_name, dir_fd=parent)
+        os.close(parent)
 
 
 def _resolved_paths(verified) -> dict[str, dict[str, str]]:
@@ -581,22 +1071,43 @@ def provision_toolchain(
         raise ValueError("toolchain archive identity mismatch")
 
     common_root = record_path.parents[3]
-    _ensure_directory(final_root.parent, common_root)
-    temp_root: Path | None = Path(
-        tempfile.mkdtemp(prefix=".toolchain-provision-", dir=str(final_root.parent))
+    common_root_descriptor = _open_absolute_directory(
+        common_root, "toolchain managed root is unavailable or unsafe"
     )
-    published = False
+    store_parent_descriptor = -1
+    temp_descriptor = -1
+    temp_created = False
+    temp_name = f".toolchain-provision-{uuid.uuid4().hex}"
     try:
-        executable = _extract_archive(data, temp_root, artifact)
-        temp_commands = _verify_extracted_commands(
-            temp_root, profile, managed, artifact
+        try:
+            store_parent_parts = final_root.parent.relative_to(common_root).parts
+        except ValueError as exc:
+            raise ValueError("toolchain managed store is outside managed root") from exc
+        store_parent_descriptor = _open_relative_directory(
+            common_root_descriptor,
+            store_parent_parts,
+            create=True,
+            message="toolchain managed store parent is unavailable or unsafe",
         )
-        _make_tree_read_only(temp_root, executable, temp_commands)
-        _verify_extracted_commands(temp_root, profile, managed, artifact)
-        directory_identity_digest(temp_root)
-        published = _publish_store(temp_root, final_root, common_root)
-        if published:
-            temp_root = None
+        os.mkdir(temp_name, 0o700, dir_fd=store_parent_descriptor)
+        temp_created = True
+        os.fsync(store_parent_descriptor)
+        temp_descriptor = os.open(
+            temp_name, _DIRECTORY_FLAGS, dir_fd=store_parent_descriptor
+        )
+        extracted_tree = _extract_archive(data, temp_descriptor, artifact)
+        temp_commands = _verify_extracted_commands(
+            temp_descriptor, profile, managed, artifact
+        )
+        _make_tree_read_only(temp_descriptor, extracted_tree, temp_commands)
+        _verify_extracted_commands(temp_descriptor, profile, managed, artifact)
+        _directory_identity_digest_fd(temp_descriptor)
+        _publish_store(
+            temp_descriptor,
+            store_parent_descriptor,
+            temp_name,
+            final_root.name,
+        )
         managed_paths = {
             name: final_root / artifact["extractedRoot"] / identity["fileName"]
             for name, identity in managed.items()
@@ -604,13 +1115,18 @@ def provision_toolchain(
         record = _binding_record(profile, managed_paths, explicit)
         binding = _binding_object(record)
         verify_profile_toolchain(repository_root, profile, binding)
-        _write_binding(record_path, record, common_root)
-        try:
+
+        def verify_installed():
             loaded = load_toolchain_binding(repository_root, profile_id)
-            verified = verify_profile_toolchain(repository_root, profile, loaded)
-        except Exception:
-            record_path.unlink(missing_ok=True)
-            raise
+            return verify_profile_toolchain(repository_root, profile, loaded)
+
+        verified = _write_binding(
+            common_root_descriptor,
+            record_path,
+            common_root,
+            record,
+            verify_installed,
+        )
         return {
             "apply": True,
             "profileId": profile_id,
@@ -621,8 +1137,15 @@ def provision_toolchain(
             "resolvedPaths": _resolved_paths(verified),
         }
     finally:
-        if temp_root is not None and temp_root.exists():
-            _remove_temp_tree(temp_root)
+        if temp_descriptor >= 0:
+            os.close(temp_descriptor)
+        try:
+            if store_parent_descriptor >= 0 and temp_created:
+                _remove_tree_at(store_parent_descriptor, temp_name)
+        finally:
+            if store_parent_descriptor >= 0:
+                os.close(store_parent_descriptor)
+            os.close(common_root_descriptor)
 
 
 def toolchain_status(repository_root: Path, profile_id: str) -> dict[str, Any]:
@@ -641,7 +1164,7 @@ def toolchain_status(repository_root: Path, profile_id: str) -> dict[str, Any]:
         "artifactId": artifact["artifactId"],
         "platform": dict(artifact["platform"]),
     }
-    if not path.exists():
+    if not binding_path_entry_exists(path):
         return {
             "status": "MISSING",
             **identity,

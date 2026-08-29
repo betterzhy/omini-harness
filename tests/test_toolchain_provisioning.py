@@ -7,6 +7,7 @@ import platform
 import shutil
 import subprocess
 import tarfile
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -374,10 +375,10 @@ def test_interrupted_store_replace_publishes_neither_store_nor_binding(
 ):
     real_replace = os.replace
 
-    def interrupted(source: str | Path, target: str | Path) -> None:
-        if Path(target) == provision_harness.published_root:
+    def interrupted(source: str | Path, target: str | Path, *args, **kwargs) -> None:
+        if Path(target).name == provision_harness.published_root.name:
             raise OSError("interrupted store publication")
-        real_replace(source, target)
+        real_replace(source, target, *args, **kwargs)
 
     monkeypatch.setattr("evolution_harness.toolchain_provisioning.os.replace", interrupted)
 
@@ -399,10 +400,10 @@ def test_binding_write_failure_leaves_only_immutable_unreferenced_store(
 ):
     real_replace = os.replace
 
-    def interrupted(source: str | Path, target: str | Path) -> None:
-        if Path(target) == provision_harness.binding_path:
+    def interrupted(source: str | Path, target: str | Path, *args, **kwargs) -> None:
+        if Path(target).name == provision_harness.binding_path.name:
             raise OSError("interrupted binding publication")
-        real_replace(source, target)
+        real_replace(source, target, *args, **kwargs)
 
     monkeypatch.setattr("evolution_harness.toolchain_provisioning.os.replace", interrupted)
 
@@ -524,6 +525,23 @@ def test_missing_binding_status_is_offline_and_actionable(
     )
 
 
+def test_dangling_binding_status_is_invalid_not_missing(
+    provision_harness: ProvisionHarness,
+):
+    path = provision_harness.binding_path
+    path.parent.mkdir(parents=True)
+    path.symlink_to(path.parent / "absent-binding.json")
+
+    result = toolchain_status(
+        provision_harness.root, provision_harness.profile_id
+    )
+
+    assert result["status"] == "INVALID"
+    assert result["message"] == (
+        "capability pack toolchain binding is unavailable or unsafe"
+    )
+
+
 def test_candidate_validation_missing_binding_is_offline_and_actionable(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -555,6 +573,377 @@ def test_candidate_validation_missing_binding_is_offline_and_actionable(
     ) in message
 
 
+def test_candidate_validation_dangling_binding_retains_unsafe_failure(
+    tmp_path: Path,
+):
+    from evolution_harness.capability_pack_registry import (
+        get_registered_capability_pack,
+    )
+    from test_capability_pack_registry import _managed_profile_harness
+
+    root, registration = _managed_profile_harness(tmp_path)
+    profile_id = registration["validator"]["toolchainProfile"]["profileId"]
+    path = binding_path(root, profile_id)
+    path.unlink()
+    path.symlink_to(path.parent / "absent-binding.json")
+
+    with pytest.raises(
+        ValueError,
+        match="^capability pack toolchain binding is unavailable or unsafe$",
+    ):
+        get_registered_capability_pack(root, registration["capabilityId"])
+
+
+def test_binding_transaction_has_no_post_replace_parent_open_window(
+    provision_harness: ProvisionHarness,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    real_open = os.open
+    real_replace = os.replace
+    binding_replaced = False
+
+    def observe_replace(source, target, *args, **kwargs):
+        nonlocal binding_replaced
+        result = real_replace(source, target, *args, **kwargs)
+        target_name = Path(target).name
+        if target_name == provision_harness.binding_path.name:
+            binding_replaced = True
+        return result
+
+    def reject_late_parent_open(path, flags, *args, **kwargs):
+        if (
+            binding_replaced
+            and kwargs.get("dir_fd") is None
+            and Path(path) == provision_harness.binding_path.parent
+        ):
+            raise OSError("post-replace binding parent open")
+        return real_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(
+        "evolution_harness.toolchain_provisioning.os.replace", observe_replace
+    )
+    monkeypatch.setattr(
+        "evolution_harness.toolchain_provisioning.os.open", reject_late_parent_open
+    )
+
+    result = provision_toolchain(
+        provision_harness.root,
+        provision_harness.profile_id,
+        provision_harness.explicit_bindings,
+        provision_harness.archive(),
+    )
+
+    assert result["apply"] is True
+    assert provision_harness.binding_path.is_file()
+
+
+def test_binding_parent_fsync_failure_rolls_back_installed_binding(
+    provision_harness: ProvisionHarness,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    real_fsync = os.fsync
+    real_replace = os.replace
+    binding_replaced = False
+    failed = False
+
+    def observe_replace(source, target, *args, **kwargs):
+        nonlocal binding_replaced
+        result = real_replace(source, target, *args, **kwargs)
+        if Path(target).name == provision_harness.binding_path.name:
+            binding_replaced = True
+        return result
+
+    def fail_first_post_replace_fsync(descriptor: int):
+        nonlocal failed
+        if binding_replaced and not failed:
+            failed = True
+            raise OSError("post-replace binding parent fsync")
+        return real_fsync(descriptor)
+
+    monkeypatch.setattr(
+        "evolution_harness.toolchain_provisioning.os.replace", observe_replace
+    )
+    monkeypatch.setattr(
+        "evolution_harness.toolchain_provisioning.os.fsync",
+        fail_first_post_replace_fsync,
+    )
+
+    with pytest.raises(OSError, match="post-replace binding parent fsync"):
+        provision_toolchain(
+            provision_harness.root,
+            provision_harness.profile_id,
+            provision_harness.explicit_bindings,
+            provision_harness.archive(),
+        )
+
+    with pytest.raises(FileNotFoundError):
+        provision_harness.binding_path.lstat()
+
+
+def test_extraction_parent_substitution_cannot_escape_temp_root(
+    provision_harness: ProvisionHarness,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+):
+    real_extractfile = tarfile.TarFile.extractfile
+    outside = tmp_path / "extraction-outside"
+    outside.mkdir()
+    substituted = False
+
+    def substitute_extracted_parent(archive: tarfile.TarFile, member: tarfile.TarInfo):
+        nonlocal substituted
+        if member.name.endswith("/rg") and not substituted:
+            substituted = True
+            candidates = list(
+                provision_harness.published_root.parent.glob(
+                    ".toolchain-provision-*"
+                )
+            )
+            assert len(candidates) == 1
+            extracted = candidates[0] / "ripgrep-test"
+            moved = candidates[0] / "ripgrep-test-pinned"
+            extracted.rename(moved)
+            extracted.symlink_to(outside, target_is_directory=True)
+        return real_extractfile(archive, member)
+
+    monkeypatch.setattr(tarfile.TarFile, "extractfile", substitute_extracted_parent)
+
+    with pytest.raises((OSError, ValueError)):
+        provision_toolchain(
+            provision_harness.root,
+            provision_harness.profile_id,
+            provision_harness.explicit_bindings,
+            provision_harness.archive(),
+        )
+
+    assert substituted is True
+    assert list(outside.iterdir()) == []
+    assert not provision_harness.binding_path.exists()
+
+
+def test_store_parent_substitution_cannot_publish_outside_pinned_parent(
+    provision_harness: ProvisionHarness,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+):
+    real_replace = os.replace
+    outside = tmp_path / "store-outside"
+    outside.mkdir()
+    substituted = False
+
+    def substitute_store_parent(source, target, *args, **kwargs):
+        nonlocal substituted
+        if Path(target).name == provision_harness.published_root.name and not substituted:
+            substituted = True
+            parent = provision_harness.published_root.parent
+            moved = parent.with_name(parent.name + "-pinned")
+            parent.rename(moved)
+            parent.symlink_to(outside, target_is_directory=True)
+            helper = outside / Path(source).name
+            helper.symlink_to(moved / Path(source).name, target_is_directory=True)
+            result = real_replace(source, target, *args, **kwargs)
+            if helper.is_symlink():
+                helper.unlink()
+            return result
+        return real_replace(source, target, *args, **kwargs)
+
+    monkeypatch.setattr(
+        "evolution_harness.toolchain_provisioning.os.replace",
+        substitute_store_parent,
+    )
+
+    with pytest.raises((OSError, ValueError)):
+        provision_toolchain(
+            provision_harness.root,
+            provision_harness.profile_id,
+            provision_harness.explicit_bindings,
+            provision_harness.archive(),
+        )
+
+    assert substituted is True
+    assert not (outside / provision_harness.published_root.name).exists()
+    assert not provision_harness.binding_path.exists()
+
+
+def test_binding_parent_substitution_cannot_publish_outside_pinned_parent(
+    provision_harness: ProvisionHarness,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+):
+    real_replace = os.replace
+    outside = tmp_path / "binding-outside"
+    outside.mkdir()
+    substituted = False
+
+    def substitute_binding_parent(source, target, *args, **kwargs):
+        nonlocal substituted
+        if Path(target).name == provision_harness.binding_path.name and not substituted:
+            substituted = True
+            parent = provision_harness.binding_path.parent
+            moved = parent.with_name("bindings-pinned")
+            parent.rename(moved)
+            parent.symlink_to(outside, target_is_directory=True)
+            helper = outside / Path(source).name
+            helper.symlink_to(moved / Path(source).name)
+            result = real_replace(source, target, *args, **kwargs)
+            escaped = (outside / provision_harness.binding_path.name).is_symlink()
+            if helper.is_symlink():
+                helper.unlink()
+            if escaped:
+                raise OSError("binding escaped pinned parent")
+            return result
+        return real_replace(source, target, *args, **kwargs)
+
+    monkeypatch.setattr(
+        "evolution_harness.toolchain_provisioning.os.replace",
+        substitute_binding_parent,
+    )
+
+    with pytest.raises((OSError, ValueError)):
+        provision_toolchain(
+            provision_harness.root,
+            provision_harness.profile_id,
+            provision_harness.explicit_bindings,
+            provision_harness.archive(),
+        )
+
+    assert substituted is True
+    assert not (outside / provision_harness.binding_path.name).exists()
+
+
+class _FakeSocket:
+    def __init__(self) -> None:
+        self.timeouts: list[float] = []
+
+    def settimeout(self, value: float) -> None:
+        self.timeouts.append(value)
+
+
+class _FakeTransport:
+    def __init__(self) -> None:
+        self._sock = _FakeSocket()
+
+
+class _FakeRaw:
+    def __init__(self) -> None:
+        self.raw = _FakeTransport()
+
+
+class _NetworkResponse(io.BytesIO):
+    def __init__(self, data: bytes, url: str):
+        super().__init__(data)
+        self._url = url
+        self.fp = _FakeRaw()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args: object) -> None:
+        self.close()
+
+    def geturl(self) -> str:
+        return self._url
+
+
+def test_download_rejects_redirected_response(
+    provision_harness: ProvisionHarness,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    archive = provision_harness.archive().read_bytes()
+    monkeypatch.setattr(
+        "evolution_harness.toolchain_provisioning.urlopen",
+        lambda *_args, **_kwargs: _NetworkResponse(
+            archive, "https://redirected.example.invalid/ripgrep.tar.gz"
+        ),
+    )
+
+    with pytest.raises(ValueError, match="redirect"):
+        provision_toolchain(
+            provision_harness.root,
+            provision_harness.profile_id,
+            provision_harness.explicit_bindings,
+            None,
+        )
+
+    assert not provision_harness.binding_path.exists()
+    assert not provision_harness.published_root.exists()
+
+
+def test_download_rejects_redirect_before_following(
+    provision_harness: ProvisionHarness,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    followed: list[str] = []
+
+    class RedirectingOpener:
+        def __init__(self, redirect_handler):
+            self.redirect_handler = redirect_handler
+
+        def open(self, uri: str, *, timeout: int):
+            assert timeout == 30
+            self.redirect_handler.redirect_request(
+                None,
+                None,
+                302,
+                "Found",
+                {},
+                "https://redirected.example.invalid/ripgrep.tar.gz",
+            )
+            followed.append(uri)
+            raise AssertionError("redirect followed")
+
+    monkeypatch.setattr(
+        "evolution_harness.toolchain_provisioning.build_opener",
+        lambda redirect_handler: RedirectingOpener(redirect_handler),
+    )
+
+    with pytest.raises(ValueError, match="redirect is forbidden"):
+        provision_toolchain(
+            provision_harness.root,
+            provision_harness.profile_id,
+            provision_harness.explicit_bindings,
+            None,
+        )
+
+    assert followed == []
+    assert not provision_harness.binding_path.exists()
+    assert not provision_harness.published_root.exists()
+
+
+def test_download_trickle_exceeding_total_deadline_is_rejected(
+    provision_harness: ProvisionHarness,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    clock = [100.0]
+
+    class TrickleResponse(_NetworkResponse):
+        def __init__(self):
+            super().__init__(b"", "https://example.invalid/ripgrep.tar.gz")
+
+        def read(self, _size: int = -1) -> bytes:
+            clock[0] += 10.1
+            return b"x"
+
+        read1 = read
+
+    monkeypatch.setattr(time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(
+        "evolution_harness.toolchain_provisioning.urlopen",
+        lambda *_args, **_kwargs: TrickleResponse(),
+    )
+
+    with pytest.raises(ValueError, match="30-second total deadline"):
+        provision_toolchain(
+            provision_harness.root,
+            provision_harness.profile_id,
+            provision_harness.explicit_bindings,
+            None,
+        )
+
+    assert not provision_harness.binding_path.exists()
+    assert not provision_harness.published_root.exists()
+
+
 def test_apply_without_archive_uses_fixed_download_with_timeout(
     provision_harness: ProvisionHarness,
     monkeypatch: pytest.MonkeyPatch,
@@ -562,16 +951,9 @@ def test_apply_without_archive_uses_fixed_download_with_timeout(
     archive = provision_harness.archive().read_bytes()
     calls: list[tuple[str, int]] = []
 
-    class Response(io.BytesIO):
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *_args: object) -> None:
-            self.close()
-
     def fixed_download(uri: str, *, timeout: int):
         calls.append((uri, timeout))
-        return Response(archive)
+        return _NetworkResponse(archive, uri)
 
     monkeypatch.setattr(
         "evolution_harness.toolchain_provisioning.urlopen", fixed_download
@@ -595,16 +977,17 @@ def test_download_response_over_64_mib_is_rejected(
     provision_harness: ProvisionHarness,
     monkeypatch: pytest.MonkeyPatch,
 ):
-    class OversizedResponse:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *_args: object) -> None:
-            return None
+    class OversizedResponse(_NetworkResponse):
+        def __init__(self):
+            super().__init__(b"", "https://example.invalid/ripgrep.tar.gz")
+            self.remaining = 64 * 1024 * 1024 + 1
 
         def read(self, size: int = -1) -> bytes:
-            assert size == 64 * 1024 * 1024 + 1
-            return b"x" * size
+            amount = min(size, self.remaining)
+            self.remaining -= amount
+            return b"x" * amount
+
+        read1 = read
 
     monkeypatch.setattr(
         "evolution_harness.toolchain_provisioning.urlopen",

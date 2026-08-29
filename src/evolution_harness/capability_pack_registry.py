@@ -23,7 +23,10 @@ import yaml
 from .generated import write_generated_json
 from .hashing import canonical_json_bytes, sha256_bytes
 from .schema import SchemaStore, SchemaValidationError
-from .toolchain_provisioning import missing_toolchain_binding_message
+from .toolchain_provisioning import (
+    binding_path_entry_exists,
+    missing_toolchain_binding_message,
+)
 from .toolchain_profile import (
     VerifiedToolchain,
     binding_path,
@@ -595,7 +598,7 @@ def _verify_validator_toolchain(
         if (
             str(exc)
             == "capability pack toolchain binding is unavailable or unsafe"
-            and not local_binding_path.exists()
+            and not binding_path_entry_exists(local_binding_path)
         ):
             raise ValueError(missing_toolchain_binding_message(profile)) from exc
         raise

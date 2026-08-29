@@ -831,9 +831,12 @@ def _publish_store(
     final_descriptor = os.open(
         final_name, _DIRECTORY_FLAGS, dir_fd=parent_descriptor
     )
-    if not _same_inode(installed, os.fstat(final_descriptor)):
+    try:
+        if not _same_inode(installed, os.fstat(final_descriptor)):
+            raise ValueError("toolchain managed store publication identity mismatch")
+    except BaseException:
         os.close(final_descriptor)
-        raise ValueError("toolchain managed store publication identity mismatch")
+        raise
     return final_descriptor
 
 

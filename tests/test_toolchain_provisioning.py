@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import hashlib
 import io
 import os
@@ -392,6 +393,55 @@ def test_interrupted_store_replace_publishes_neither_store_nor_binding(
 
     assert not provision_harness.binding_path.exists()
     assert not provision_harness.published_root.exists()
+
+
+def test_new_store_descriptor_fstat_failure_closes_open_descriptor(
+    provision_harness: ProvisionHarness,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    real_open = os.open
+    real_fstat = os.fstat
+    final_descriptor: int | None = None
+    failure_injected = False
+
+    def observe_open(path, flags, *args, **kwargs):
+        nonlocal final_descriptor
+        descriptor = real_open(path, flags, *args, **kwargs)
+        if (
+            Path(path).name == provision_harness.published_root.name
+            and kwargs.get("dir_fd") is not None
+        ):
+            final_descriptor = descriptor
+        return descriptor
+
+    def fail_final_descriptor_fstat(descriptor: int):
+        nonlocal failure_injected
+        if descriptor == final_descriptor and not failure_injected:
+            failure_injected = True
+            raise OSError("injected final store fstat failure")
+        return real_fstat(descriptor)
+
+    monkeypatch.setattr(
+        "evolution_harness.toolchain_provisioning.os.open", observe_open
+    )
+    monkeypatch.setattr(
+        "evolution_harness.toolchain_provisioning.os.fstat",
+        fail_final_descriptor_fstat,
+    )
+
+    with pytest.raises(OSError, match="injected final store fstat failure"):
+        provision_toolchain(
+            provision_harness.root,
+            provision_harness.profile_id,
+            provision_harness.explicit_bindings,
+            provision_harness.archive(),
+        )
+
+    assert failure_injected is True
+    assert final_descriptor is not None
+    with pytest.raises(OSError) as closed:
+        real_fstat(final_descriptor)
+    assert closed.value.errno == errno.EBADF
 
 
 def test_binding_write_failure_leaves_only_immutable_unreferenced_store(

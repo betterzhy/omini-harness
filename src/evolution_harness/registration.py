@@ -160,10 +160,10 @@ def _bootstrap_registered_integration(
 
 def _require_unchanged_bootstrap(
     initial: ProjectRegistrationBootstrap,
-    live: ProjectRegistrationBootstrap,
+    *observed: ProjectRegistrationBootstrap,
     verification_session: CapabilityVerificationSession,
 ) -> None:
-    if initial == live:
+    if all(initial == item for item in observed):
         return
     error = ProjectRegistrationError(
         "project registration structural witness changed during verification"
@@ -177,9 +177,12 @@ def _load_project_registration_verified(
     source_root: Path,
     *,
     verification_session: CapabilityVerificationSession,
-) -> dict[str, Any]:
+) -> tuple[dict[str, Any], ProjectRegistrationBootstrap]:
     try:
-        _, loaded = _load_project_registration_structure(repository_root, source_root)
+        live_bootstrap, loaded = _load_project_registration_structure(
+            repository_root,
+            source_root,
+        )
         lock, _ = verify_capability_lock(
             Path(repository_root).resolve(),
             loaded["integration"]["controlPlaneRoot"],
@@ -198,7 +201,7 @@ def _load_project_registration_verified(
         error = ProjectRegistrationError("capability lock fingerprint mismatch")
         verification_session._poison(error)
         raise error
-    return loaded
+    return loaded, live_bootstrap
 
 
 def load_project_registration(
@@ -208,11 +211,12 @@ def load_project_registration(
     verification_session: CapabilityVerificationSession | None = None,
 ) -> dict[str, Any]:
     if verification_session is not None:
-        return _load_project_registration_verified(
+        loaded, _ = _load_project_registration_verified(
             repository_root,
             source_root,
             verification_session=verification_session,
         )
+        return loaded
     bootstrap = _bootstrap_registered_integration(
         repository_root,
         source_root,
@@ -222,7 +226,7 @@ def load_project_registration(
         bootstrap.repository_root,
         allowed_capability_ids=bootstrap.allowed_capability_ids,
     ) as private_session:
-        loaded = _load_project_registration_verified(
+        loaded, verified_bootstrap = _load_project_registration_verified(
             bootstrap.repository_root,
             bootstrap.source_root,
             verification_session=private_session,
@@ -234,8 +238,9 @@ def load_project_registration(
         )
         _require_unchanged_bootstrap(
             bootstrap,
+            verified_bootstrap,
             live_bootstrap,
-            private_session,
+            verification_session=private_session,
         )
         return loaded
 
@@ -332,10 +337,9 @@ def registered_integration_operation(
         bootstrap.repository_root,
         allowed_capability_ids=bootstrap.allowed_capability_ids,
     ) as verification_session:
-        loaded = resolve_registered_integration(
+        loaded, verified_bootstrap = _load_project_registration_verified(
             bootstrap.repository_root,
             bootstrap.source_root,
-            explicit_integration,
             verification_session=verification_session,
         )
         live_bootstrap = _bootstrap_registered_integration(
@@ -345,7 +349,8 @@ def registered_integration_operation(
         )
         _require_unchanged_bootstrap(
             bootstrap,
+            verified_bootstrap,
             live_bootstrap,
-            verification_session,
+            verification_session=verification_session,
         )
         yield loaded, verification_session

@@ -623,6 +623,100 @@ def test_registered_cli_fails_closed_on_structurally_valid_bootstrap_live_identi
     assert gate_count == expected_gate_count
 
 
+def test_registration_check_cli_fails_closed_on_valid_external_removal_aba(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+):
+    from evolution_harness import capability_pack_registry, registration
+    from evolution_harness.project import build_capability_lock
+
+    root, _, source = _external_registered_fixture(tmp_path)
+    real_bootstrap = registration._bootstrap_registered_integration
+    real_gate = capability_pack_registry._run_candidate_gate
+    registration_path = source / ".agent-evolution/registration.yaml"
+    control = root / "integrations/neutral-shadow/control-plane"
+    binding_path = control / ".agent-evolution/capabilities.yaml"
+    lock_path = control / ".agent-evolution/capabilities.lock.yaml"
+    original_bytes = {
+        registration_path: registration_path.read_bytes(),
+        binding_path: binding_path.read_bytes(),
+        lock_path: lock_path.read_bytes(),
+    }
+    gate_count = 0
+    bootstrap_count = 0
+
+    def counted_gate(*args, **kwargs):
+        nonlocal gate_count
+        gate_count += 1
+        return real_gate(*args, **kwargs)
+
+    def aba_bootstrap(*args, **kwargs):
+        nonlocal bootstrap_count
+        bootstrap_count += 1
+        if bootstrap_count == 1:
+            initial = real_bootstrap(*args, **kwargs)
+            binding = yaml.safe_load(binding_path.read_text(encoding="utf-8"))
+            binding["capabilities"].remove(
+                "workflow:web-high-fidelity:reference-driven-visual-fidelity"
+            )
+            binding_path.write_text(
+                yaml.safe_dump(binding, sort_keys=False), encoding="utf-8"
+            )
+            live_lock = build_capability_lock(root, control, write=True)
+            registration_value = yaml.safe_load(
+                registration_path.read_text(encoding="utf-8")
+            )
+            registration_value["capabilityLockFingerprint"] = live_lock[
+                "lockFingerprint"
+            ]
+            registration_path.write_text(
+                yaml.safe_dump(registration_value, sort_keys=False),
+                encoding="utf-8",
+            )
+            return initial
+        for path, data in original_bytes.items():
+            path.write_bytes(data)
+        return real_bootstrap(*args, **kwargs)
+
+    monkeypatch.setattr(capability_pack_registry, "_run_candidate_gate", counted_gate)
+    monkeypatch.setattr(
+        registration, "_bootstrap_registered_integration", aba_bootstrap
+    )
+    result = _invoke_cli(
+        capsys,
+        root,
+        "integration",
+        "registration-check",
+        "--source",
+        str(source),
+        "--format",
+        "json",
+    )
+
+    assert result == (
+        1,
+        json.dumps(
+            {
+                "schemaVersion": "harness-cli/v1",
+                "ok": False,
+                "command": "integration registration-check",
+                "data": {
+                    "code": "INTERNAL_ERROR",
+                    "message": "project registration structural witness changed during verification",
+                },
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+        + "\n",
+        "",
+    )
+    assert gate_count == 0
+    assert bootstrap_count == 2
+    assert all(path.read_bytes() == data for path, data in original_bytes.items())
+
+
 def test_registered_cli_discovery_requires_registration_without_explicit_integration(tmp_path: Path):
     repository = Path(__file__).parents[1]
     source = _source_fixture(tmp_path)

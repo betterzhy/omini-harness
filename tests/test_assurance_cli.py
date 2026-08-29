@@ -12,6 +12,9 @@ import yaml
 from capability_pack_test_support import JAVA_CAPABILITY_ID, retain_web_registration_fixture
 
 
+EXTERNAL_CAPABILITY_ID = "workflow:web-high-fidelity:reference-driven-visual-fidelity"
+
+
 def _copy_repo(tmp_path: Path) -> tuple[Path, Path]:
     source = Path(__file__).parents[1]
     root = tmp_path / "repo"
@@ -46,6 +49,37 @@ def _make_external_pack_source_unavailable(root: Path, tmp_path: Path) -> None:
     registration_path.write_text(
         registration.replace(repository_path, unavailable_path), encoding="utf-8"
     )
+
+
+def _relocate_external_pack_to_controlled_clone(root: Path, tmp_path: Path) -> Path:
+    registration_path = root / "core/registries/capability-packs.yaml"
+    registrations = yaml.safe_load(registration_path.read_text(encoding="utf-8"))
+    assert len(registrations) == 1
+    registration = registrations[0]
+    source = tmp_path / "external-pack"
+    subprocess.run(
+        [
+            "git",
+            "clone",
+            "-q",
+            "--no-hardlinks",
+            registration["source"]["repositoryPath"],
+            str(source),
+        ],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "checkout", "-q", "--detach", registration["source"]["commit"]],
+        cwd=source,
+        check=True,
+        capture_output=True,
+    )
+    registration["source"]["repositoryPath"] = str(source)
+    registration_path.write_text(
+        yaml.safe_dump(registrations, sort_keys=False), encoding="utf-8"
+    )
+    return source
 
 
 def test_web_only_copied_repository_fixture_excludes_java_pay_projection(tmp_path: Path):
@@ -113,6 +147,130 @@ def test_structural_validation_detects_generated_registry_drift(tmp_path: Path):
     report = structural_validate(root, project_roots=[project], check_generated=True)
     assert report["structuralGate"] == "FAIL"
     assert any(issue["code"] == "GENERATED_DRIFT" for issue in report["issues"])
+
+
+def test_structural_validation_reuses_one_external_pack_gate_without_report_or_write_drift(
+    tmp_path: Path,
+    monkeypatch,
+):
+    from evolution_harness import capability_pack_registry
+    from evolution_harness.assurance import structural_validate
+    from evolution_harness.catalog import build_all_catalogs
+    from evolution_harness.project import build_capability_lock
+    from evolution_harness.projection import build_projection_pack
+    from evolution_harness.registry import build_all_registries
+    from evolution_harness.resolver import resolve_design_context
+
+    root, project = _copy_repo(tmp_path)
+    source = _relocate_external_pack_to_controlled_clone(root, tmp_path)
+    binding_path = project / ".agent-evolution/capabilities.yaml"
+    binding = yaml.safe_load(binding_path.read_text(encoding="utf-8"))
+    binding["capabilities"].append(EXTERNAL_CAPABILITY_ID)
+    binding_path.write_text(
+        yaml.safe_dump(binding, sort_keys=False), encoding="utf-8"
+    )
+
+    build_all_registries(root, write=True)
+    build_all_catalogs(root, write=True)
+    for integration in sorted((root / "integrations").glob("*/control-plane")):
+        build_capability_lock(root, integration, write=True)
+    build_capability_lock(root, project, write=True)
+    for runtime in ("CHATGPT", "CODEX"):
+        resolved = resolve_design_context(
+            root,
+            project,
+            intent="visual-reference-review",
+            topic="web-fidelity",
+            requested_output="review findings",
+            runtime=runtime,
+        )
+        build_projection_pack(root, project, resolved, runtime=runtime)
+
+    registry_path = root / "generated/registries/design-registry.json"
+    registry_path.write_bytes(registry_path.read_bytes() + b"manual drift\n")
+    expected_issues = [
+        {
+            "code": "GENERATED_DRIFT",
+            "message": f"generated artifact drift: {registry_path}",
+            "path": str(registry_path),
+        }
+    ]
+    expected_report = {
+        "schemaVersion": "structural-validation-report/v1",
+        "structuralGate": "FAIL",
+        "semanticGate": "NOT_ASSERTED_BY_CI",
+        "issues": expected_issues,
+        "capabilityCount": 10,
+        "experienceCount": 3,
+        "candidateCount": 2,
+        "evalCount": 7,
+        "integrationCount": 3,
+    }
+    expected_bytes = json.dumps(
+        expected_report,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    repository_bytes = {
+        path.relative_to(root).as_posix(): path.read_bytes()
+        for path in sorted(root.rglob("*"))
+        if path.is_file()
+    }
+    source_status = subprocess.run(
+        ["git", "status", "--short"],
+        cwd=source,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+
+    real_gate = capability_pack_registry._run_candidate_gate
+    gate_count = 0
+
+    def counted_gate(*args, **kwargs):
+        nonlocal gate_count
+        gate_count += 1
+        return real_gate(*args, **kwargs)
+
+    monkeypatch.setattr(capability_pack_registry, "_run_candidate_gate", counted_gate)
+    report = structural_validate(
+        root,
+        project_roots=[project],
+        check_generated=True,
+    )
+
+    assert gate_count == 1
+    assert report["schemaVersion"] == "structural-validation-report/v1"
+    assert "verificationStats" not in report
+    assert list(report) == [
+        "schemaVersion",
+        "structuralGate",
+        "semanticGate",
+        "issues",
+        "capabilityCount",
+        "experienceCount",
+        "candidateCount",
+        "evalCount",
+        "integrationCount",
+    ]
+    assert report["issues"] == expected_issues
+    assert json.dumps(
+        report,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8") == expected_bytes
+    assert {
+        path.relative_to(root).as_posix(): path.read_bytes()
+        for path in sorted(root.rglob("*"))
+        if path.is_file()
+    } == repository_bytes
+    assert subprocess.run(
+        ["git", "status", "--short"],
+        cwd=source,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout == source_status
 
 
 def test_structural_validation_detects_capability_pack_registry_drift(tmp_path: Path):

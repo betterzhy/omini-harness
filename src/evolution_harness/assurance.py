@@ -6,7 +6,11 @@ from typing import Any, Iterable
 import json
 import yaml
 
-from .capability_pack_registry import build_capability_pack_registry
+from .capability_pack_registry import (
+    CapabilityVerificationSession,
+    build_capability_pack_registry,
+    load_capability_pack_registrations,
+)
 from .catalog import build_all_catalogs
 from .generated import deterministic_json_bytes
 from .integration import load_integration
@@ -87,16 +91,27 @@ def _validate_engineering(root: Path, issues: list[dict[str, Any]]) -> None:
         issues.append(_issue("ENGINEERING_INVALID", str(exc), "engineering"))
 
 
-def _validate_integrations(root: Path, issues: list[dict[str, Any]]) -> int:
+def _validate_integrations(
+    root: Path,
+    issues: list[dict[str, Any]],
+    *,
+    verification_session: CapabilityVerificationSession,
+) -> tuple[int, Exception | None]:
     store = SchemaStore(root)
     integration_roots = sorted(path.parent for path in (root / "integrations").glob("*/integration.yaml"))
+    verification_error: Exception | None = None
     for integration in integration_roots:
         try:
             loaded = load_integration(root, integration)
             control_plane = loaded["controlPlaneRoot"]
             load_project_state(root, control_plane)
             load_project_binding(root, control_plane)
-            expected_lock = build_capability_lock(root, control_plane, write=False)
+            expected_lock = build_capability_lock(
+                root,
+                control_plane,
+                write=False,
+                verification_session=verification_session,
+            )
             lock_path = control_plane / ".agent-evolution/capabilities.lock.yaml"
             if not lock_path.exists():
                 issues.append(_issue("INTEGRATION_LOCK_MISSING", "integration capability lock missing", str(lock_path)))
@@ -108,8 +123,10 @@ def _validate_integrations(root: Path, issues: list[dict[str, Any]]) -> int:
                 value = yaml.safe_load(scenario.read_text(encoding="utf-8")) or {}
                 store.validate("core/schemas/project-integration-scenario.schema.json", value)
         except Exception as exc:
+            if str(exc) != "capability verification session is failed":
+                verification_error = exc
             issues.append(_issue("INTEGRATION_INVALID", str(exc), str(integration)))
-    return len(integration_roots)
+    return len(integration_roots), verification_error
 
 
 def structural_validate(
@@ -119,13 +136,36 @@ def structural_validate(
     check_generated: bool = False,
 ) -> dict[str, Any]:
     root = Path(repository_root)
+    external_ids = {
+        registration["capabilityId"]
+        for registration in load_capability_pack_registrations(root)
+        if registration["status"] == "ACTIVE"
+    }
+    with CapabilityVerificationSession(
+        root,
+        allowed_capability_ids=external_ids,
+    ) as verification_session:
+        return _structural_validate(
+            root,
+            project_roots=project_roots,
+            check_generated=check_generated,
+            verification_session=verification_session,
+        )
+
+
+def _structural_validate(
+    root: Path,
+    *,
+    project_roots: Iterable[Path],
+    check_generated: bool,
+    verification_session: CapabilityVerificationSession,
+) -> dict[str, Any]:
     issues: list[dict[str, Any]] = []
     base = validate_repository(root)
     for item in base.issues:
         issues.append(_issue(item.code, item.message, item.path))
     _validate_learning(root, issues)
     _validate_engineering(root, issues)
-    integration_count = _validate_integrations(root, issues)
 
     store = SchemaStore(root)
     projects = [Path(value) for value in project_roots]
@@ -165,16 +205,13 @@ def structural_validate(
             _check_json_file(root / "engineering/generated/active-catalog.json", catalogs["engineering"], issues)
         except Exception as exc:
             issues.append(_issue("GENERATED_CHECK_FAILED", str(exc)))
-        try:
-            _check_json_file(
-                root / "generated/registries/capability-pack-registry.json",
-                build_capability_pack_registry(root, write=False),
-                issues,
-            )
-        except Exception as exc:
-            issues.append(_issue("GENERATED_CHECK_FAILED", str(exc)))
         for project in projects:
-            expected_lock = build_capability_lock(root, project, write=False)
+            expected_lock = build_capability_lock(
+                root,
+                project,
+                write=False,
+                verification_session=verification_session,
+            )
             lock_path = project / ".agent-evolution/capabilities.lock.yaml"
             if not lock_path.exists():
                 issues.append(_issue("CAPABILITY_LOCK_MISSING", "capability lock missing", str(lock_path)))
@@ -183,9 +220,36 @@ def structural_validate(
                 if actual_lock != expected_lock:
                     issues.append(_issue("CAPABILITY_LOCK_DRIFT", "capability lock differs from deterministic resolution", str(lock_path)))
             for runtime in ("CHATGPT", "CODEX"):
-                check = check_projection_freshness(root, project, runtime=runtime)
+                check = check_projection_freshness(
+                    root,
+                    project,
+                    runtime=runtime,
+                    verification_session=verification_session,
+                )
                 if not check.fresh:
                     issues.append(_issue("PROJECTION_STALE", f"{runtime} projection stale: {', '.join(check.reasons)}", str(project)))
+
+    integration_count, integration_error = _validate_integrations(
+        root,
+        issues,
+        verification_session=verification_session,
+    )
+    if check_generated:
+        try:
+            _check_json_file(
+                root / "generated/registries/capability-pack-registry.json",
+                build_capability_pack_registry(
+                    root,
+                    write=False,
+                    verification_session=verification_session,
+                ),
+                issues,
+            )
+        except Exception as exc:
+            message = str(exc)
+            if message == "capability verification session is failed" and integration_error:
+                message = str(integration_error)
+            issues.append(_issue("GENERATED_CHECK_FAILED", message))
 
     issues.sort(key=lambda item: (item["code"], item.get("path", ""), item["message"]))
     return {

@@ -117,18 +117,24 @@
     "relationships": {
       "type": "object",
       "minProperties": 1,
-      "properties": {
-        "javaHomeCommands": {
-          "type": "array",
-          "items": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9]*$"},
-          "minItems": 1,
-          "uniqueItems": true
-        },
-        "mavenHomeCommand": {
-          "type": "string",
-          "pattern": "^[A-Za-z][A-Za-z0-9]*$"
-        },
-        "mavenRepositoryLayout": {"const": "DOT_M2_REPOSITORY"}
+      "patternProperties": {
+        "^[A-Za-z][A-Za-z0-9]*$": {
+          "oneOf": [
+            {
+              "type": "string",
+              "pattern": "^[A-Za-z][A-Za-z0-9_]*$"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^[A-Za-z][A-Za-z0-9_]*$"
+              },
+              "minItems": 1,
+              "uniqueItems": true
+            }
+          ]
+        }
       },
       "additionalProperties": false
     },

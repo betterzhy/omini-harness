@@ -137,6 +137,39 @@ def test_toolchain_registry_schema_accepts_locator_free_profile():
     SchemaStore(ROOT).validate(REGISTRY_SCHEMA, _profile_registry())
 
 
+def test_toolchain_registry_schema_accepts_non_java_relationships():
+    registry = {
+        "schemaVersion": "capability-validator-toolchain-registry/v1",
+        "artifacts": [],
+        "profiles": [
+            {
+                "schemaVersion": "capability-validator-toolchain-profile/v1",
+                "profileId": "toolchain-profile:ruby-offline:darwin-arm64:v1",
+                "environmentAdapter": "RUBY_OFFLINE_V1",
+                "platform": {"os": "darwin", "architecture": "arm64"},
+                "commands": {
+                    "ruby": {
+                        "artifactId": "artifact:ruby:fixture",
+                        "fileName": "ruby",
+                        "sha256": DIGEST_A,
+                        "bindingPolicy": "HOST_ATTESTED",
+                    }
+                },
+                "directories": {
+                    "runtimeHome": {
+                        "artifactId": "artifact:ruby:fixture",
+                        "sha256": DIGEST_B,
+                        "bindingPolicy": "HOST_ATTESTED",
+                    }
+                },
+                "relationships": {"runtimeHomeCommand": "ruby"},
+            }
+        ],
+    }
+
+    SchemaStore(ROOT).validate(REGISTRY_SCHEMA, registry)
+
+
 @pytest.mark.parametrize(
     ("section", "name"),
     [("commands", "rg"), ("directories", "javaHome")],

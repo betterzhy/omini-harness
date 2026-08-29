@@ -3,12 +3,15 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
 import yaml
 
 from .assurance import structural_validate
+from .capability_pack_registry import CapabilityVerificationSession
 from .catalog import build_all_catalogs
 from .controlled_coordinator import (
     acquire_lane_lease,
@@ -31,9 +34,9 @@ from .integration import (
     resolve_integration_context,
 )
 from .learning import create_candidate, promote_candidate, triage_experience, capture_experience
-from .project import build_capability_lock
+from .project import build_capability_lock, load_capability_lock
 from .projection import build_projection_pack, check_projection_freshness
-from .registration import check_project_registration, resolve_registered_integration
+from .registration import check_project_registration, registered_integration_operation
 from .registry import build_all_registries, build_design_registry
 from .resolver import resolve_design_context
 from .revalidation import check_revalidation
@@ -139,20 +142,37 @@ def _emit_coordination(
     )
 
 
-def _resolve(root: Path, args) -> dict[str, Any]:
+def _resolve(
+    root: Path,
+    args,
+    *,
+    verification_session: CapabilityVerificationSession | None = None,
+) -> dict[str, Any]:
     return resolve_design_context(
         root, Path(args.project), intent=args.intent, topic=args.topic, requested_output=args.output,
         runtime=args.runtime, explicit_stage=args.stage, reopen_signal=args.reopen_signal,
+        verification_session=verification_session,
     )
 
 
-def _registered_integration_root(root: Path, args) -> Path:
-    loaded = resolve_registered_integration(
+@contextmanager
+def _project_verification_operation(
+    repository_root: Path,
+    project_root: Path,
+) -> Iterator[CapabilityVerificationSession]:
+    root = Path(repository_root).resolve()
+    project = Path(project_root)
+    lock = load_capability_lock(root, project)
+    external_ids = {
+        item["capabilityId"]
+        for item in lock["capabilities"]
+        if item.get("sourceKind") == "EXTERNAL_CAPABILITY_PACK"
+    }
+    with CapabilityVerificationSession(
         root,
-        Path(args.source),
-        Path(args.integration) if args.integration else None,
-    )
-    return loaded["integrationRoot"]
+        allowed_capability_ids=external_ids,
+    ) as verification_session:
+        yield verification_session
 
 
 def build_parser(
@@ -332,16 +352,35 @@ def main(argv=None) -> int:
         if args.command == "eval":
             path = record_eval_result(root, _load_yaml(args.result)); return _emit({"location": str(path)}, fmt=fmt, command=command)
         if args.command == "projection" and args.action == "build":
-            if args.check:
-                resolved = _resolve(root, args)
-                check = check_projection_freshness(
+            with _project_verification_operation(
+                root,
+                Path(args.project),
+            ) as verification_session:
+                resolved = _resolve(
                     root,
-                    Path(args.project),
-                    runtime=args.runtime,
-                    expected_resolution_id=resolved["resolutionId"],
+                    args,
+                    verification_session=verification_session,
                 )
-                return _emit({"fresh": check.fresh, "reasons": check.reasons}, fmt=fmt, ok=check.fresh, command=command)
-            resolved = _resolve(root, args); return _emit(build_projection_pack(root, Path(args.project), resolved, runtime=args.runtime), fmt=fmt, command=command)
+                if args.check:
+                    check = check_projection_freshness(
+                        root,
+                        Path(args.project),
+                        runtime=args.runtime,
+                        expected_resolution_id=resolved["resolutionId"],
+                        verification_session=verification_session,
+                    )
+                    return _emit({"fresh": check.fresh, "reasons": check.reasons}, fmt=fmt, ok=check.fresh, command=command)
+                return _emit(
+                    build_projection_pack(
+                        root,
+                        Path(args.project),
+                        resolved,
+                        runtime=args.runtime,
+                        verification_session=verification_session,
+                    ),
+                    fmt=fmt,
+                    command=command,
+                )
         if args.command == "projection" and args.action == "install":
             data = install_projection(
                 root,
@@ -360,8 +399,17 @@ def main(argv=None) -> int:
         if args.command == "integration" and args.action == "inspect":
             from .authority import build_authority_snapshot
 
-            data = build_authority_snapshot(root, _registered_integration_root(root, args), Path(args.source))
-            return _emit(data, fmt=fmt, ok=data["gate"] == "PASS", command=command)
+            with registered_integration_operation(
+                root,
+                Path(args.source),
+                Path(args.integration) if args.integration else None,
+            ) as (loaded, _):
+                data = build_authority_snapshot(
+                    root,
+                    loaded["integrationRoot"],
+                    Path(args.source),
+                )
+                return _emit(data, fmt=fmt, ok=data["gate"] == "PASS", command=command)
         if args.command == "integration" and args.action == "lock":
             loaded = load_integration(root, Path(args.integration))
             expected = build_capability_lock(root, loaded["controlPlaneRoot"], write=not args.check)
@@ -369,46 +417,59 @@ def main(argv=None) -> int:
             ok = not args.check or (path.exists() and _load_yaml(path) == expected)
             return _emit(expected, fmt=fmt, ok=ok, command=command)
         if args.command == "integration" and args.action == "resolve":
-            data = resolve_integration_context(
+            with registered_integration_operation(
                 root,
-                _registered_integration_root(root, args),
                 Path(args.source),
-                intent=args.intent,
-                topic=args.topic,
-                requested_output=args.output,
-                runtime=args.runtime,
-                explicit_stage=args.stage,
-                reopen_signal=args.reopen_signal,
-            )
-            if not args.explain:
-                data = dict(data); data.pop("explain", None)
-            return _emit(data, fmt=fmt, command=command)
-        if args.command == "integration" and args.action == "projection":
-            if args.check:
-                check = check_integration_projection(
+                Path(args.integration) if args.integration else None,
+            ) as (loaded, verification_session):
+                data = resolve_integration_context(
                     root,
-                    _registered_integration_root(root, args),
+                    loaded["integrationRoot"],
                     Path(args.source),
-                    runtime=args.runtime,
                     intent=args.intent,
                     topic=args.topic,
                     requested_output=args.output,
+                    runtime=args.runtime,
                     explicit_stage=args.stage,
                     reopen_signal=args.reopen_signal,
+                    verification_session=verification_session,
                 )
-                return _emit({"fresh": check.fresh, "reasons": check.reasons}, fmt=fmt, ok=check.fresh, command=command)
-            data = build_integration_projection(
+                if not args.explain:
+                    data = dict(data); data.pop("explain", None)
+                return _emit(data, fmt=fmt, command=command)
+        if args.command == "integration" and args.action == "projection":
+            with registered_integration_operation(
                 root,
-                _registered_integration_root(root, args),
                 Path(args.source),
-                intent=args.intent,
-                topic=args.topic,
-                requested_output=args.output,
-                runtime=args.runtime,
-                explicit_stage=args.stage,
-                reopen_signal=args.reopen_signal,
-            )
-            return _emit(data, fmt=fmt, command=command)
+                Path(args.integration) if args.integration else None,
+            ) as (loaded, verification_session):
+                if args.check:
+                    check = check_integration_projection(
+                        root,
+                        loaded["integrationRoot"],
+                        Path(args.source),
+                        runtime=args.runtime,
+                        intent=args.intent,
+                        topic=args.topic,
+                        requested_output=args.output,
+                        explicit_stage=args.stage,
+                        reopen_signal=args.reopen_signal,
+                        verification_session=verification_session,
+                    )
+                    return _emit({"fresh": check.fresh, "reasons": check.reasons}, fmt=fmt, ok=check.fresh, command=command)
+                data = build_integration_projection(
+                    root,
+                    loaded["integrationRoot"],
+                    Path(args.source),
+                    intent=args.intent,
+                    topic=args.topic,
+                    requested_output=args.output,
+                    runtime=args.runtime,
+                    explicit_stage=args.stage,
+                    reopen_signal=args.reopen_signal,
+                    verification_session=verification_session,
+                )
+                return _emit(data, fmt=fmt, command=command)
         if args.command == "integration" and args.action == "scenario":
             data = run_integration_scenario(
                 root, Path(args.integration), Path(args.source), Path(args.scenario)

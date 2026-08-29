@@ -278,6 +278,63 @@ def test_integration_projection_forwards_external_verification_session_across_bu
     assert gate_count == 1
 
 
+@pytest.mark.parametrize("check", [False, True], ids=("build", "check"))
+def test_projection_cli_owns_one_external_pack_verification_session_without_output_drift(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    check: bool,
+):
+    from evolution_harness import capability_pack_registry, cli
+    root, integration, source, _ = _external_pack_fixture(tmp_path)
+    control = integration / "control-plane"
+    argv = [
+        "--repository-root",
+        str(root),
+        "projection",
+        "build",
+        "--project",
+        str(control),
+        "--intent",
+        "visual-reference-review",
+        "--topic",
+        "web-fidelity",
+        "--output",
+        "review findings",
+        "--runtime",
+        "CODEX",
+        *(["--check"] if check else []),
+        "--format",
+        "json",
+    ]
+    if check:
+        build_argv = [value for value in argv if value != "--check"]
+        assert cli.main(build_argv) == 0
+        capsys.readouterr()
+    expected_code = cli.main(argv)
+    expected_output = capsys.readouterr()
+
+    real_gate = capability_pack_registry._run_candidate_gate
+    gate_count = 0
+
+    def counted_gate(*args, **kwargs):
+        nonlocal gate_count
+        gate_count += 1
+        return real_gate(*args, **kwargs)
+
+    monkeypatch.setattr(capability_pack_registry, "_run_candidate_gate", counted_gate)
+    actual_code = cli.main(argv)
+    actual_output = capsys.readouterr()
+
+    assert (actual_code, actual_output.out, actual_output.err) == (
+        expected_code,
+        expected_output.out,
+        expected_output.err,
+    )
+    assert actual_code == 0
+    assert gate_count == 1
+
+
 def test_integration_intent_alias_selects_locked_capability_and_preserves_request_intent(
     tmp_path: Path,
 ):

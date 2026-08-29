@@ -10,6 +10,8 @@ from pathlib import Path
 import pytest
 import yaml
 
+from capability_pack_test_support import retain_web_registration_fixture
+
 
 NEUTRAL_LOCK = "sha256:6e18d9cd91420d5529f0679cbf1d1cad7be5ae6a76b10df16ebed0d6a5004c24"
 
@@ -69,6 +71,64 @@ def _run_cli(root: Path, *args: str) -> subprocess.CompletedProcess[str]:
         text=True,
         env=environment,
     )
+
+
+def _invoke_cli(capsys: pytest.CaptureFixture[str], root: Path, *args: str) -> tuple[int, str, str]:
+    from evolution_harness import cli
+
+    return_code = cli.main(["--repository-root", str(root), *args])
+    captured = capsys.readouterr()
+    return return_code, captured.out, captured.err
+
+
+def _external_registered_fixture(tmp_path: Path) -> tuple[Path, Path, Path]:
+    from evolution_harness.project import build_capability_lock
+
+    root = _harness_fixture(tmp_path)
+    retain_web_registration_fixture(root)
+    registry_path = root / "core/registries/capability-packs.yaml"
+    registrations = yaml.safe_load(registry_path.read_text(encoding="utf-8"))
+    pack = tmp_path / "external-pack"
+    subprocess.run(
+        [
+            "git",
+            "clone",
+            "-q",
+            "--no-hardlinks",
+            registrations[0]["source"]["repositoryPath"],
+            str(pack),
+        ],
+        check=True,
+        capture_output=True,
+    )
+    registrations[0]["source"]["repositoryPath"] = str(pack)
+    registry_path.write_text(
+        yaml.safe_dump(registrations, sort_keys=False), encoding="utf-8"
+    )
+    schema_path = root / "core/schemas/capability-pack-registration.schema.json"
+    schema = json.loads(schema_path.read_text(encoding="utf-8"))
+    schema["properties"]["source"]["properties"]["repositoryPath"]["const"] = str(
+        pack
+    )
+    schema_path.write_text(json.dumps(schema, indent=2) + "\n", encoding="utf-8")
+
+    integration = root / "integrations/neutral-shadow"
+    control = integration / "control-plane"
+    binding_path = control / ".agent-evolution/capabilities.yaml"
+    binding = yaml.safe_load(binding_path.read_text(encoding="utf-8"))
+    binding["capabilities"].append(
+        "workflow:web-high-fidelity:reference-driven-visual-fidelity"
+    )
+    binding_path.write_text(
+        yaml.safe_dump(binding, sort_keys=False), encoding="utf-8"
+    )
+    lock = build_capability_lock(root, control, write=True)
+    source = _source_fixture(tmp_path)
+    _write_registration(
+        source,
+        _registration(capabilityLockFingerprint=lock["lockFingerprint"]),
+    )
+    return root, integration, source
 
 
 def test_load_project_registration_resolves_valid_registered_integration(tmp_path: Path):
@@ -275,6 +335,177 @@ def test_registered_cli_discovery_matches_explicit_inspect_resolve_and_projectio
     discovered_projection = _run_cli(root, "integration", "projection", *request[:-2], "--check", "--format", "json")
     assert discovered_projection.returncode == 0, discovered_projection.stdout
     assert json.loads(discovered_projection.stdout)["data"] == {"fresh": True, "reasons": []}
+
+
+@pytest.mark.parametrize(
+    ("action", "operation_args", "prepare_projection"),
+    [
+        ("inspect", (), False),
+        (
+            "resolve",
+            (
+                "--intent",
+                "architecture-review",
+                "--topic",
+                "runtime-integration",
+                "--output",
+                "review findings",
+                "--runtime",
+                "CODEX",
+            ),
+            False,
+        ),
+        (
+            "projection",
+            (
+                "--intent",
+                "architecture-review",
+                "--topic",
+                "runtime-integration",
+                "--output",
+                "review findings",
+                "--runtime",
+                "CODEX",
+            ),
+            False,
+        ),
+        (
+            "projection",
+            (
+                "--intent",
+                "architecture-review",
+                "--topic",
+                "runtime-integration",
+                "--output",
+                "review findings",
+                "--runtime",
+                "CODEX",
+                "--check",
+            ),
+            True,
+        ),
+    ],
+    ids=("inspect", "resolve", "projection-build", "projection-check"),
+)
+def test_registered_cli_operation_owns_one_gate_without_output_or_exit_drift(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    action: str,
+    operation_args: tuple[str, ...],
+    prepare_projection: bool,
+):
+    from evolution_harness import capability_pack_registry
+    from evolution_harness.integration import build_integration_projection
+
+    root, integration, source = _external_registered_fixture(tmp_path)
+    registration_path = source / ".agent-evolution/registration.yaml"
+    registration_bytes = registration_path.read_bytes()
+    if prepare_projection:
+        build_integration_projection(
+            root,
+            integration,
+            source,
+            intent="architecture-review",
+            topic="runtime-integration",
+            requested_output="review findings",
+            runtime="CODEX",
+        )
+
+    registration_path.unlink()
+    expected = _invoke_cli(
+        capsys,
+        root,
+        "integration",
+        action,
+        "--integration",
+        str(integration),
+        "--source",
+        str(source),
+        *operation_args,
+        "--format",
+        "json",
+    )
+    registration_path.write_bytes(registration_bytes)
+
+    real_gate = capability_pack_registry._run_candidate_gate
+    gate_count = 0
+
+    def counted_gate(*args, **kwargs):
+        nonlocal gate_count
+        gate_count += 1
+        return real_gate(*args, **kwargs)
+
+    monkeypatch.setattr(capability_pack_registry, "_run_candidate_gate", counted_gate)
+    actual = _invoke_cli(
+        capsys,
+        root,
+        "integration",
+        action,
+        "--source",
+        str(source),
+        *operation_args,
+        "--format",
+        "json",
+    )
+
+    assert actual == expected
+    assert actual[0] == 0
+    assert gate_count == 1
+
+
+def test_registered_cli_fails_closed_when_lock_drifts_between_bootstrap_and_live_verification(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+):
+    from evolution_harness import registration
+
+    root, _, source = _external_registered_fixture(tmp_path)
+    real_bootstrap = registration._bootstrap_registered_integration
+
+    def drifting_bootstrap(*args, **kwargs):
+        bootstrap = real_bootstrap(*args, **kwargs)
+        lock_path = bootstrap.control_plane_root / ".agent-evolution/capabilities.lock.yaml"
+        lock = yaml.safe_load(lock_path.read_text(encoding="utf-8"))
+        lock["lockFingerprint"] = "sha256:" + "0" * 64
+        lock_path.write_text(
+            yaml.safe_dump(lock, sort_keys=False), encoding="utf-8"
+        )
+        return bootstrap
+
+    monkeypatch.setattr(
+        registration, "_bootstrap_registered_integration", drifting_bootstrap
+    )
+    result = _invoke_cli(
+        capsys,
+        root,
+        "integration",
+        "inspect",
+        "--source",
+        str(source),
+        "--format",
+        "json",
+    )
+
+    assert result == (
+        1,
+        json.dumps(
+            {
+                "schemaVersion": "harness-cli/v1",
+                "ok": False,
+                "command": "integration inspect",
+                "data": {
+                    "code": "INTERNAL_ERROR",
+                    "message": "registered capability lock is invalid: capability lock fingerprint mismatch",
+                },
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+        + "\n",
+        "",
+    )
 
 
 def test_registered_cli_discovery_requires_registration_without_explicit_integration(tmp_path: Path):

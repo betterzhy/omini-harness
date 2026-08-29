@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import shutil
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -61,6 +62,80 @@ def _resolve(root: Path, project: Path):
         requested_output="review findings",
         runtime="CODEX",
     )
+
+
+def _restore_file(path: Path, original: bytes) -> Callable[[], None]:
+    return lambda: path.write_bytes(original)
+
+
+def _mutate_lock_witness(
+    root: Path, project: Path, witness: str
+) -> Callable[[], None]:
+    if witness == "lock":
+        from evolution_harness.project import capability_lock_fingerprint
+
+        path = project / ".agent-evolution/capabilities.lock.yaml"
+        original = path.read_bytes()
+        value = yaml.safe_load(original)
+        value["capabilities"].reverse()
+        value["lockFingerprint"] = capability_lock_fingerprint(value)
+        path.write_text(yaml.safe_dump(value, sort_keys=False), encoding="utf-8")
+        return _restore_file(path, original)
+    if witness == "state":
+        path = project / ".agent-evolution/design-state.yaml"
+        original = path.read_bytes()
+        value = yaml.safe_load(original)
+        value["assumptions"].append("assumption://project-fixture/session-witness")
+        path.write_text(yaml.safe_dump(value, sort_keys=False), encoding="utf-8")
+        return _restore_file(path, original)
+    if witness == "binding":
+        path = project / ".agent-evolution/capabilities.yaml"
+        original = path.read_bytes()
+        value = yaml.safe_load(original)
+        value["disabledCapabilities"].append(
+            "skill:agent-design:architecture-review"
+        )
+        path.write_text(yaml.safe_dump(value, sort_keys=False), encoding="utf-8")
+        return _restore_file(path, original)
+    if witness == "profile-reasons":
+        path = root / "runtime/profiles/agent-design-base.yaml"
+        original = path.read_bytes()
+        value = yaml.safe_load(original)
+        value["capabilities"].append(EXTERNAL_CAPABILITY_ID)
+        path.write_text(yaml.safe_dump(value, sort_keys=False), encoding="utf-8")
+        return _restore_file(path, original)
+    if witness in {"design-registry-input", "active-catalog-input"}:
+        source = root / "design/capabilities/skills/architecture-review"
+        target = root / "design/capabilities/skills" / witness
+        shutil.copytree(source, target)
+        asset_path = target / "asset.yaml"
+        asset = yaml.safe_load(asset_path.read_text(encoding="utf-8"))
+        asset["id"] = f"skill:agent-design:{witness}"
+        asset["title"] = witness
+        if witness == "design-registry-input":
+            asset["lifecycle"] = "DEPRECATED"
+        asset_path.write_text(
+            yaml.safe_dump(asset, sort_keys=False), encoding="utf-8"
+        )
+        return lambda: shutil.rmtree(target)
+    if witness == "internal-entry":
+        path = root / "design/capabilities/skills/architecture-review/content.md"
+        original = path.read_bytes()
+        path.write_bytes(original + b"\nchanged during lock reuse\n")
+        return _restore_file(path, original)
+    if witness == "internal-external-collision":
+        source = root / "design/capabilities/skills/architecture-review"
+        target = root / "design/capabilities/skills/internal-external-collision"
+        shutil.copytree(source, target)
+        asset_path = target / "asset.yaml"
+        asset = yaml.safe_load(asset_path.read_text(encoding="utf-8"))
+        asset["id"] = EXTERNAL_CAPABILITY_ID
+        asset["title"] = "Internal External Collision"
+        asset_path.write_text(
+            yaml.safe_dump(asset, sort_keys=False), encoding="utf-8"
+        )
+        return lambda: shutil.rmtree(target)
+    raise AssertionError(f"unknown lock witness: {witness}")
 
 
 def test_resolver_consumes_exact_lock_and_rejects_tampering(tmp_path: Path):
@@ -288,3 +363,139 @@ def test_internal_only_v2_lock_is_rejected_even_when_self_consistent(tmp_path: P
     assert build_capability_lock(root, project, write=False)["schemaVersion"] == (
         "capability-lock/v1"
     )
+
+
+def test_verification_session_reuses_exact_lock_after_rechecking_all_witnesses(
+    tmp_path: Path,
+):
+    from evolution_harness.capability_pack_registry import CapabilityVerificationSession
+    from evolution_harness.project import (
+        build_capability_lock,
+        verify_capability_lock,
+        verify_capability_lock_context,
+    )
+
+    root, project = _project_selecting_registered_pack(tmp_path)
+    with CapabilityVerificationSession(
+        root,
+        allowed_capability_ids={EXTERNAL_CAPABILITY_ID},
+    ) as session:
+        build_capability_lock(
+            root,
+            project,
+            write=True,
+            verification_session=session,
+        )
+        context = verify_capability_lock_context(
+            root,
+            project,
+            verification_session=session,
+        )
+        first_lock, first_entries = context.public_result()
+        first_lock["project"] = "caller-mutation"
+        first_entries[EXTERNAL_CAPABILITY_ID]["status"] = "caller-mutation"
+
+        second_lock, second_entries = verify_capability_lock(
+            root,
+            project,
+            verification_session=session,
+        )
+        snapshot = session.stats
+
+    assert second_lock["project"] == "project-fixture"
+    assert second_entries[EXTERNAL_CAPABILITY_ID]["status"] == "ACTIVE"
+    assert snapshot.full_candidate_gate_count == 1
+    assert snapshot.verified_lock_count == 1
+    assert snapshot.lock_reuse_hit_count == 1
+    assert snapshot.lock_witness_recheck_count == 2
+    assert snapshot.active_use_lease_count == 0
+
+
+def test_external_lock_source_preserves_plain_toolchain_compatibility_fields(
+    tmp_path: Path,
+):
+    from types import MappingProxyType
+
+    from evolution_harness.hashing import canonical_json_bytes
+    from evolution_harness.project import _external_lock_source
+
+    root, _ = _copy_repo(tmp_path)
+    registrations = yaml.safe_load(
+        (root / "core/registries/capability-packs.yaml").read_text(encoding="utf-8")
+    )
+    registration = registrations[0]
+    registration["validator"]["toolchain"] = {
+        "javaHome": {"absolutePath": "/opt/java", "sha256": "sha256:" + "a" * 64}
+    }
+
+    def readonly(value):
+        if isinstance(value, dict):
+            return MappingProxyType(
+                {key: readonly(item) for key, item in value.items()}
+            )
+        if isinstance(value, list):
+            return tuple(readonly(item) for item in value)
+        return value
+
+    source = _external_lock_source(readonly(registration))
+
+    assert isinstance(source["validatorIdentity"]["toolchain"], dict)
+    assert canonical_json_bytes(source)
+
+
+@pytest.mark.parametrize(
+    "witness",
+    [
+        "lock",
+        "state",
+        "binding",
+        "profile-reasons",
+        "design-registry-input",
+        "active-catalog-input",
+        "internal-entry",
+        "internal-external-collision",
+    ],
+)
+def test_verification_session_rejects_every_changed_lock_witness_and_stays_poisoned(
+    tmp_path: Path,
+    witness: str,
+):
+    from evolution_harness.capability_pack_registry import CapabilityVerificationSession
+    from evolution_harness.project import build_capability_lock, verify_capability_lock
+
+    root, project = _project_selecting_registered_pack(tmp_path)
+    with CapabilityVerificationSession(
+        root,
+        allowed_capability_ids={EXTERNAL_CAPABILITY_ID},
+    ) as session:
+        build_capability_lock(
+            root,
+            project,
+            write=True,
+            verification_session=session,
+        )
+        first_lock, first_entries = verify_capability_lock(
+            root,
+            project,
+            verification_session=session,
+        )
+        restore = _mutate_lock_witness(root, project, witness)
+        try:
+            with pytest.raises(ValueError):
+                verify_capability_lock(
+                    root,
+                    project,
+                    verification_session=session,
+                )
+        finally:
+            restore()
+
+        with pytest.raises(ValueError, match="failed"):
+            verify_capability_lock(
+                root,
+                project,
+                verification_session=session,
+            )
+
+    assert first_lock["lockFingerprint"]
+    assert EXTERNAL_CAPABILITY_ID in first_entries

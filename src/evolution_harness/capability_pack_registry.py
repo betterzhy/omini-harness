@@ -9,7 +9,9 @@ import tempfile
 import unicodedata
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
+from types import MappingProxyType
 from typing import Any
 
 import yaml
@@ -56,6 +58,14 @@ _GIT_ENVIRONMENT = {
     "GIT_OPTIONAL_LOCKS": "0",
     "GIT_TERMINAL_PROMPT": "0",
 }
+
+
+@dataclass(frozen=True, slots=True)
+class VerifiedToolchain:
+    command_paths: tuple[Path, ...]
+    command_digests: tuple[tuple[str, str], ...]
+    directory_identities: tuple[tuple[str, Path, str], ...]
+    environment: Mapping[str, str]
 
 
 def _run(
@@ -180,29 +190,42 @@ def _directory_identity_digest(root: Path) -> str:
     return "sha256:" + sha256_bytes(canonical_json_bytes(entries))
 
 
-def _validator_toolchain_paths(registration: Mapping[str, Any]) -> list[Path]:
+def _verify_validator_toolchain(
+    registration: Mapping[str, Any],
+) -> VerifiedToolchain:
     validator = registration["validator"]
     contract = validator.get("environmentContract", "SANITIZED")
     if contract == "SANITIZED":
-        return []
+        return VerifiedToolchain(
+            command_paths=(),
+            command_digests=(),
+            directory_identities=(),
+            environment=MappingProxyType(dict(_GIT_ENVIRONMENT)),
+        )
     if contract != "REGISTERED_TOOLCHAIN_OFFLINE_CACHE":
         raise ValueError("capability pack validator environment contract is unsupported")
     paths: list[Path] = []
+    command_digests: list[tuple[str, str]] = []
     for command in ("ruby", "rg", "java", "javac", "mvn"):
         identity = validator["toolchain"][command]
         path = Path(identity["absolutePath"])
         if not path.is_absolute() or not path.is_file() or path.name != command:
             raise ValueError("capability pack validator toolchain path is unavailable or unsafe")
-        if "sha256:" + sha256_bytes(path.read_bytes()) != identity["sha256"]:
+        digest = "sha256:" + sha256_bytes(path.read_bytes())
+        if digest != identity["sha256"]:
             raise ValueError("capability pack validator toolchain identity mismatch")
         paths.append(path)
+        command_digests.append((command, digest))
     directories: dict[str, Path] = {}
+    directory_identities: list[tuple[str, Path, str]] = []
     for name in ("javaHome", "mavenHome", "mavenRepository"):
         identity = validator["toolchain"][name]
         path = Path(identity["absolutePath"])
-        if _directory_identity_digest(path) != identity["sha256"]:
+        digest = _directory_identity_digest(path)
+        if digest != identity["sha256"]:
             raise ValueError("capability pack validator toolchain directory identity mismatch")
         directories[name] = path
+        directory_identities.append((name, path, digest))
     by_name = {path.name: path for path in paths}
     if by_name["java"].parent.parent != directories["javaHome"] or (
         by_name["javac"].parent.parent != directories["javaHome"]
@@ -215,19 +238,7 @@ def _validator_toolchain_paths(registration: Mapping[str, Any]) -> list[Path]:
         raise ValueError("capability pack validator Maven repository identity mismatch")
     if not directories["mavenHome"].is_relative_to(repository.parent):
         raise ValueError("capability pack validator Maven home is outside registered cache")
-    return paths
-
-
-def _validator_environment(registration: Mapping[str, Any]) -> dict[str, str]:
-    environment = dict(_GIT_ENVIRONMENT)
-    contract = registration["validator"].get("environmentContract", "SANITIZED")
-    if contract == "SANITIZED":
-        return environment
-    if contract != "REGISTERED_TOOLCHAIN_OFFLINE_CACHE":
-        raise ValueError("capability pack validator environment contract is unsupported")
-    toolchain = registration["validator"]["toolchain"]
-    maven_repository = Path(toolchain["mavenRepository"]["absolutePath"])
-    host_home = maven_repository.parent.parent
+    host_home = repository.parent.parent
     if (
         not host_home.is_absolute()
         or host_home.is_symlink()
@@ -235,16 +246,39 @@ def _validator_environment(registration: Mapping[str, Any]) -> dict[str, str]:
         or host_home.resolve(strict=True) != host_home
     ):
         raise ValueError("capability pack validator host HOME is unavailable or unsafe")
-    toolchain_paths = _validator_toolchain_paths(registration)
-    path_entries = [str(path.parent) for path in toolchain_paths]
+    environment = dict(_GIT_ENVIRONMENT)
+    path_entries = [str(path.parent) for path in paths]
     path_entries.extend(["/usr/bin", "/bin", "/usr/sbin", "/sbin"])
     environment["PATH"] = ":".join(dict.fromkeys(path_entries))
     environment["HOME"] = str(host_home)
-    java_path = next(path for path in toolchain_paths if path.name == "java")
-    environment["JAVA_HOME"] = toolchain["javaHome"]["absolutePath"]
+    environment["JAVA_HOME"] = str(directories["javaHome"])
     environment["LANG"] = "en_US.UTF-8"
     environment["LC_ALL"] = "en_US.UTF-8"
-    return environment
+    return VerifiedToolchain(
+        command_paths=tuple(paths),
+        command_digests=tuple(command_digests),
+        directory_identities=tuple(directory_identities),
+        environment=MappingProxyType(environment),
+    )
+
+
+def _validator_environment(
+    registration: Mapping[str, Any],
+    verified_toolchain: VerifiedToolchain,
+) -> dict[str, str]:
+    del registration
+    return dict(verified_toolchain.environment)
+
+
+def _recheck_validator_toolchain(
+    registration: Mapping[str, Any],
+    expected: VerifiedToolchain,
+) -> None:
+    actual = _verify_validator_toolchain(registration)
+    if actual != expected:
+        raise ValueError(
+            "capability pack validator toolchain identity changed during candidate Gate"
+        )
 
 
 def _git(
@@ -724,18 +758,18 @@ def _validate_registration(repository_root: Path, registration: dict[str, Any]) 
         executed_validator_digest = "sha256:" + sha256_bytes(validator_path.read_bytes())
         if executed_validator_digest != registration["validator"]["sha256"]:
             raise ValueError("capability pack executed validator identity mismatch")
-        _validator_toolchain_paths(registration)
+        toolchain = _verify_validator_toolchain(registration)
         completed = _run_candidate_gate(
             ["bash", str(validator_path), commit, tree],
             cwd=checkout,
             timeout=registration["validator"].get("timeoutSeconds", 300),
-            environment=_validator_environment(registration),
+            environment=_validator_environment(registration, toolchain),
         )
         if completed.returncode != 0:
             raise ValueError("capability pack candidate Gate failed")
         if "sha256:" + sha256_bytes(validator_path.read_bytes()) != executed_validator_digest:
             raise ValueError("capability pack validator changed during candidate Gate")
-        _validator_toolchain_paths(registration)
+        _recheck_validator_toolchain(registration, toolchain)
         _require_fixed_git_identity(checkout, registration)
         _require_no_hidden_index_flags(checkout)
         _require_clean_source(checkout, manifest)

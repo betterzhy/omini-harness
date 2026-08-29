@@ -14,6 +14,7 @@ from typing import Any
 import pytest
 import yaml
 
+from evolution_harness import capability_pack_registry
 from evolution_harness.capability_pack_registry import (
     _directory_identity_digest,
     build_capability_pack_registry,
@@ -561,11 +562,29 @@ def test_candidate_gate_uses_registered_host_home_offline_cache_contract(
     ).hexdigest()
     _write_registrations(root, [registration])
 
+    real_digest = capability_pack_registry._directory_identity_digest
+    digest_paths: list[Path] = []
+
+    def counted_digest(path: Path) -> str:
+        digest_paths.append(path)
+        return real_digest(path)
+
+    monkeypatch.setattr(
+        capability_pack_registry,
+        "_directory_identity_digest",
+        counted_digest,
+    )
+
     registry = build_capability_pack_registry(root, write=False)
 
     assert registry["entries"][0]["validator"]["environmentContract"] == (
         "REGISTERED_TOOLCHAIN_OFFLINE_CACHE"
     )
+    assert digest_paths == [
+        trusted_java_home,
+        trusted_maven_home,
+        trusted_home / ".m2/repository",
+    ] * 2
 
 
 @pytest.mark.parametrize(

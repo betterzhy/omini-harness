@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -13,6 +14,7 @@ from capability_pack_test_support import JAVA_CAPABILITY_ID, retain_web_registra
 
 
 EXTERNAL_CAPABILITY_ID = "workflow:web-high-fidelity:reference-driven-visual-fidelity"
+INACTIVE_CAPABILITY_ID = "workflow:inactive-pack:inactive-workflow"
 
 
 def _copy_repo(tmp_path: Path) -> tuple[Path, Path]:
@@ -76,6 +78,116 @@ def _relocate_external_pack_to_controlled_clone(root: Path, tmp_path: Path) -> P
         capture_output=True,
     )
     registration["source"]["repositoryPath"] = str(source)
+    registration_path.write_text(
+        yaml.safe_dump(registrations, sort_keys=False), encoding="utf-8"
+    )
+    return source
+
+
+def _add_inactive_external_pack(root: Path, tmp_path: Path) -> Path:
+    from evolution_harness.capability_pack_registry import (
+        compute_capability_pack_content_digest,
+    )
+
+    source = tmp_path / "inactive-pack"
+    (source / "skills/inactive-pack").mkdir(parents=True)
+    (source / "scripts").mkdir()
+    manifest = {
+        "schemaVersion": "capability-pack/v1",
+        "projectPackName": "inactive-pack",
+        "skillName": "inactive-pack",
+        "displayName": "Inactive Pack Fixture",
+        "capabilityId": INACTIVE_CAPABILITY_ID,
+        "version": "1.0.0",
+        "contentDigestContract": "capability-pack-content/v1",
+        "contentRoots": ["skills", "scripts"],
+        "excludedContentRoots": ["skills/unused"],
+        "skillPath": "skills/inactive-pack/SKILL.md",
+        "validator": {
+            "kind": "FIXED_CANDIDATE_GATE",
+            "path": "scripts/verify-capability-pack",
+            "argumentsContract": "CANDIDATE_COMMIT_TREE",
+        },
+    }
+    (source / "VERSION").write_text("1.0.0\n", encoding="utf-8")
+    (source / "capability-pack.yaml").write_text(
+        yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8"
+    )
+    (source / "skills/inactive-pack/SKILL.md").write_text(
+        "# Inactive Pack Fixture\n", encoding="utf-8"
+    )
+    validator = source / "scripts/verify-capability-pack"
+    validator.write_text(
+        "#!/bin/sh\n"
+        "set -eu\n"
+        "test \"$#\" -eq 2\n"
+        "test \"$(git rev-parse HEAD)\" = \"$1\"\n"
+        "test \"$(git rev-parse 'HEAD^{tree}')\" = \"$2\"\n"
+        "test -z \"$(git status --porcelain)\"\n",
+        encoding="utf-8",
+    )
+    validator.chmod(0o755)
+    subprocess.run(["git", "init", "-q"], cwd=source, check=True)
+    subprocess.run(["git", "add", "."], cwd=source, check=True)
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=fixture@example.invalid",
+            "commit",
+            "-q",
+            "-m",
+            "test: inactive Pack fixture",
+        ],
+        cwd=source,
+        check=True,
+    )
+    commit = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=source,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    tree = subprocess.run(
+        ["git", "rev-parse", "HEAD^{tree}"],
+        cwd=source,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+    registration_path = root / "core/registries/capability-packs.yaml"
+    registrations = yaml.safe_load(registration_path.read_text(encoding="utf-8"))
+    registrations.append(
+        {
+            "schemaVersion": "capability-pack-registration/v1",
+            "registrationId": "pack:inactive-pack",
+            "capabilityId": INACTIVE_CAPABILITY_ID,
+            "packVersion": "1.0.0",
+            "status": "INACTIVE",
+            "distributionStatus": "LOCAL_ONLY",
+            "source": {
+                "kind": "LOCAL_GIT",
+                "repositoryId": "inactive-pack",
+                "repositoryPath": str(source),
+                "commit": commit,
+                "tree": tree,
+            },
+            "resolvedContentDigest": compute_capability_pack_content_digest(
+                source, manifest
+            ),
+            "validator": {
+                "kind": "FIXED_CANDIDATE_GATE",
+                "relativePath": "scripts/verify-capability-pack",
+                "sha256": "sha256:"
+                + hashlib.sha256(validator.read_bytes()).hexdigest(),
+                "argumentsContract": "CANDIDATE_COMMIT_TREE",
+            },
+        }
+    )
     registration_path.write_text(
         yaml.safe_dump(registrations, sort_keys=False), encoding="utf-8"
     )
@@ -271,6 +383,184 @@ def test_structural_validation_reuses_one_external_pack_gate_without_report_or_w
         capture_output=True,
         text=True,
     ).stdout == source_status
+
+
+def test_validate_cli_returns_structural_report_when_registration_source_is_missing(
+    tmp_path: Path,
+):
+    root, project = _copy_repo(tmp_path)
+    registration_path = root / "core/registries/capability-packs.yaml"
+    registration_path.unlink()
+    message = "capability pack registry source is unavailable or invalid"
+    expected_report = {
+        "schemaVersion": "structural-validation-report/v1",
+        "structuralGate": "FAIL",
+        "semanticGate": "NOT_ASSERTED_BY_CI",
+        "issues": [
+            {"code": "GENERATED_CHECK_FAILED", "message": message},
+            {
+                "code": "INTEGRATION_INVALID",
+                "message": message,
+                "path": str(root / "integrations/cognitura-shadow"),
+            },
+        ],
+        "capabilityCount": 10,
+        "experienceCount": 3,
+        "candidateCount": 2,
+        "evalCount": 7,
+        "integrationCount": 3,
+    }
+    expected_stdout = (
+        json.dumps(
+            {
+                "schemaVersion": "harness-cli/v1",
+                "ok": False,
+                "command": "validate",
+                "data": expected_report,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+        + "\n"
+    )
+
+    result = _run_module(
+        root,
+        "evolution_harness.cli",
+        "validate",
+        "--check-generated",
+        "--format",
+        "json",
+    )
+
+    assert result.returncode == 1
+    assert result.stdout == expected_stdout
+    assert result.stderr == ""
+    assert json.loads(result.stdout)["data"] == expected_report
+    assert project == root / "examples/project-fixture"
+
+
+def test_unavailable_pack_preserves_complete_legacy_report_without_session_noise(
+    tmp_path: Path,
+):
+    from evolution_harness.assurance import structural_validate
+
+    root, project = _copy_repo(tmp_path)
+    _make_external_pack_source_unavailable(root, tmp_path)
+    message = "capability pack source root is unavailable"
+    expected_report = {
+        "schemaVersion": "structural-validation-report/v1",
+        "structuralGate": "FAIL",
+        "semanticGate": "NOT_ASSERTED_BY_CI",
+        "issues": [
+            {"code": "GENERATED_CHECK_FAILED", "message": message},
+            {
+                "code": "INTEGRATION_INVALID",
+                "message": message,
+                "path": str(root / "integrations/cognitura-shadow"),
+            },
+        ],
+        "capabilityCount": 10,
+        "experienceCount": 3,
+        "candidateCount": 2,
+        "evalCount": 7,
+        "integrationCount": 3,
+    }
+
+    report = structural_validate(
+        root,
+        project_roots=[project],
+        check_generated=True,
+    )
+
+    assert json.dumps(
+        report,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8") == json.dumps(
+        expected_report,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    assert all("session is failed" not in issue["message"] for issue in report["issues"])
+
+
+def test_structural_validation_accepts_complete_active_and_inactive_registry(
+    tmp_path: Path,
+    monkeypatch,
+):
+    from evolution_harness import capability_pack_registry
+    from evolution_harness.assurance import structural_validate
+    from evolution_harness.catalog import build_all_catalogs
+    from evolution_harness.project import build_capability_lock
+    from evolution_harness.registry import build_all_registries
+
+    root, project = _copy_repo(tmp_path)
+    active_source = _relocate_external_pack_to_controlled_clone(root, tmp_path)
+    inactive_source = _add_inactive_external_pack(root, tmp_path)
+    registries = build_all_registries(root, write=True)
+    build_all_catalogs(root, write=True)
+    for integration in sorted((root / "integrations").glob("*/control-plane")):
+        build_capability_lock(root, integration, write=True)
+    build_capability_lock(root, project, write=True)
+    expected_registry_bytes = (
+        root / "generated/registries/capability-pack-registry.json"
+    ).read_bytes()
+    assert [
+        (entry["registrationId"], entry["status"])
+        for entry in registries["capabilityPacks"]["entries"]
+    ] == [
+        ("pack:inactive-pack", "INACTIVE"),
+        ("pack:web-high-fidelity", "ACTIVE"),
+    ]
+
+    real_gate = capability_pack_registry._run_candidate_gate
+    gate_count = 0
+
+    def counted_gate(*args, **kwargs):
+        nonlocal gate_count
+        gate_count += 1
+        return real_gate(*args, **kwargs)
+
+    monkeypatch.setattr(capability_pack_registry, "_run_candidate_gate", counted_gate)
+    report = structural_validate(
+        root,
+        project_roots=[project],
+        check_generated=True,
+    )
+
+    expected_report = {
+        "schemaVersion": "structural-validation-report/v1",
+        "structuralGate": "PASS",
+        "semanticGate": "NOT_ASSERTED_BY_CI",
+        "issues": [],
+        "capabilityCount": 10,
+        "experienceCount": 3,
+        "candidateCount": 2,
+        "evalCount": 7,
+        "integrationCount": 3,
+    }
+    assert gate_count == 2
+    assert json.dumps(
+        report,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8") == json.dumps(
+        expected_report,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    assert (
+        root / "generated/registries/capability-pack-registry.json"
+    ).read_bytes() == expected_registry_bytes
+    for source in (active_source, inactive_source):
+        assert subprocess.run(
+            ["git", "status", "--short"],
+            cwd=source,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout == ""
 
 
 def test_structural_validation_detects_capability_pack_registry_drift(tmp_path: Path):

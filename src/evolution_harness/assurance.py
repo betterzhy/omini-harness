@@ -95,23 +95,30 @@ def _validate_integrations(
     root: Path,
     issues: list[dict[str, Any]],
     *,
-    verification_session: CapabilityVerificationSession,
-) -> tuple[int, Exception | None]:
+    verification_session: CapabilityVerificationSession | None,
+) -> tuple[int, bool]:
     store = SchemaStore(root)
     integration_roots = sorted(path.parent for path in (root / "integrations").glob("*/integration.yaml"))
-    verification_error: Exception | None = None
+    primary_session_failed = False
     for integration in integration_roots:
         try:
             loaded = load_integration(root, integration)
             control_plane = loaded["controlPlaneRoot"]
             load_project_state(root, control_plane)
             load_project_binding(root, control_plane)
-            expected_lock = build_capability_lock(
-                root,
-                control_plane,
-                write=False,
-                verification_session=verification_session,
-            )
+            try:
+                expected_lock = build_capability_lock(
+                    root,
+                    control_plane,
+                    write=False,
+                    verification_session=(
+                        None if primary_session_failed else verification_session
+                    ),
+                )
+            except Exception:
+                if verification_session is not None and not primary_session_failed:
+                    primary_session_failed = True
+                raise
             lock_path = control_plane / ".agent-evolution/capabilities.lock.yaml"
             if not lock_path.exists():
                 issues.append(_issue("INTEGRATION_LOCK_MISSING", "integration capability lock missing", str(lock_path)))
@@ -123,10 +130,8 @@ def _validate_integrations(
                 value = yaml.safe_load(scenario.read_text(encoding="utf-8")) or {}
                 store.validate("core/schemas/project-integration-scenario.schema.json", value)
         except Exception as exc:
-            if str(exc) != "capability verification session is failed":
-                verification_error = exc
             issues.append(_issue("INTEGRATION_INVALID", str(exc), str(integration)))
-    return len(integration_roots), verification_error
+    return len(integration_roots), primary_session_failed
 
 
 def structural_validate(
@@ -136,11 +141,16 @@ def structural_validate(
     check_generated: bool = False,
 ) -> dict[str, Any]:
     root = Path(repository_root)
-    external_ids = {
-        registration["capabilityId"]
-        for registration in load_capability_pack_registrations(root)
-        if registration["status"] == "ACTIVE"
-    }
+    try:
+        registrations = load_capability_pack_registrations(root)
+    except Exception:
+        return _structural_validate(
+            root,
+            project_roots=project_roots,
+            check_generated=check_generated,
+            verification_session=None,
+        )
+    external_ids = {registration["capabilityId"] for registration in registrations}
     with CapabilityVerificationSession(
         root,
         allowed_capability_ids=external_ids,
@@ -158,7 +168,7 @@ def _structural_validate(
     *,
     project_roots: Iterable[Path],
     check_generated: bool,
-    verification_session: CapabilityVerificationSession,
+    verification_session: CapabilityVerificationSession | None,
 ) -> dict[str, Any]:
     issues: list[dict[str, Any]] = []
     base = validate_repository(root)
@@ -229,7 +239,7 @@ def _structural_validate(
                 if not check.fresh:
                     issues.append(_issue("PROJECTION_STALE", f"{runtime} projection stale: {', '.join(check.reasons)}", str(project)))
 
-    integration_count, integration_error = _validate_integrations(
+    integration_count, primary_session_failed = _validate_integrations(
         root,
         issues,
         verification_session=verification_session,
@@ -241,15 +251,14 @@ def _structural_validate(
                 build_capability_pack_registry(
                     root,
                     write=False,
-                    verification_session=verification_session,
+                    verification_session=(
+                        None if primary_session_failed else verification_session
+                    ),
                 ),
                 issues,
             )
         except Exception as exc:
-            message = str(exc)
-            if message == "capability verification session is failed" and integration_error:
-                message = str(integration_error)
-            issues.append(_issue("GENERATED_CHECK_FAILED", message))
+            issues.append(_issue("GENERATED_CHECK_FAILED", str(exc)))
 
     issues.sort(key=lambda item: (item["code"], item.get("path", ""), item["message"]))
     return {

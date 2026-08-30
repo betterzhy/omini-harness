@@ -1,0 +1,42 @@
+schemaVersion: project-design-state/v1
+project: java-toolchain-profile-pay-benchmark
+currentStage: CALIBRATION
+intentAliases:
+  implementation-readiness-review: architecture-review
+topics:
+  - topicId: benchmark-architecture
+    status: CLOSED
+    scope:
+      domain: synthetic-benchmark
+      concern: architecture-semantics
+    closedAt: '2026-08-30T00:00:00Z'
+    closedBy: SYNTHETIC_TEST_FIXTURE
+    baselineReference: TEST_ONLY.md#architecturesemanticstatus
+    reopenConditions:
+      - NEW_EVIDENCE
+      - REQUIREMENT_CHANGE
+      - INVALIDATED_ASSUMPTION
+      - EXPLICIT_AUTHORITY
+  - topicId: benchmark-read-only
+    status: IN_PROGRESS
+    scope:
+      domain: synthetic-benchmark
+      concern: validation-reuse
+    dependsOn:
+      - benchmark-architecture
+baselines:
+  - TEST_ONLY.md#architecturesemanticstatus
+assumptions: []
+openDecisions:
+  - decision://synthetic-benchmark/no-install-or-apply-authority
+nextTopicCandidates: []
+projectAuthorityReferences:
+  - TEST_ONLY.md
+  - AGENTS.md
+protectedDecisions:
+  - Synthetic benchmark execution remains read-only
+projectConstraints:
+  - reference: TEST_ONLY.md#execution-permissions
+    conflictType: PROJECT_EXECUTION_AUTHORITY_OVERRIDES_GENERIC_REVIEW
+    conflictsWithCapabilities:
+      - skill:agent-design:architecture-review

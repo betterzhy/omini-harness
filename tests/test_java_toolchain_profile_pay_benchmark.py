@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import shutil
+import stat
 import subprocess
 import uuid
 from contextlib import contextmanager
@@ -29,6 +31,8 @@ BENCHMARK_SCENARIO_NAMES = (
     "review-go-does-not-authorize",
     "stage4-stop-replay",
 )
+TreeEntry = tuple[str, int, bytes | str | int | None]
+TreeSnapshot = dict[str, TreeEntry]
 
 
 def _run_git(repository: Path, *arguments: str) -> bytes:
@@ -39,15 +43,133 @@ def _run_git(repository: Path, *arguments: str) -> bytes:
     ).stdout
 
 
-def _tree_bytes(root: Path) -> dict[str, bytes]:
-    return {
-        path.relative_to(root).as_posix(): path.read_bytes()
-        for path in root.rglob("*")
-        if path.is_file()
-    }
+def _tree_bytes(root: Path) -> TreeSnapshot:
+    snapshot: TreeSnapshot = {}
+
+    def same_inode(expected: os.stat_result, actual: os.stat_result) -> bool:
+        return (
+            expected.st_dev,
+            expected.st_ino,
+            stat.S_IFMT(expected.st_mode),
+        ) == (
+            actual.st_dev,
+            actual.st_ino,
+            stat.S_IFMT(actual.st_mode),
+        )
+
+    def read_regular(
+        directory_fd: int,
+        name: str,
+        expected: os.stat_result,
+    ) -> bytes:
+        descriptor = os.open(
+            name,
+            os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+            dir_fd=directory_fd,
+        )
+        try:
+            if not same_inode(expected, os.fstat(descriptor)):
+                raise AssertionError("benchmark snapshot file changed during read")
+            chunks = []
+            while chunk := os.read(descriptor, 1024 * 1024):
+                chunks.append(chunk)
+            return b"".join(chunks)
+        finally:
+            os.close(descriptor)
+
+    def walk(directory_fd: int, relative: str) -> None:
+        directory_status = os.fstat(directory_fd)
+        snapshot[relative] = (
+            "directory",
+            stat.S_IMODE(directory_status.st_mode),
+            None,
+        )
+        with os.scandir(directory_fd) as entries:
+            children = sorted(
+                (
+                    entry.name,
+                    entry.stat(follow_symlinks=False),
+                )
+                for entry in entries
+            )
+        for name, child_status in children:
+            child_relative = name if relative == "." else f"{relative}/{name}"
+            mode = stat.S_IMODE(child_status.st_mode)
+            if stat.S_ISDIR(child_status.st_mode):
+                child_fd = os.open(
+                    name,
+                    os.O_RDONLY
+                    | getattr(os, "O_DIRECTORY", 0)
+                    | getattr(os, "O_NOFOLLOW", 0),
+                    dir_fd=directory_fd,
+                )
+                try:
+                    if not same_inode(child_status, os.fstat(child_fd)):
+                        raise AssertionError(
+                            "benchmark snapshot directory changed during read"
+                        )
+                    walk(child_fd, child_relative)
+                finally:
+                    os.close(child_fd)
+            elif stat.S_ISREG(child_status.st_mode):
+                snapshot[child_relative] = (
+                    "regular",
+                    mode,
+                    read_regular(directory_fd, name, child_status),
+                )
+            elif stat.S_ISLNK(child_status.st_mode):
+                snapshot[child_relative] = (
+                    "symlink",
+                    mode,
+                    os.readlink(name, dir_fd=directory_fd),
+                )
+            else:
+                snapshot[child_relative] = (
+                    "other",
+                    mode,
+                    stat.S_IFMT(child_status.st_mode),
+                )
+
+    root_status = os.lstat(root)
+    if stat.S_ISLNK(root_status.st_mode):
+        return {
+            ".": (
+                "symlink",
+                stat.S_IMODE(root_status.st_mode),
+                os.readlink(root),
+            )
+        }
+    if not stat.S_ISDIR(root_status.st_mode):
+        raise AssertionError("benchmark snapshot root is not a directory")
+    root_fd = os.open(
+        root,
+        os.O_RDONLY
+        | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_NOFOLLOW", 0),
+    )
+    try:
+        if not same_inode(root_status, os.fstat(root_fd)):
+            raise AssertionError("benchmark snapshot root changed during read")
+        walk(root_fd, ".")
+    finally:
+        os.close(root_fd)
+    return snapshot
 
 
-def _remove_exact_tree(worktree: Path, target: Path) -> None:
+def _remove_exact_tree(
+    worktree: Path,
+    target: Path,
+    *,
+    expected_snapshot: TreeSnapshot | None = None,
+) -> None:
+    if expected_snapshot is None:
+        raise AssertionError("benchmark cleanup is not verified")
+    try:
+        actual_snapshot = _tree_bytes(target)
+    except OSError as exc:
+        raise AssertionError("benchmark cleanup snapshot changed") from exc
+    if actual_snapshot != expected_snapshot:
+        raise AssertionError("benchmark cleanup snapshot changed")
     resolved_root = worktree.resolve(strict=True)
     resolved_target = target.resolve(strict=False)
     if resolved_target == resolved_root:
@@ -62,6 +184,17 @@ def _remove_exact_tree(worktree: Path, target: Path) -> None:
         shutil.rmtree(target)
     elif target.exists():
         target.unlink()
+
+
+def _worktree_status(worktree: Path) -> bytes:
+    return _run_git(
+        worktree,
+        "status",
+        "--porcelain=v1",
+        "-z",
+        "--untracked-files=all",
+        "--ignored=matching",
+    )
 
 
 @contextmanager
@@ -104,23 +237,43 @@ def _detached_benchmark_worktree(repository: Path) -> Iterator[Path]:
     )
     assert target.resolve(strict=True).parent == worktrees_root.resolve(strict=True)
     assert _run_git(target, "rev-parse", "HEAD").decode().strip() == candidate
+    failure: BaseException | None = None
     try:
         yield target
+    except BaseException as exc:
+        failure = exc
+        raise
     finally:
         if target.exists():
-            status = _run_git(target, "status", "--porcelain=v1", "-z")
-            assert status == b"", (
-                "benchmark detached worktree contains unexpected writes: "
-                + status.decode(errors="replace")
+            status = _worktree_status(target)
+            if failure is not None:
+                failure.add_note(
+                    "benchmark detached worktree preserved after failure: "
+                    f"{target}; status={status!r}"
+                )
+            elif status:
+                raise AssertionError(
+                    "benchmark detached worktree contains unexpected writes: "
+                    + status.decode(errors="replace")
+                )
+            else:
+                subprocess.run(
+                    [
+                        "git",
+                        "-C",
+                        str(common_root),
+                        "worktree",
+                        "remove",
+                        str(target),
+                    ],
+                    check=True,
+                    capture_output=True,
+                )
+        if not target.exists():
+            registered_after = _run_git(
+                repository, "worktree", "list", "--porcelain"
             )
-            subprocess.run(
-                ["git", "-C", str(common_root), "worktree", "remove", str(target)],
-                check=True,
-                capture_output=True,
-            )
-        assert not target.exists()
-        registered_after = _run_git(repository, "worktree", "list", "--porcelain")
-        assert str(target).encode() not in registered_after
+            assert str(target).encode() not in registered_after
 
 
 def _stats_snapshot(session) -> dict[str, object]:
@@ -133,6 +286,91 @@ def _stats_snapshot(session) -> dict[str, object]:
         "by_pack": {
             digest: dict(values) for digest, values in stats.by_pack.items()
         },
+    }
+
+
+def test_detached_benchmark_cleanup_preserves_mismatched_install_target_write():
+    repository = Path(__file__).parents[1].resolve(strict=True)
+    preserved_worktree: Path | None = None
+    install_target: Path | None = None
+    unexpected: Path | None = None
+    try:
+        with pytest.raises(AssertionError, match="benchmark cleanup snapshot changed"):
+            with _detached_benchmark_worktree(repository) as root:
+                preserved_worktree = root
+                install_target = root / ".java-profile-benchmark-install-target"
+                install_target.mkdir()
+                expected_snapshot = _tree_bytes(install_target)
+                unexpected = install_target / "unexpected-dry-run-write.txt"
+                unexpected.write_text("preserve this evidence", encoding="utf-8")
+                _remove_exact_tree(
+                    root,
+                    install_target,
+                    expected_snapshot=expected_snapshot,
+                )
+        assert preserved_worktree.is_dir()
+        assert unexpected.read_text(encoding="utf-8") == "preserve this evidence"
+    finally:
+        if preserved_worktree is not None and preserved_worktree.exists():
+            if install_target is not None and install_target.is_dir():
+                shutil.rmtree(install_target)
+            assert _run_git(
+                preserved_worktree, "status", "--porcelain=v1", "-z"
+            ) == b""
+            common_dir = Path(
+                _run_git(
+                    repository,
+                    "rev-parse",
+                    "--path-format=absolute",
+                    "--git-common-dir",
+                )
+                .decode()
+                .strip()
+            ).resolve(strict=True)
+            subprocess.run(
+                [
+                    "git",
+                    "-C",
+                    str(common_dir.parent),
+                    "worktree",
+                    "remove",
+                    str(preserved_worktree),
+                ],
+                check=True,
+                capture_output=True,
+            )
+
+
+def test_benchmark_tree_snapshot_records_symlink_without_following(
+    tmp_path: Path,
+):
+    root = tmp_path / "root"
+    nested = root / "nested"
+    nested.mkdir(parents=True)
+    nested.chmod(0o750)
+    regular = nested / "evidence.bin"
+    regular.write_bytes(b"inside")
+    regular.chmod(0o640)
+    outside = tmp_path / "outside.txt"
+    outside.write_bytes(b"must-not-be-read")
+    link = root / "outside-link"
+    link.symlink_to(outside)
+
+    snapshot = _tree_bytes(root)
+
+    assert snapshot == {
+        ".": ("directory", stat.S_IMODE(os.lstat(root).st_mode), None),
+        "nested": (
+            "directory",
+            stat.S_IMODE(os.lstat(nested).st_mode),
+            None,
+        ),
+        "nested/evidence.bin": ("regular", 0o640, b"inside"),
+        "outside-link": (
+            "symlink",
+            stat.S_IMODE(os.lstat(link).st_mode),
+            str(outside),
+        ),
     }
 
 
@@ -160,13 +398,23 @@ def java_profile_pay_benchmark_fixture():
         source = root / ".java-profile-benchmark-source"
         projection = root / "generated" / "projections" / "codex" / INTEGRATION_ID
         install_target = root / ".java-profile-benchmark-install-target"
+        owned_roots_verified = False
+        expected_owned_roots: dict[Path, TreeSnapshot] = {}
+        expected_worktree_status: bytes | None = None
         shutil.copytree(fixture / "integration", integration)
         shutil.copytree(fixture / "source", source)
         install_target.mkdir()
         source_before = _tree_bytes(source)
 
-        def assert_source_unchanged(operation: str) -> None:
-            assert _tree_bytes(source) == source_before, operation
+        def assert_owned_roots_unchanged(operation: str) -> None:
+            assert expected_owned_roots, operation
+            for owned_root, expected_snapshot in expected_owned_roots.items():
+                assert _tree_bytes(owned_root) == expected_snapshot, (
+                    operation,
+                    owned_root,
+                )
+            assert expected_worktree_status is not None, operation
+            assert _worktree_status(root) == expected_worktree_status, operation
 
         try:
             with CapabilityVerificationSession(
@@ -187,7 +435,7 @@ def java_profile_pay_benchmark_fixture():
                     / "capabilities.lock.yaml"
                 )
                 lock_bytes = lock_path.read_bytes()
-                assert_source_unchanged("lock")
+                assert _tree_bytes(source) == source_before, "lock"
                 checkpoints["lock"] = _stats_snapshot(session)
 
                 manifest = build_integration_projection(
@@ -201,8 +449,18 @@ def java_profile_pay_benchmark_fixture():
                     verification_session=session,
                 )
                 projection_before = _tree_bytes(projection)
-                assert_source_unchanged("projection")
                 assert lock_path.read_bytes() == lock_bytes
+                install_target_expected = _tree_bytes(install_target)
+                assert set(install_target_expected) == {"."}
+                assert install_target_expected["."][0] == "directory"
+                expected_owned_roots = {
+                    source: source_before,
+                    integration: _tree_bytes(integration),
+                    projection: projection_before,
+                    install_target: install_target_expected,
+                }
+                expected_worktree_status = _worktree_status(root)
+                assert_owned_roots_unchanged("projection")
                 checkpoints["projection"] = _stats_snapshot(session)
 
                 scenario_results = {}
@@ -214,9 +472,8 @@ def java_profile_pay_benchmark_fixture():
                         integration / "scenarios" / f"{scenario_name}.yaml",
                         verification_session=session,
                     )
-                    assert_source_unchanged(f"scenario:{scenario_name}")
+                    assert_owned_roots_unchanged(f"scenario:{scenario_name}")
                     assert lock_path.read_bytes() == lock_bytes
-                    assert _tree_bytes(projection) == projection_before
                     checkpoints[f"scenario:{scenario_name}"] = _stats_snapshot(
                         session
                     )
@@ -232,9 +489,8 @@ def java_profile_pay_benchmark_fixture():
                     verification_session=session,
                 )
                 assert freshness.fresh, freshness.reasons
-                assert_source_unchanged("freshness")
+                assert_owned_roots_unchanged("freshness")
                 assert lock_path.read_bytes() == lock_bytes
-                assert _tree_bytes(projection) == projection_before
                 checkpoints["freshness"] = _stats_snapshot(session)
 
                 install_plan = install_projection(
@@ -244,9 +500,8 @@ def java_profile_pay_benchmark_fixture():
                     source_root=source,
                     verification_session=session,
                 )
-                assert_source_unchanged("install-dry-run")
+                assert_owned_roots_unchanged("install-dry-run")
                 assert lock_path.read_bytes() == lock_bytes
-                assert _tree_bytes(projection) == projection_before
                 checkpoints["install"] = _stats_snapshot(session)
 
                 java_lock = next(
@@ -344,11 +599,30 @@ def java_profile_pay_benchmark_fixture():
                     "stats": actual_stats,
                 }
             assert session.stats.active_use_lease_count == 0
+            assert_owned_roots_unchanged("fixture-teardown")
+            owned_roots_verified = True
         finally:
-            _remove_exact_tree(root, install_target)
-            _remove_exact_tree(root, projection)
-            _remove_exact_tree(root, integration)
-            _remove_exact_tree(root, source)
+            if owned_roots_verified:
+                _remove_exact_tree(
+                    root,
+                    install_target,
+                    expected_snapshot=expected_owned_roots[install_target],
+                )
+                _remove_exact_tree(
+                    root,
+                    projection,
+                    expected_snapshot=expected_owned_roots[projection],
+                )
+                _remove_exact_tree(
+                    root,
+                    integration,
+                    expected_snapshot=expected_owned_roots[integration],
+                )
+                _remove_exact_tree(
+                    root,
+                    source,
+                    expected_snapshot=expected_owned_roots[source],
+                )
 
 
 @pytest.mark.integration

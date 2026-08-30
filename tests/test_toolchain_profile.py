@@ -515,7 +515,12 @@ def test_toolchain_artifact_registry_is_valid_and_exact():
     )
     SchemaStore(ROOT).validate(REGISTRY_SCHEMA, registry)
 
-    assert registry["profiles"] == []
+    assert [profile["profileId"] for profile in registry["profiles"]] == [
+        "toolchain-profile:java-engineering-standard:darwin-arm64:v1"
+    ]
+    assert profile_digest(registry["profiles"][0]) == (
+        "sha256:c852142343ea97aef6d3a555e5500ecb633baf1a23d846d7bbe72a8bcf5e4490"
+    )
     assert registry["artifacts"] == [
         {
             "artifactId": "artifact:ripgrep:15.2.0:darwin-arm64",

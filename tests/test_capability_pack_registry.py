@@ -311,6 +311,8 @@ def _managed_profile_harness(
     *,
     mutate_binding_during_gate: bool = False,
     mutate_profile_during_gate: bool = False,
+    scratch_record: Path | None = None,
+    gate_outcome: str = "success",
 ) -> tuple[Path, dict[str, Any]]:
     root = tmp_path / "harness"
     root.mkdir()
@@ -465,6 +467,21 @@ def _managed_profile_harness(
         f"[ \"$(command -v {name})\" = {shlex.quote(str(path))} ]"
         for name, path in expected_commands.items()
     )
+    if scratch_record is not None:
+        record = shlex.quote(str(scratch_record))
+        lines.extend(
+            [
+                ': "${TMPDIR:?managed profile Gate requires TMPDIR}"',
+                'case "$TMPDIR" in /*) ;; *) exit 81 ;; esac',
+                '[ -d "$TMPDIR" ]',
+                '[ ! -L "$TMPDIR" ]',
+                '[ -w "$TMPDIR" ]',
+                '[ "$(cd "$TMPDIR" && pwd -P)" = "$TMPDIR" ]',
+                f'printf "%s\\n" "$TMPDIR" > {record}',
+                f'/usr/bin/stat -f "%Lp" "$TMPDIR" >> {record}',
+                'printf writable > "$TMPDIR/probe"',
+            ]
+        )
     if mutate_binding_during_gate:
         replacement = json.dumps(binding_record(second))
         lines.extend(
@@ -483,6 +500,12 @@ def _managed_profile_harness(
         lines.append(
             f"printf '%s' {shlex.quote(replacement)} > {shlex.quote(str(registry_path))}"
         )
+    if gate_outcome == "failure":
+        lines.append("exit 23")
+    elif gate_outcome == "timeout":
+        lines.append("/bin/sleep 60")
+    elif gate_outcome != "success":
+        raise ValueError(f"unsupported test Gate outcome: {gate_outcome}")
     validator = source / "scripts/verify-capability-pack"
     validator.write_text("\n".join(lines) + "\n", encoding="utf-8")
     validator.chmod(0o755)
@@ -499,8 +522,19 @@ def _managed_profile_harness(
         "profileId": profile_id,
         "profileDigest": profile_digest(profile),
     }
+    if gate_outcome == "timeout":
+        registration["validator"]["timeoutSeconds"] = 1
     _write_registrations(root, [registration])
     return root, registration
+
+
+def _assert_private_gate_scratch_cleaned(record: Path) -> Path:
+    scratch_value, mode = record.read_text(encoding="utf-8").splitlines()
+    scratch = Path(scratch_value)
+    assert scratch.is_absolute()
+    assert mode == "700"
+    assert not scratch.exists()
+    return scratch
 
 
 def _replace(path: Path, old: str, new: str) -> None:
@@ -820,6 +854,54 @@ def test_managed_profile_candidate_gate_uses_attested_resolution_and_absolute_ba
     actual = get_registered_capability_pack(root, CAPABILITY_ID)
 
     assert actual == expected
+
+
+def test_managed_profile_candidate_gate_uses_private_runtime_scratch(
+    tmp_path: Path,
+):
+    record = tmp_path / "gate-scratch.txt"
+    root, expected = _managed_profile_harness(tmp_path, scratch_record=record)
+
+    actual = get_registered_capability_pack(root, CAPABILITY_ID)
+
+    scratch = _assert_private_gate_scratch_cleaned(record)
+    verified = capability_pack_registry._verify_validator_toolchain(root, expected)
+    assert "TMPDIR" not in verified.environment
+    persisted = canonical_json_bytes(actual)
+    assert b"TMPDIR" not in persisted
+    assert str(scratch).encode("utf-8") not in persisted
+
+
+def test_managed_profile_candidate_gate_cleans_private_scratch_after_failure(
+    tmp_path: Path,
+):
+    record = tmp_path / "gate-scratch.txt"
+    root, _ = _managed_profile_harness(
+        tmp_path,
+        scratch_record=record,
+        gate_outcome="failure",
+    )
+
+    with pytest.raises(ValueError, match="capability pack candidate Gate failed"):
+        get_registered_capability_pack(root, CAPABILITY_ID)
+
+    _assert_private_gate_scratch_cleaned(record)
+
+
+def test_managed_profile_candidate_gate_cleans_private_scratch_after_timeout(
+    tmp_path: Path,
+):
+    record = tmp_path / "gate-scratch.txt"
+    root, _ = _managed_profile_harness(
+        tmp_path,
+        scratch_record=record,
+        gate_outcome="timeout",
+    )
+
+    with pytest.raises(ValueError, match="capability pack candidate Gate timed out"):
+        get_registered_capability_pack(root, CAPABILITY_ID)
+
+    _assert_private_gate_scratch_cleaned(record)
 
 
 def test_managed_profile_candidate_gate_rejects_binding_relocation_during_gate(

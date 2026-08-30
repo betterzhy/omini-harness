@@ -4,6 +4,7 @@ import hashlib
 import os
 import platform
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
@@ -611,6 +612,34 @@ def _validator_environment(
 ) -> dict[str, str]:
     del registration
     return dict(verified_toolchain.environment)
+
+
+@contextmanager
+def _candidate_gate_runtime_environment(
+    registration: Mapping[str, Any],
+    verified_toolchain: VerifiedToolchain,
+) -> Iterator[dict[str, str]]:
+    environment = _validator_environment(registration, verified_toolchain)
+    contract = registration["validator"].get("environmentContract", "SANITIZED")
+    if contract != "MANAGED_TOOLCHAIN_PROFILE":
+        yield environment
+        return
+
+    with tempfile.TemporaryDirectory(prefix="capability-pack-gate-scratch-") as directory:
+        scratch = Path(directory).resolve(strict=True)
+        scratch.chmod(0o700)
+        metadata = scratch.lstat()
+        if (
+            not scratch.is_absolute()
+            or scratch.is_symlink()
+            or not stat.S_ISDIR(metadata.st_mode)
+            or scratch.resolve(strict=True) != scratch
+            or stat.S_IMODE(metadata.st_mode) != 0o700
+        ):
+            raise ValueError("capability pack candidate Gate scratch is unavailable or unsafe")
+        runtime_environment = dict(environment)
+        runtime_environment["TMPDIR"] = str(scratch)
+        yield runtime_environment
 
 
 def _recheck_validator_toolchain(
@@ -1417,12 +1446,15 @@ def _materialize_verified_capability_pack(
         if executed_validator_digest != registration["validator"]["sha256"]:
             raise ValueError("capability pack executed validator identity mismatch")
         session._record("full_candidate_gate_count", key=key)
-        completed = _run_candidate_gate(
-            [_CANDIDATE_GATE_INTERPRETER, str(validator_path), commit, tree],
-            cwd=checkout,
-            timeout=registration["validator"].get("timeoutSeconds", 300),
-            environment=_validator_environment(registration, toolchain),
-        )
+        with _candidate_gate_runtime_environment(
+            registration, toolchain
+        ) as runtime_environment:
+            completed = _run_candidate_gate(
+                [_CANDIDATE_GATE_INTERPRETER, str(validator_path), commit, tree],
+                cwd=checkout,
+                timeout=registration["validator"].get("timeoutSeconds", 300),
+                environment=runtime_environment,
+            )
         if completed.returncode != 0:
             raise ValueError("capability pack candidate Gate failed")
         if "sha256:" + sha256_bytes(validator_path.read_bytes()) != executed_validator_digest:

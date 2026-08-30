@@ -16,6 +16,141 @@ from capability_pack_test_support import retain_web_registration_fixture
 EXTERNAL_CAPABILITY_ID = "workflow:web-high-fidelity:reference-driven-visual-fidelity"
 
 
+def _projection_schema_toolchain_identity() -> dict:
+    identities = {
+        name: {
+            "absolutePath": f"/opt/toolchain/bin/{name}",
+            "sha256": "sha256:" + "a" * 64,
+        }
+        for name in ("ruby", "rg", "java", "javac", "mvn")
+    }
+    identities.update(
+        {
+            name: {
+                "absolutePath": f"/opt/toolchain/{name}",
+                "sha256": "sha256:" + "b" * 64,
+            }
+            for name in ("javaHome", "mavenHome", "mavenRepository")
+        }
+    )
+    return identities
+
+
+def _projection_schema_profile_identity() -> dict[str, str]:
+    return {
+        "profileId": "toolchain-profile:test:validator-coupling:v1",
+        "profileDigest": "sha256:" + "c" * 64,
+    }
+
+
+def _minimal_projection_manifest(validator_identity: dict) -> dict:
+    digest = "d" * 64
+    return {
+        "schemaVersion": "runtime-projection-manifest/v1",
+        "projectionType": "CODEX_REPOSITORY_PACK",
+        "projectionVersion": "codex-project-pack/1",
+        "runtime": "CODEX",
+        "project": "schema-fixture",
+        "sourceResolutionId": "resolution:schema-fixture",
+        "capabilityLockFingerprint": "sha256:" + "e" * 64,
+        "projectStateHash": "1" * 64,
+        "projectBindingHash": "2" * 64,
+        "sourceCapabilities": [
+            {
+                "id": "framework:test:validator-coupling",
+                "kind": "FRAMEWORK",
+                "version": "1.0.0",
+                "contentHash": digest,
+                "sourceKind": "EXTERNAL_CAPABILITY_PACK",
+                "sourceRegistrationId": "pack:validator-coupling",
+                "sourceCommit": "3" * 40,
+                "sourceTree": "4" * 40,
+                "resolvedContentDigest": "sha256:" + digest,
+                "validatorIdentity": validator_identity,
+                "registrationFingerprint": "sha256:" + "f" * 64,
+            }
+        ],
+        "generatedSkills": [],
+        "omittedReferences": [],
+        "generatedFiles": [],
+    }
+
+
+@pytest.mark.parametrize(
+    ("case", "validator_fields", "valid"),
+    [
+        ("sanitized-empty", {"environmentContract": "SANITIZED"}, True),
+        (
+            "registered-toolchain",
+            {
+                "environmentContract": "REGISTERED_TOOLCHAIN_OFFLINE_CACHE",
+                "toolchain": _projection_schema_toolchain_identity(),
+            },
+            True,
+        ),
+        (
+            "managed-profile",
+            {
+                "environmentContract": "MANAGED_TOOLCHAIN_PROFILE",
+                "toolchainProfile": _projection_schema_profile_identity(),
+            },
+            True,
+        ),
+        (
+            "registered-missing-toolchain",
+            {"environmentContract": "REGISTERED_TOOLCHAIN_OFFLINE_CACHE"},
+            False,
+        ),
+        (
+            "managed-missing-profile",
+            {"environmentContract": "MANAGED_TOOLCHAIN_PROFILE"},
+            False,
+        ),
+        (
+            "managed-both-identities",
+            {
+                "environmentContract": "MANAGED_TOOLCHAIN_PROFILE",
+                "toolchain": _projection_schema_toolchain_identity(),
+                "toolchainProfile": _projection_schema_profile_identity(),
+            },
+            False,
+        ),
+        (
+            "sanitized-profile",
+            {
+                "environmentContract": "SANITIZED",
+                "toolchainProfile": _projection_schema_profile_identity(),
+            },
+            False,
+        ),
+    ],
+)
+def test_projection_validator_identity_enforces_environment_coupling(
+    case: str,
+    validator_fields: dict,
+    valid: bool,
+):
+    del case
+    from evolution_harness.schema import SchemaStore, SchemaValidationError
+
+    root = Path(__file__).parents[1]
+    validator_identity = {
+        "relativePath": "scripts/verify-capability-pack",
+        "sha256": "sha256:" + "9" * 64,
+        **validator_fields,
+    }
+    manifest = _minimal_projection_manifest(validator_identity)
+    if valid:
+        SchemaStore(root).validate(
+            "core/schemas/runtime-projection-manifest.schema.json", manifest
+        )
+        return
+    with pytest.raises(SchemaValidationError):
+        SchemaStore(root).validate(
+            "core/schemas/runtime-projection-manifest.schema.json", manifest
+        )
+
+
 def _copy_repo(tmp_path: Path) -> tuple[Path, Path]:
     source = Path(__file__).parents[1]
     root = tmp_path / "repo"

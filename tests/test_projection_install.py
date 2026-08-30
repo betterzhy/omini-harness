@@ -80,6 +80,7 @@ class ProfileCanonicalOutputs:
     registration_fingerprint: str
     lock_fingerprint: str
     selected_capability: dict[str, Any]
+    locked_validator_identity: dict[str, Any]
     projected_source: dict[str, Any]
     projected_skill: dict[str, Any]
 
@@ -91,6 +92,32 @@ class ProfileProjectPair:
     first_binding_root: Path
     second_binding_root: Path
     profile_digest: str
+
+    def resolve(self, root: Path) -> tuple[dict[str, Any], dict[str, Any]]:
+        from evolution_harness.capability_pack_registry import (
+            CapabilityVerificationSession,
+        )
+        from evolution_harness.project import build_capability_lock
+        from evolution_harness.resolver import resolve_design_context
+
+        project = root / "examples/project-fixture"
+        with CapabilityVerificationSession(
+            root,
+            allowed_capability_ids={PROFILE_CAPABILITY_ID},
+        ) as session:
+            lock = build_capability_lock(
+                root, project, write=True, verification_session=session
+            )
+            resolved = resolve_design_context(
+                root,
+                project,
+                intent="architecture-review",
+                topic="resolver-mvp",
+                requested_output="review findings",
+                runtime="CODEX",
+                verification_session=session,
+            )
+        return lock, resolved
 
     def build(self, root: Path) -> ProfileCanonicalOutputs:
         from evolution_harness.capability_pack_registry import (
@@ -181,6 +208,9 @@ class ProfileProjectPair:
             registration_fingerprint=external_lock["registrationFingerprint"],
             lock_fingerprint=lock["lockFingerprint"],
             selected_capability=selected,
+            locked_validator_identity=deepcopy(
+                external_lock["validatorIdentity"]
+            ),
             projected_source=projected_source,
             projected_skill=projected_skill,
         )
@@ -454,6 +484,12 @@ def test_profile_binding_relocation_preserves_all_canonical_outputs(
     assert first.lock_fingerprint == second.lock_fingerprint
     assert first.selected_capability == second.selected_capability
     assert first.selected_capability["selectedBecause"] == ["explicit-binding"]
+    assert first.selected_capability["validatorIdentity"] == (
+        first.locked_validator_identity
+    )
+    assert second.selected_capability["validatorIdentity"] == (
+        second.locked_validator_identity
+    )
     assert first.projected_source == second.projected_source
     assert first.projected_skill == second.projected_skill
     assert first.projected_source["validatorIdentity"]["toolchainProfile"] == (

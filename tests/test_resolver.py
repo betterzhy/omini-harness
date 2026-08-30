@@ -9,6 +9,7 @@ import pytest
 import yaml
 
 from capability_pack_test_support import retain_web_registration_fixture
+from test_projection_install import ProfileProjectPair, profile_project_pair
 
 
 EXTERNAL_CAPABILITY_ID = "workflow:web-high-fidelity:reference-driven-visual-fidelity"
@@ -103,6 +104,16 @@ def test_resolver_selects_locked_external_pack_from_verified_registration(tmp_pa
         for item in resolved["selectedCapabilities"]
         if item.get("sourceKind") == "EXTERNAL_CAPABILITY_PACK"
     )
+    lock = yaml.safe_load(
+        (project / ".agent-evolution/capabilities.lock.yaml").read_text(
+            encoding="utf-8"
+        )
+    )
+    locked = next(
+        item
+        for item in lock["capabilities"]
+        if item["capabilityId"] == EXTERNAL_CAPABILITY_ID
+    )
     assert selected == {
         "id": EXTERNAL_CAPABILITY_ID,
         "kind": "WORKFLOW",
@@ -110,8 +121,40 @@ def test_resolver_selects_locked_external_pack_from_verified_registration(tmp_pa
         "contentHash": "9f2ffe458a32b75562107f7991b6b9cacc7630d8ec3e952a7abb409b8b54b8e1",
         "sourceKind": "EXTERNAL_CAPABILITY_PACK",
         "sourceRegistrationId": "pack:web-high-fidelity",
+        "validatorIdentity": {
+            "relativePath": "scripts/verify-capability-pack",
+            "sha256": "sha256:f0a09d48e3a296bb67565a6f0a5edc46c6a7dcf72c8e48f32a6f80a9c0823d94",
+        },
         "selectedBecause": ["explicit-binding"],
     }
+    assert selected["validatorIdentity"] == locked["validatorIdentity"]
+
+
+def test_resolver_propagates_profile_validator_identity_from_verified_lock(
+    profile_project_pair: ProfileProjectPair,
+):
+    lock, resolved = profile_project_pair.resolve(profile_project_pair.first_root)
+    locked = next(
+        item
+        for item in lock["capabilities"]
+        if item["capabilityId"] == "skill:synthetic:profile-relocation"
+    )
+    selected = next(
+        item
+        for item in resolved["selectedCapabilities"]
+        if item["id"] == "skill:synthetic:profile-relocation"
+    )
+
+    assert selected["validatorIdentity"] == locked["validatorIdentity"]
+    assert selected["validatorIdentity"]["toolchainProfile"] == {
+        "profileId": "toolchain-profile:test:canonical-relocation:v1",
+        "profileDigest": profile_project_pair.profile_digest,
+    }
+    serialized = json.dumps(selected, sort_keys=True).encode("utf-8")
+    assert str(profile_project_pair.first_binding_root).encode() not in serialized
+    assert b"absolutePath" not in serialized
+    assert b"bindingWitness" not in serialized
+    assert b"witness" not in serialized
 
 
 def test_resolver_reuses_one_external_pack_verification_session_without_output_drift(

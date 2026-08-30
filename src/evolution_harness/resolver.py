@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
@@ -208,6 +209,9 @@ def resolve_design_context(
                 "contentHash": entry["resolvedContentDigest"].removeprefix("sha256:"),
                 "sourceKind": "EXTERNAL_CAPABILITY_PACK",
                 "sourceRegistrationId": entry["registrationId"],
+                "validatorIdentity": deepcopy(
+                    locked_items[capability_id]["validatorIdentity"]
+                ),
                 "selectedBecause": sorted(locked_items[capability_id]["resolvedBecause"]),
             }
         else:

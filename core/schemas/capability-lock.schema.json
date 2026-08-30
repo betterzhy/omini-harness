@@ -148,6 +148,47 @@
                       }
                     },
                     "additionalProperties": false,
+                    "allOf": [
+                      {
+                        "if": {
+                          "required": ["environmentContract"],
+                          "properties": {
+                            "environmentContract": {
+                              "const": "REGISTERED_TOOLCHAIN_OFFLINE_CACHE"
+                            }
+                          }
+                        },
+                        "then": {
+                          "required": ["toolchain"],
+                          "not": {"required": ["toolchainProfile"]}
+                        }
+                      },
+                      {
+                        "if": {
+                          "required": ["environmentContract"],
+                          "properties": {
+                            "environmentContract": {
+                              "const": "MANAGED_TOOLCHAIN_PROFILE"
+                            }
+                          }
+                        },
+                        "then": {
+                          "required": ["toolchainProfile"],
+                          "not": {"required": ["toolchain"]}
+                        }
+                      },
+                      {
+                        "if": {"required": ["toolchainProfile"]},
+                        "then": {
+                          "required": ["environmentContract"],
+                          "properties": {
+                            "environmentContract": {
+                              "const": "MANAGED_TOOLCHAIN_PROFILE"
+                            }
+                          }
+                        }
+                      }
+                    ],
                     "oneOf": [
                       {
                         "required": ["toolchain"],

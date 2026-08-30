@@ -203,7 +203,7 @@ def build_parser(
     parser.add_argument("--repository-root", default=".")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    p = sub.add_parser("validate"); p.add_argument("--check-generated", action="store_true"); p.add_argument("--project", action="append"); _add_format(p)
+    p = sub.add_parser("validate"); p.add_argument("--check-generated", action="store_true"); p.add_argument("--project", action="append"); p.add_argument("--scope", choices=("all", "core", "adoption"), default="all"); _add_format(p)
     p = sub.add_parser("list"); p.add_argument("--kind"); _add_format(p)
     p = sub.add_parser("show"); p.add_argument("id"); p.add_argument("--version"); _add_format(p)
 
@@ -273,10 +273,21 @@ def main(argv=None) -> int:
     command = args.command if not hasattr(args, "action") or args.action is None else f"{args.command} {args.action}"
     try:
         if args.command == "validate":
+            if args.scope == "core" and args.project:
+                parser.error("validate --scope core does not accept --project")
             projects = [Path(p) for p in (args.project or [])]
-            if not projects and (root / "examples/project-fixture").exists():
+            if (
+                args.scope in {"all", "adoption"}
+                and not projects
+                and (root / "examples/project-fixture").exists()
+            ):
                 projects = [root / "examples/project-fixture"] if args.check_generated else []
-            data = structural_validate(root, project_roots=projects, check_generated=args.check_generated)
+            data = structural_validate(
+                root,
+                project_roots=projects,
+                check_generated=args.check_generated,
+                scope=args.scope,
+            )
             return _emit(data, fmt=fmt, ok=data["structuralGate"] == "PASS", command=command)
         if args.command == "list":
             entries = build_design_registry(root, write=False)["entries"]

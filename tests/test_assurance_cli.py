@@ -197,6 +197,137 @@ def _add_inactive_external_pack(root: Path, tmp_path: Path) -> Path:
     return source
 
 
+def test_core_scope_does_not_touch_adoption_or_external_pack_paths(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from evolution_harness import assurance
+    from evolution_harness import capability_pack_registry
+
+    root, _ = _copy_repo(tmp_path)
+    _make_external_pack_source_unavailable(root, tmp_path)
+
+    def forbidden(*_args, **_kwargs):
+        pytest.fail("core scope touched adoption validation")
+
+    monkeypatch.setattr(assurance, "load_capability_pack_registrations", forbidden)
+    monkeypatch.setattr(assurance, "CapabilityVerificationSession", forbidden)
+    monkeypatch.setattr(assurance, "_validate_integrations", forbidden)
+    monkeypatch.setattr(capability_pack_registry, "_run_candidate_gate", forbidden)
+
+    report = assurance.structural_validate(
+        root,
+        scope="core",
+        check_generated=True,
+    )
+
+    assert report["structuralGate"] == "PASS"
+    assert report["issues"] == []
+    assert report["integrationCount"] == 0
+
+
+def test_validation_scopes_keep_unavailable_pack_in_owning_fault_domain(tmp_path: Path):
+    from evolution_harness.assurance import structural_validate
+
+    root, _ = _copy_repo(tmp_path)
+    _make_external_pack_source_unavailable(root, tmp_path)
+    core = structural_validate(root, scope="core", check_generated=True)
+    adoption = structural_validate(root, scope="adoption", check_generated=True)
+    aggregate = structural_validate(root, scope="all", check_generated=True)
+    assert core["structuralGate"] == "PASS"
+    assert core["integrationCount"] == 0
+    for report in (adoption, aggregate):
+        assert report["structuralGate"] == "FAIL"
+        assert any(
+            "capability pack source root is unavailable" in issue["message"]
+            for issue in report["issues"]
+        )
+
+
+def test_validate_default_scope_is_byte_identical_to_explicit_all(tmp_path: Path):
+    root, _ = _copy_repo(tmp_path)
+    _make_external_pack_source_unavailable(root, tmp_path)
+    default = _run_module(
+        root,
+        "evolution_harness.cli",
+        "validate",
+        "--check-generated",
+        "--format",
+        "json",
+    )
+    explicit = _run_module(
+        root,
+        "evolution_harness.cli",
+        "validate",
+        "--scope",
+        "all",
+        "--check-generated",
+        "--format",
+        "json",
+    )
+    assert (default.returncode, default.stdout, default.stderr) == (
+        explicit.returncode,
+        explicit.stdout,
+        explicit.stderr,
+    )
+
+
+def test_core_generated_check_owns_local_registry_drift(tmp_path: Path):
+    from evolution_harness.assurance import structural_validate
+
+    root, _ = _copy_repo(tmp_path)
+    registry = root / "generated/registries/design-registry.json"
+    registry.write_bytes(registry.read_bytes() + b"manual drift\n")
+
+    core = structural_validate(root, scope="core", check_generated=True)
+    adoption = structural_validate(root, scope="adoption", check_generated=True)
+    aggregate = structural_validate(root, scope="all", check_generated=True)
+
+    assert core["structuralGate"] == "FAIL"
+    assert aggregate["structuralGate"] == "FAIL"
+    assert adoption["structuralGate"] == "PASS"
+    for report in (core, aggregate):
+        assert any(issue.get("path") == str(registry) for issue in report["issues"])
+    assert all(issue.get("path") != str(registry) for issue in adoption["issues"])
+
+
+def test_adoption_generated_check_owns_capability_pack_registry_drift(tmp_path: Path):
+    from evolution_harness.assurance import structural_validate
+
+    root, _ = _copy_repo(tmp_path)
+    registry = root / "generated/registries/capability-pack-registry.json"
+    registry.write_text("{}\n", encoding="utf-8")
+
+    core = structural_validate(root, scope="core", check_generated=True)
+    adoption = structural_validate(root, scope="adoption", check_generated=True)
+    aggregate = structural_validate(root, scope="all", check_generated=True)
+
+    assert core["structuralGate"] == "PASS"
+    for report in (adoption, aggregate):
+        assert report["structuralGate"] == "FAIL"
+        assert any(issue.get("path") == str(registry) for issue in report["issues"])
+    assert all(issue.get("path") != str(registry) for issue in core["issues"])
+
+
+def test_validate_core_scope_rejects_project_argument(tmp_path: Path):
+    root, project = _copy_repo(tmp_path)
+
+    result = _run_module(
+        root,
+        "evolution_harness.cli",
+        "validate",
+        "--scope",
+        "core",
+        "--project",
+        str(project),
+    )
+
+    assert result.returncode == 2
+    assert result.stdout == ""
+    assert "--scope core" in result.stderr
+    assert "--project" in result.stderr
+
+
 def test_web_only_copied_repository_fixture_excludes_java_pay_projection(tmp_path: Path):
     root, _ = _copy_repo(tmp_path)
     control = root / "integrations/pay-nexus-shadow/control-plane/.agent-evolution"

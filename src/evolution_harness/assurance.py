@@ -26,6 +26,9 @@ from .schema import SchemaStore
 from .validation import validate_repository
 
 
+_VALIDATION_SCOPES = frozenset({"all", "core", "adoption"})
+
+
 def _issue(code: str, message: str, path: str | None = None) -> dict[str, Any]:
     value: dict[str, Any] = {"code": code, "message": message}
     if path:
@@ -139,16 +142,31 @@ def structural_validate(
     *,
     project_roots: Iterable[Path] = (),
     check_generated: bool = False,
+    scope: str = "all",
 ) -> dict[str, Any]:
     root = Path(repository_root)
+    if scope not in _VALIDATION_SCOPES:
+        raise ValueError(f"unsupported validation scope: {scope}")
+    projects = tuple(Path(value) for value in project_roots)
+    if scope == "core" and projects:
+        raise ValueError("core validation scope does not accept project roots")
+    if scope == "core":
+        return _structural_validate(
+            root,
+            project_roots=(),
+            check_generated=check_generated,
+            verification_session=None,
+            scope=scope,
+        )
     try:
         registrations = load_capability_pack_registrations(root)
     except Exception:
         return _structural_validate(
             root,
-            project_roots=project_roots,
+            project_roots=projects,
             check_generated=check_generated,
             verification_session=None,
+            scope=scope,
         )
     external_ids = {registration["capabilityId"] for registration in registrations}
     with CapabilityVerificationSession(
@@ -157,9 +175,10 @@ def structural_validate(
     ) as verification_session:
         return _structural_validate(
             root,
-            project_roots=project_roots,
+            project_roots=projects,
             check_generated=check_generated,
             verification_session=verification_session,
+            scope=scope,
         )
 
 
@@ -169,30 +188,35 @@ def _structural_validate(
     project_roots: Iterable[Path],
     check_generated: bool,
     verification_session: CapabilityVerificationSession | None,
+    scope: str,
 ) -> dict[str, Any]:
     issues: list[dict[str, Any]] = []
-    base = validate_repository(root)
-    for item in base.issues:
-        issues.append(_issue(item.code, item.message, item.path))
-    _validate_learning(root, issues)
-    _validate_engineering(root, issues)
+    run_core = scope in {"all", "core"}
+    run_adoption = scope in {"all", "adoption"}
+    if run_core:
+        base = validate_repository(root)
+        for item in base.issues:
+            issues.append(_issue(item.code, item.message, item.path))
+        _validate_learning(root, issues)
+        _validate_engineering(root, issues)
 
     store = SchemaStore(root)
     projects = [Path(value) for value in project_roots]
-    for project in projects:
-        try:
-            load_project_state(root, project)
-            load_project_binding(root, project)
-        except Exception as exc:
-            issues.append(_issue("PROJECT_CONTROL_PLANE_INVALID", str(exc), str(project)))
-        handoff_path = project / ".agent-evolution/design-handoff.yaml"
-        if handoff_path.exists():
+    if run_adoption:
+        for project in projects:
             try:
-                store.validate("core/schemas/design-handoff.schema.json", yaml.safe_load(handoff_path.read_text(encoding="utf-8")) or {})
+                load_project_state(root, project)
+                load_project_binding(root, project)
             except Exception as exc:
-                issues.append(_issue("HANDOFF_INVALID", str(exc), str(handoff_path)))
+                issues.append(_issue("PROJECT_CONTROL_PLANE_INVALID", str(exc), str(project)))
+            handoff_path = project / ".agent-evolution/design-handoff.yaml"
+            if handoff_path.exists():
+                try:
+                    store.validate("core/schemas/design-handoff.schema.json", yaml.safe_load(handoff_path.read_text(encoding="utf-8")) or {})
+                except Exception as exc:
+                    issues.append(_issue("HANDOFF_INVALID", str(exc), str(handoff_path)))
 
-    if check_generated:
+    if check_generated and run_core:
         try:
             _check_json_file(
                 root / "generated/registries/design-registry.json",
@@ -215,6 +239,7 @@ def _structural_validate(
             _check_json_file(root / "engineering/generated/active-catalog.json", catalogs["engineering"], issues)
         except Exception as exc:
             issues.append(_issue("GENERATED_CHECK_FAILED", str(exc)))
+    if check_generated and run_adoption:
         for project in projects:
             expected_lock = build_capability_lock(
                 root,
@@ -239,12 +264,16 @@ def _structural_validate(
                 if not check.fresh:
                     issues.append(_issue("PROJECTION_STALE", f"{runtime} projection stale: {', '.join(check.reasons)}", str(project)))
 
-    integration_count, primary_session_failed = _validate_integrations(
-        root,
-        issues,
-        verification_session=verification_session,
-    )
-    if check_generated:
+    if run_adoption:
+        integration_count, primary_session_failed = _validate_integrations(
+            root,
+            issues,
+            verification_session=verification_session,
+        )
+    else:
+        integration_count = 0
+        primary_session_failed = False
+    if check_generated and run_adoption:
         try:
             _check_json_file(
                 root / "generated/registries/capability-pack-registry.json",

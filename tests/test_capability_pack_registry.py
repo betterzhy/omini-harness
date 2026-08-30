@@ -1592,16 +1592,27 @@ def test_registry_rejects_untracked_active_content(tmp_path: Path):
         build_capability_pack_registry(root, write=False)
 
 
-def test_registry_rejects_failed_candidate_gate(tmp_path: Path):
+def test_registry_preserves_failed_candidate_gate_diagnostics(tmp_path: Path):
     root, source, _, _ = _harness_with_pack(tmp_path)
     validator = source / "scripts/verify-capability-pack"
-    validator.write_text("#!/usr/bin/env bash\nexit 23\n", encoding="utf-8")
+    validator.write_text(
+        "#!/usr/bin/env bash\n"
+        "printf 'distinct gate stdout\\n'\n"
+        "printf 'distinct gate stderr\\n' >&2\n"
+        "exit 23\n",
+        encoding="utf-8",
+    )
     validator.chmod(0o755)
     _commit(source, "mutate: failing gate")
     _refresh_source_identity(root, source, content_digest=True, validator_digest=True)
 
-    with pytest.raises(ValueError, match="capability pack candidate Gate failed"):
+    with pytest.raises(ValueError) as captured:
         build_capability_pack_registry(root, write=False)
+
+    assert str(captured.value) == "capability pack candidate Gate failed"
+    assert captured.value.returncode == 23
+    assert captured.value.stdout == b"distinct gate stdout\n"
+    assert captured.value.stderr == b"distinct gate stderr\n"
 
 
 def test_registry_rejects_source_root_symlink(tmp_path: Path):

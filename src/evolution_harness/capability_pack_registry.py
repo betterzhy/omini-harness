@@ -467,6 +467,14 @@ def _run(
         raise ValueError(f"capability pack command failed: {arguments[0]}") from exc
 
 
+class _CandidateGateFailure(ValueError):
+    def __init__(self, completed: subprocess.CompletedProcess[bytes]) -> None:
+        super().__init__("capability pack candidate Gate failed")
+        self.returncode = completed.returncode
+        self.stdout = bytes(completed.stdout)
+        self.stderr = bytes(completed.stderr)
+
+
 def _run_candidate_gate(
     arguments: list[str],
     *,
@@ -1445,7 +1453,7 @@ def _materialize_verified_capability_pack(
                 environment=runtime_environment,
             )
         if completed.returncode != 0:
-            raise ValueError("capability pack candidate Gate failed")
+            raise _CandidateGateFailure(completed)
         if "sha256:" + sha256_bytes(validator_path.read_bytes()) != executed_validator_digest:
             raise ValueError("capability pack validator changed during candidate Gate")
         session._record(

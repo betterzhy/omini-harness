@@ -1033,6 +1033,31 @@ def _require_managed_runtime_public_chain(
     )
 
 
+def _require_managed_runtime_public_state_after_cleanup(
+    filesystem_root_descriptor: int,
+    common_root_parts: tuple[str, ...],
+    common_root_descriptor: int,
+    runtime_parent_parts: tuple[str, ...],
+    runtime_parent_descriptor: int,
+    scratch_name: str,
+) -> None:
+    message = "toolchain managed runtime public chain identity changed"
+    _require_pinned_directory_at(
+        filesystem_root_descriptor,
+        common_root_parts,
+        common_root_descriptor,
+        message,
+    )
+    _require_pinned_directory_at(
+        common_root_descriptor,
+        runtime_parent_parts,
+        runtime_parent_descriptor,
+        message,
+    )
+    if _entry_lstat(runtime_parent_descriptor, scratch_name) is not None:
+        raise ValueError(message)
+
+
 @contextmanager
 def managed_runtime_scratch(repository_root: Path) -> Iterator[Path]:
     managed_cache = binding_path(
@@ -1114,6 +1139,8 @@ def managed_runtime_scratch(repository_root: Path) -> Iterator[Path]:
         yield managed_cache / "runtime" / scratch_name
     finally:
         public_chain_error: BaseException | None = None
+        cleanup_error: BaseException | None = None
+        final_public_state_error: BaseException | None = None
         try:
             if (
                 runtime_parent_descriptor >= 0
@@ -1139,10 +1166,28 @@ def managed_runtime_scratch(repository_root: Path) -> Iterator[Path]:
                         scratch_descriptor,
                         scratch_identity,
                     )
-                except BaseException as cleanup_error:
+                except BaseException as exc:
+                    cleanup_error = exc
+                try:
+                    _require_managed_runtime_public_state_after_cleanup(
+                        filesystem_root_descriptor,
+                        common_root_parts,
+                        common_root_descriptor,
+                        runtime_parent_parts,
+                        runtime_parent_descriptor,
+                        scratch_name,
+                    )
+                except BaseException as exc:
+                    final_public_state_error = exc
+                if cleanup_error is not None:
+                    cause = final_public_state_error or public_chain_error
+                    if cause is not None:
+                        raise cleanup_error from cause
+                    raise cleanup_error
+                if final_public_state_error is not None:
                     if public_chain_error is not None:
-                        raise cleanup_error from public_chain_error
-                    raise
+                        raise final_public_state_error from public_chain_error
+                    raise final_public_state_error
                 if public_chain_error is not None:
                     raise public_chain_error
             elif (

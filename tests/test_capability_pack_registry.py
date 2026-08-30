@@ -4,7 +4,6 @@ import hashlib
 import json
 import os
 import platform
-import signal
 import shlex
 import shutil
 import stat
@@ -319,6 +318,9 @@ def _managed_profile_harness(
     scratch_ancestor_replacement: str | None = None,
     scratch_move_target: Path | None = None,
     scratch_reinject_acl: bool = False,
+    background_descendant: str | None = None,
+    descendant_pid_record: Path | None = None,
+    descendant_ready_record: Path | None = None,
 ) -> tuple[Path, dict[str, Any]]:
     root = tmp_path / "harness"
     root.mkdir()
@@ -488,6 +490,55 @@ def _managed_profile_harness(
                 'printf writable > "$TMPDIR/probe"',
             ]
         )
+    if background_descendant is not None:
+        if descendant_pid_record is None or descendant_ready_record is None:
+            raise ValueError("background descendant requires PID and ready records")
+        ready_record = shlex.quote(str(descendant_ready_record))
+        descendant_prefix = [
+            "import os, pathlib, signal",
+            "child = os.fork()",
+            "child and os._exit(0)",
+            "os.close(0)",
+            "os.close(1)",
+            "os.close(2)",
+            f"pathlib.Path({str(descendant_pid_record)!r}).write_text(str(os.getpid()))",
+            f"pathlib.Path({str(descendant_ready_record)!r}).write_text('ready')",
+        ]
+        if background_descendant == "idle":
+            descendant_script = "\n".join(
+                [
+                    *descendant_prefix,
+                    "signal.signal(signal.SIGTERM, signal.SIG_IGN)",
+                    "while True: pass",
+                ]
+            )
+        elif background_descendant == "replace-ancestor":
+            descendant_script = "\n".join(
+                [
+                    *descendant_prefix,
+                    "scratch = pathlib.Path(os.environ['TMPDIR'])",
+                    "managed_cache = pathlib.Path(str(scratch).split('/runtime/', 1)[0])",
+                    "sync_file = scratch / 'probe'",
+                    "def mutate(*_ignored):",
+                    "    os.rename(managed_cache, pathlib.Path(str(managed_cache) + '-owned-late'))",
+                    "    scratch.mkdir(parents=True)",
+                    "    (scratch / 'replacement.txt').write_text('preserve')",
+                    "    os._exit(0)",
+                    "signal.signal(signal.SIGTERM, mutate)",
+                    "while sync_file.exists(): pass",
+                    "mutate()",
+                ]
+            )
+        else:
+            raise ValueError(
+                f"unsupported background descendant: {background_descendant}"
+            )
+        lines.extend(
+            [
+                f"/usr/bin/python3 -c {shlex.quote(descendant_script)}",
+                f"while [ ! -e {ready_record} ]; do :; done",
+            ]
+        )
     if mutate_binding_during_gate:
         replacement = json.dumps(binding_record(second))
         lines.extend(
@@ -561,6 +612,8 @@ def _managed_profile_harness(
         )
     elif scratch_reinject_acl:
         raise ValueError("scratch ACL reinjection requires a move target")
+    if background_descendant is not None and gate_outcome == "success":
+        lines.append("exit 0")
     validator = source / "scripts/verify-capability-pack"
     validator.write_text("\n".join(lines) + "\n", encoding="utf-8")
     validator.chmod(0o755)
@@ -590,6 +643,15 @@ def _assert_private_gate_scratch_cleaned(record: Path) -> Path:
     assert mode == "700"
     assert not scratch.exists()
     return scratch
+
+
+def _assert_process_gone(pid_record: Path) -> None:
+    pid = int(pid_record.read_text(encoding="utf-8"))
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return
+    pytest.fail(f"candidate Gate descendant survived cleanup: {pid}")
 
 
 def _macos_acl_entries(path: Path) -> list[str]:
@@ -1077,6 +1139,68 @@ def test_managed_profile_candidate_gate_neutralizes_moved_scratch_acl(
     assert _macos_acl_entries(moved) == []
 
 
+@pytest.mark.parametrize("gate_outcome", ["success", "failure", "timeout"])
+def test_managed_profile_candidate_gate_converges_background_descendant(
+    tmp_path: Path,
+    gate_outcome: str,
+):
+    record = tmp_path / "gate-scratch.txt"
+    descendant_pid = tmp_path / "descendant.pid"
+    descendant_ready = tmp_path / "descendant.ready"
+    root, expected = _managed_profile_harness(
+        tmp_path,
+        scratch_record=record,
+        gate_outcome=gate_outcome,
+        background_descendant="idle",
+        descendant_pid_record=descendant_pid,
+        descendant_ready_record=descendant_ready,
+    )
+
+    if gate_outcome == "success":
+        assert get_registered_capability_pack(root, CAPABILITY_ID) == expected
+    else:
+        message = "timed out" if gate_outcome == "timeout" else "Gate failed"
+        with pytest.raises(ValueError, match=message):
+            get_registered_capability_pack(root, CAPABILITY_ID)
+
+    _assert_private_gate_scratch_cleaned(record)
+    _assert_process_gone(descendant_pid)
+
+
+def test_managed_profile_candidate_gate_rechecks_public_chain_after_group_cleanup(
+    tmp_path: Path,
+):
+    record = tmp_path / "gate-scratch.txt"
+    descendant_pid = tmp_path / "descendant.pid"
+    descendant_ready = tmp_path / "descendant.ready"
+    root, _ = _managed_profile_harness(
+        tmp_path,
+        scratch_record=record,
+        background_descendant="replace-ancestor",
+        descendant_pid_record=descendant_pid,
+        descendant_ready_record=descendant_ready,
+    )
+
+    with capability_pack_registry.CapabilityVerificationSession(
+        root,
+        allowed_capability_ids={CAPABILITY_ID},
+    ) as session:
+        with pytest.raises(
+            ValueError,
+            match="managed runtime public chain identity changed",
+        ):
+            get_registered_capability_pack(
+                root,
+                CAPABILITY_ID,
+                verification_session=session,
+            )
+        assert session.stats.verified_pack_count == 0
+
+    scratch = Path(record.read_text(encoding="utf-8").splitlines()[0])
+    assert (scratch / "replacement.txt").read_text(encoding="utf-8") == "preserve"
+    _assert_process_gone(descendant_pid)
+
+
 @pytest.mark.skipif(platform.system() != "Darwin", reason="macOS ACL contract")
 def test_managed_runtime_scratch_neutralizes_inherited_acl_on_private_parent(
     tmp_path: Path,
@@ -1328,42 +1452,56 @@ def test_candidate_gate_timeout_terminates_descendant_process_group(tmp_path: Pa
     assert not late_side_effect.exists()
 
 
-def test_candidate_gate_timeout_kills_group_before_reaping_leader(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def test_candidate_gate_communication_error_converges_process_session(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ):
-    from evolution_harness import capability_pack_registry
+    descendant_pid = tmp_path / "communication-descendant.pid"
+    helper = "\n".join(
+        [
+            "import os, pathlib, signal",
+            "child = os.fork()",
+            "child and os._exit(0)",
+            "os.close(0)",
+            "os.close(1)",
+            "os.close(2)",
+            f"pathlib.Path({str(descendant_pid)!r}).write_text(str(os.getpid()))",
+            "signal.signal(signal.SIGTERM, signal.SIG_IGN)",
+            "while True: pass",
+        ]
+    )
+    real_popen = capability_pack_registry.subprocess.Popen
 
-    events: list[str] = []
+    class BrokenReader:
+        def __init__(self, stream):
+            self._stream = stream
 
-    class FakeProcess:
-        pid = 424242
+        def read(self, _size: int) -> bytes:
+            raise OSError("synthetic output read failure")
 
-        def __init__(self, *args, **kwargs):
-            events.append("start")
-            self.calls = 0
+        def close(self) -> None:
+            self._stream.close()
 
-        def communicate(self, timeout=None):
-            self.calls += 1
-            if self.calls == 1:
-                events.append("timeout")
-                raise subprocess.TimeoutExpired("gate", timeout)
-            events.append("reap")
-            return b"", b""
+    def popen_with_broken_stdout(*args, **kwargs):
+        process = real_popen(*args, **kwargs)
+        process.stdout = BrokenReader(process.stdout)
+        return process
 
-    monkeypatch.setattr(capability_pack_registry.subprocess, "Popen", FakeProcess)
+    monkeypatch.setattr(
+        capability_pack_registry.subprocess,
+        "Popen",
+        popen_with_broken_stdout,
+    )
 
-    def record_killpg(pid: int, signum: int):
-        assert pid == FakeProcess.pid
-        events.append("term" if signum == signal.SIGTERM else "kill")
-
-    monkeypatch.setattr(capability_pack_registry.os, "killpg", record_killpg)
-
-    with pytest.raises(ValueError, match="candidate Gate timed out"):
+    with pytest.raises(ValueError, match="output communication failed"):
         capability_pack_registry._run_candidate_gate(
-            ["gate"], cwd=tmp_path, timeout=1, environment={}
+            ["/usr/bin/python3", "-c", helper],
+            cwd=tmp_path,
+            timeout=5,
+            environment={"PATH": "/usr/bin:/bin", "LANG": "C", "LC_ALL": "C"},
         )
 
-    assert events == ["start", "timeout", "term", "kill", "reap"]
+    _assert_process_gone(descendant_pid)
 
 
 @pytest.mark.parametrize("index_flag", ["--assume-unchanged", "--skip-worktree"])

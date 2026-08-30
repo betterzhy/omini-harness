@@ -43,6 +43,8 @@ _MANIFEST_SCHEMA = "core/schemas/capability-pack-manifest.schema.json"
 _REGISTRY_SOURCE = "core/registries/capability-packs.yaml"
 CAPABILITY_PACK_VALIDATION_ABI = "v2"
 _CANDIDATE_GATE_INTERPRETER = "/bin/bash"
+_CANDIDATE_GATE_TERM_GRACE_SECONDS = 0.25
+_CANDIDATE_GATE_KILL_WAIT_SECONDS = 2.0
 _GIT_ENVIRONMENT = {
     "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
     "HOME": "/var/empty",
@@ -474,31 +476,174 @@ def _run_candidate_gate(
     timeout: int,
     environment: Mapping[str, str],
 ) -> subprocess.CompletedProcess[bytes]:
+    status_reader, status_writer = os.pipe()
+    supervisor = (
+        "trap '' TERM\n"
+        f'"$@" {status_writer}>&-\n'
+        "gate_status=$?\n"
+        f'printf "%s\\n" "$gate_status" >&{status_writer}\n'
+        f"exec {status_writer}>&-\n"
+        "while :; do :; done\n"
+    )
     try:
         process = subprocess.Popen(
-            arguments,
+            [
+                _CANDIDATE_GATE_INTERPRETER,
+                "-c",
+                supervisor,
+                "capability-pack-gate-supervisor",
+                *arguments,
+            ],
             cwd=cwd,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             env=dict(environment),
+            pass_fds=(status_writer,),
             start_new_session=True,
         )
-    except OSError as exc:
+    except (OSError, ValueError) as exc:
+        os.close(status_reader)
+        os.close(status_writer)
         raise ValueError("capability pack candidate Gate failed to start") from exc
+    os.close(status_writer)
+
     try:
-        stdout, stderr = process.communicate(timeout=timeout)
-    except subprocess.TimeoutExpired as exc:
+        if os.getpgid(process.pid) != process.pid:
+            raise ValueError(
+                "capability pack candidate Gate process session identity mismatch"
+            )
+    except (OSError, ValueError) as exc:
+        process.kill()
+        process.wait()
+        os.close(status_reader)
+        raise ValueError(
+            "capability pack candidate Gate process session identity mismatch"
+        ) from exc
+
+    stdout_chunks: list[bytes] = []
+    stderr_chunks: list[bytes] = []
+    communication_errors: list[BaseException] = []
+    gate_statuses: list[int] = []
+    status_complete = threading.Event()
+
+    def drain(stream, chunks: list[bytes]) -> None:
         try:
-            os.killpg(process.pid, signal.SIGTERM)
-        except ProcessLookupError:
-            pass
+            while True:
+                chunk = stream.read(64 * 1024)
+                if not chunk:
+                    return
+                chunks.append(chunk)
+        except BaseException as exc:
+            communication_errors.append(exc)
+
+    def receive_gate_status() -> None:
         try:
+            data = b""
+            while b"\n" not in data:
+                chunk = os.read(status_reader, 64)
+                if not chunk:
+                    raise ValueError(
+                        "capability pack candidate Gate status channel closed"
+                    )
+                data += chunk
+                if len(data) > 16:
+                    raise ValueError(
+                        "capability pack candidate Gate status is invalid"
+                    )
+            line, remainder = data.split(b"\n", 1)
+            if remainder or not line.isdigit():
+                raise ValueError("capability pack candidate Gate status is invalid")
+            value = int(line)
+            if value < 0 or value > 255:
+                raise ValueError("capability pack candidate Gate status is invalid")
+            gate_statuses.append(value)
+        except BaseException as exc:
+            communication_errors.append(exc)
+        finally:
+            os.close(status_reader)
+            status_complete.set()
+
+    if process.stdout is None or process.stderr is None:
+        process.kill()
+        process.wait()
+        os.close(status_reader)
+        raise ValueError("capability pack candidate Gate output communication failed")
+    stdout_thread = threading.Thread(
+        target=drain,
+        args=(process.stdout, stdout_chunks),
+        daemon=True,
+    )
+    stderr_thread = threading.Thread(
+        target=drain,
+        args=(process.stderr, stderr_chunks),
+        daemon=True,
+    )
+    stdout_thread.start()
+    stderr_thread.start()
+    status_thread = threading.Thread(target=receive_gate_status, daemon=True)
+    status_thread.start()
+    timed_out = not status_complete.wait(timeout)
+    cleanup_error: BaseException | None = None
+    try:
+        try:
+            if os.getpgid(process.pid) != process.pid:
+                raise ValueError(
+                    "capability pack candidate Gate process session identity changed"
+                )
+            try:
+                os.killpg(process.pid, signal.SIGTERM)
+            except OSError:
+                # SIGKILL below is the convergence boundary. A TERM failure does
+                # not widen ownership and must not prevent the bounded escalation.
+                pass
+            threading.Event().wait(_CANDIDATE_GATE_TERM_GRACE_SECONDS)
+            if os.getpgid(process.pid) != process.pid:
+                raise ValueError(
+                    "capability pack candidate Gate process session identity changed"
+                )
             os.killpg(process.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        stdout, stderr = process.communicate()
-        raise ValueError("capability pack candidate Gate timed out") from exc
-    return subprocess.CompletedProcess(arguments, process.returncode, stdout, stderr)
+        except (OSError, ValueError) as exc:
+            cleanup_error = exc
+
+        try:
+            process.wait(timeout=_CANDIDATE_GATE_KILL_WAIT_SECONDS)
+        except subprocess.TimeoutExpired as exc:
+            cleanup_error = ValueError(
+                "capability pack candidate Gate process session cleanup timed out"
+            )
+            if cleanup_error.__cause__ is None:
+                cleanup_error.__cause__ = exc
+    finally:
+        stdout_thread.join(_CANDIDATE_GATE_KILL_WAIT_SECONDS)
+        stderr_thread.join(_CANDIDATE_GATE_KILL_WAIT_SECONDS)
+        status_thread.join(_CANDIDATE_GATE_KILL_WAIT_SECONDS)
+        if not stdout_thread.is_alive():
+            process.stdout.close()
+        if not stderr_thread.is_alive():
+            process.stderr.close()
+
+    if cleanup_error is not None:
+        raise ValueError(
+            "capability pack candidate Gate process session cleanup failed"
+        ) from cleanup_error
+    if timed_out:
+        raise ValueError("capability pack candidate Gate timed out")
+    if (
+        stdout_thread.is_alive()
+        or stderr_thread.is_alive()
+        or status_thread.is_alive()
+        or communication_errors
+        or len(gate_statuses) != 1
+    ):
+        raise ValueError(
+            "capability pack candidate Gate output communication failed"
+        ) from (communication_errors[0] if communication_errors else None)
+    return subprocess.CompletedProcess(
+        arguments,
+        gate_statuses[0],
+        b"".join(stdout_chunks),
+        b"".join(stderr_chunks),
+    )
 
 
 def _verify_legacy_validator_toolchain(

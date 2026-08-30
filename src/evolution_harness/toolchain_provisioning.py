@@ -969,7 +969,20 @@ def _cleanup_managed_runtime_scratch(
     public_entry = _entry_lstat(parent_descriptor, public_name)
     public_changed = public_entry is None or not _same_inode(expected, public_entry)
 
+    _make_private_directory(
+        scratch_descriptor,
+        "toolchain managed runtime scratch cleanup neutralization failed",
+    )
     _remove_directory_contents(scratch_descriptor)
+    _make_private_directory(
+        scratch_descriptor,
+        "toolchain managed runtime scratch cleanup neutralization failed",
+    )
+    if os.listdir(scratch_descriptor):
+        raise ValueError(
+            "toolchain managed runtime scratch cleanup neutralization failed"
+        )
+    os.fsync(scratch_descriptor)
     owned_names: list[str] = []
     for name in os.listdir(parent_descriptor):
         current = _entry_lstat(parent_descriptor, name)
@@ -988,6 +1001,36 @@ def _cleanup_managed_runtime_scratch(
 
     if public_changed:
         raise ValueError("toolchain managed runtime scratch public identity changed")
+
+
+def _require_managed_runtime_public_chain(
+    filesystem_root_descriptor: int,
+    common_root_parts: tuple[str, ...],
+    common_root_descriptor: int,
+    runtime_parent_parts: tuple[str, ...],
+    runtime_parent_descriptor: int,
+    scratch_name: str,
+    scratch_descriptor: int,
+) -> None:
+    message = "toolchain managed runtime public chain identity changed"
+    _require_pinned_directory_at(
+        filesystem_root_descriptor,
+        common_root_parts,
+        common_root_descriptor,
+        message,
+    )
+    _require_pinned_directory_at(
+        common_root_descriptor,
+        runtime_parent_parts,
+        runtime_parent_descriptor,
+        message,
+    )
+    _require_pinned_directory_at(
+        runtime_parent_descriptor,
+        (scratch_name,),
+        scratch_descriptor,
+        message,
+    )
 
 
 @contextmanager
@@ -1070,18 +1113,38 @@ def managed_runtime_scratch(repository_root: Path) -> Iterator[Path]:
         )
         yield managed_cache / "runtime" / scratch_name
     finally:
+        public_chain_error: BaseException | None = None
         try:
             if (
                 runtime_parent_descriptor >= 0
                 and scratch_descriptor >= 0
                 and scratch_identity is not None
             ):
-                _cleanup_managed_runtime_scratch(
-                    runtime_parent_descriptor,
-                    scratch_name,
-                    scratch_descriptor,
-                    scratch_identity,
-                )
+                try:
+                    _require_managed_runtime_public_chain(
+                        filesystem_root_descriptor,
+                        common_root_parts,
+                        common_root_descriptor,
+                        runtime_parent_parts,
+                        runtime_parent_descriptor,
+                        scratch_name,
+                        scratch_descriptor,
+                    )
+                except BaseException as exc:
+                    public_chain_error = exc
+                try:
+                    _cleanup_managed_runtime_scratch(
+                        runtime_parent_descriptor,
+                        scratch_name,
+                        scratch_descriptor,
+                        scratch_identity,
+                    )
+                except BaseException as cleanup_error:
+                    if public_chain_error is not None:
+                        raise cleanup_error from public_chain_error
+                    raise
+                if public_chain_error is not None:
+                    raise public_chain_error
             elif (
                 runtime_parent_descriptor >= 0
                 and scratch_created

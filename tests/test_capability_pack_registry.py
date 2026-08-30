@@ -316,6 +316,9 @@ def _managed_profile_harness(
     gate_outcome: str = "success",
     scratch_replacement: str | None = None,
     scratch_replacement_target: Path | None = None,
+    scratch_ancestor_replacement: str | None = None,
+    scratch_move_target: Path | None = None,
+    scratch_reinject_acl: bool = False,
 ) -> tuple[Path, dict[str, Any]]:
     root = tmp_path / "harness"
     root.mkdir()
@@ -531,6 +534,33 @@ def _managed_profile_harness(
         )
     elif scratch_replacement is not None:
         raise ValueError(f"unsupported scratch replacement: {scratch_replacement}")
+    if scratch_ancestor_replacement is not None:
+        if scratch_ancestor_replacement == "runtime-parent":
+            lines.append('scratch_ancestor="${TMPDIR%/*}"')
+        elif scratch_ancestor_replacement == "managed-cache":
+            lines.append('scratch_ancestor="${TMPDIR%/runtime/*}"')
+        else:
+            raise ValueError(
+                "unsupported scratch ancestor replacement: "
+                f"{scratch_ancestor_replacement}"
+            )
+        lines.extend(
+            [
+                '/bin/mv "$scratch_ancestor" "$scratch_ancestor-owned"',
+                '/bin/mkdir -p "$TMPDIR"',
+                'printf preserve > "$TMPDIR/replacement.txt"',
+            ]
+        )
+    if scratch_move_target is not None:
+        if scratch_reinject_acl:
+            lines.append(
+                '/bin/chmod +a "everyone allow readsecurity" "$TMPDIR"'
+            )
+        lines.append(
+            f'/bin/mv "$TMPDIR" {shlex.quote(str(scratch_move_target))}'
+        )
+    elif scratch_reinject_acl:
+        raise ValueError("scratch ACL reinjection requires a move target")
     validator = source / "scripts/verify-capability-pack"
     validator.write_text("\n".join(lines) + "\n", encoding="utf-8")
     validator.chmod(0o755)
@@ -973,6 +1003,78 @@ def test_managed_profile_candidate_gate_preserves_scratch_path_replacement(
         assert scratch.readlink() == replacement_target
     assert marker.read_text(encoding="utf-8") == "preserve"
     assert not Path(f"{scratch}-owned").exists()
+
+
+@pytest.mark.parametrize("ancestor", ["runtime-parent", "managed-cache"])
+def test_managed_profile_candidate_gate_rejects_scratch_ancestor_replacement(
+    tmp_path: Path,
+    ancestor: str,
+):
+    record = tmp_path / "gate-scratch.txt"
+    root, _ = _managed_profile_harness(
+        tmp_path,
+        scratch_record=record,
+        scratch_ancestor_replacement=ancestor,
+    )
+
+    with capability_pack_registry.CapabilityVerificationSession(
+        root,
+        allowed_capability_ids={CAPABILITY_ID},
+    ) as session:
+        with pytest.raises(
+            ValueError,
+            match="managed runtime public chain identity changed",
+        ):
+            get_registered_capability_pack(
+                root,
+                CAPABILITY_ID,
+                verification_session=session,
+            )
+        assert session.stats.verified_pack_count == 0
+
+    scratch = Path(record.read_text(encoding="utf-8").splitlines()[0])
+    assert (scratch / "replacement.txt").read_text(encoding="utf-8") == "preserve"
+    if ancestor == "runtime-parent":
+        owned_scratch = Path(f"{scratch.parent}-owned") / scratch.name
+    else:
+        owned_scratch = (
+            Path(f"{scratch.parent.parent}-owned") / "runtime" / scratch.name
+        )
+    assert not owned_scratch.exists()
+
+
+@pytest.mark.skipif(platform.system() != "Darwin", reason="macOS ACL contract")
+def test_managed_profile_candidate_gate_neutralizes_moved_scratch_acl(
+    tmp_path: Path,
+):
+    record = tmp_path / "gate-scratch.txt"
+    moved = tmp_path / "moved-gate-scratch"
+    root, _ = _managed_profile_harness(
+        tmp_path,
+        scratch_record=record,
+        scratch_move_target=moved,
+        scratch_reinject_acl=True,
+    )
+
+    with capability_pack_registry.CapabilityVerificationSession(
+        root,
+        allowed_capability_ids={CAPABILITY_ID},
+    ) as session:
+        with pytest.raises(
+            ValueError,
+            match="managed runtime scratch cleanup ownership cannot be proven",
+        ):
+            get_registered_capability_pack(
+                root,
+                CAPABILITY_ID,
+                verification_session=session,
+            )
+        assert session.stats.verified_pack_count == 0
+
+    assert moved.is_dir()
+    assert list(moved.iterdir()) == []
+    assert stat.S_IMODE(moved.stat().st_mode) == 0o700
+    assert _macos_acl_entries(moved) == []
 
 
 @pytest.mark.skipif(platform.system() != "Darwin", reason="macOS ACL contract")

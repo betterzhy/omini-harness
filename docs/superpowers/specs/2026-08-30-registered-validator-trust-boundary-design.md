@@ -1,6 +1,6 @@
 # Registered Validator Trust Boundary Design
 
-**Status:** APPROVED APPROACH — written specification pending user review
+**Status:** APPROVED — user-reviewed 2026-08-30
 
 **Date:** 2026-08-30
 
@@ -158,8 +158,12 @@ subject to the fixed before/after benchmark.
 5. Regenerate Harness Registry and neutral fixture lock/projections from one real
    Java Gate executed outside the outer Codex filesystem sandbox.
 6. Run the fixed scenario/install benchmark and assert per-Pack counters.
-7. Complete focused regressions, full sharded receipts, and one fixed-candidate
-   independent `deep_reviewer / xhigh` gate.
+7. Complete focused regressions, disjoint tier receipts, one full unfiltered
+   regression, and one fixed-candidate independent `deep_reviewer / xhigh` gate.
+
+Product-level resumable shard receipts remain the separately deferred scope in
+`2026-08-29-pytest-shard-receipts-design.md`; this design does not authorize or
+implement that subsystem.
 
 ## Acceptance criteria
 

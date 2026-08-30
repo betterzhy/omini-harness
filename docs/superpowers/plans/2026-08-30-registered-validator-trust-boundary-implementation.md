@@ -279,7 +279,7 @@ git commit -m "fix(pack): 迁移 Java Validator 到受管工具链 Profile"
 - Modify: `tests/test_pay_nexus_java_capability_adoption_pilot.py`
 - Do not modify: `integrations/pay-nexus-shadow/**`
 
-The fixture is a test input, not Authority. It uses the active neutral Java profile registration and generates its lock and projections only under a per-process temporary Harness root. No lock or generated projection is committed.
+The fixture is a test input, not Authority. It uses the active neutral Java profile registration and generates its lock and projections only under a per-process detached Harness worktree. No lock or generated projection is committed.
 
 - [ ] **Step 1: Write and run the missing-fixture RED**
 
@@ -311,9 +311,9 @@ Model exactly six independent scenario vectors with the same behavioral dimensio
 
 Use neutral synthetic names and source facts. Preserve `PROJECT_TRUTH_WINS`, selected/excluded capability IDs, immutable read-only source inputs, and all business execution decisions as `DENY`. The Java framework contributes exactly 45 resources; the existing internal architecture-review Skill contributes one additional read-only install action.
 
-- [ ] **Step 3: Materialize a temporary Harness root and one explicit session**
+- [ ] **Step 3: Materialize a detached temporary Harness worktree and one explicit session**
 
-Follow the repository-local fixture pattern from `tests/test_neutral_integration_fixture.py`: copy only the required `core`, `design`, and `runtime` roots plus the new source/integration fixture into `tmp_path_factory` storage so the integration stays inside its Harness root.
+Resolve the Git common repository root, verify its canonical `.worktrees/` directory is ignored, and create a uniquely named detached worktree there from the current candidate. This is required because managed toolchain binding/cache identity is anchored to the Git common root; do not copy the Maven cache or create a non-Git `tmp_path` Harness. Copy only the test fixture overlay into the detached worktree so the integration remains inside its Harness root. On teardown, remove the exact test-owned integration, generated projection, and lock paths, verify the worktree is clean, then remove that exact worktree without `--force`.
 
 Within one module-scoped setup:
 

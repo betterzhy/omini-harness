@@ -179,12 +179,17 @@ Add a committed, test-only fixture at
 - no copied Pay lock, Pay projection, Pay repository locator, Pay Git identity,
   or claim that the fixture is Pay Authority.
 
-The benchmark test copies the minimal Harness roots and this fixture into a
-temporary directory. In one explicit `CapabilityVerificationSession`, it builds
-the current lock and CODEX integration projection, executes the six scenario
-nodes, checks freshness, and performs one install dry-run. Lock/projection outputs
-are runtime evidence in the temporary directory; they are never committed as a
-second source of truth.
+The benchmark test creates a short-lived detached Git worktree under the
+repository's canonical `.worktrees/` root and copies only this fixture overlay
+into it. A plain `tmp_path` copy is invalid because managed toolchain bindings are
+anchored to the Git common root; copying the Maven cache would be both expensive
+and a second mutable identity surface. The detached worktree shares the existing
+verified managed cache without copying it. In one explicit
+`CapabilityVerificationSession`, the benchmark builds the current lock and CODEX
+integration projection, executes the six scenario nodes, checks freshness, and
+performs one install dry-run. Lock/projection outputs are runtime evidence in the
+temporary worktree; they are removed with that exact test-owned worktree and are
+never committed as a second source of truth.
 
 The seven stable acceptance nodes are:
 

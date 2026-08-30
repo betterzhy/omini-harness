@@ -7,6 +7,7 @@ import platform
 import signal
 import shlex
 import shutil
+import stat
 import subprocess
 import time
 from copy import deepcopy
@@ -313,6 +314,8 @@ def _managed_profile_harness(
     mutate_profile_during_gate: bool = False,
     scratch_record: Path | None = None,
     gate_outcome: str = "success",
+    scratch_replacement: str | None = None,
+    scratch_replacement_target: Path | None = None,
 ) -> tuple[Path, dict[str, Any]]:
     root = tmp_path / "harness"
     root.mkdir()
@@ -506,6 +509,28 @@ def _managed_profile_harness(
         lines.append("/bin/sleep 60")
     elif gate_outcome != "success":
         raise ValueError(f"unsupported test Gate outcome: {gate_outcome}")
+    if scratch_replacement == "directory":
+        lines.extend(
+            [
+                '/bin/mv "$TMPDIR" "$TMPDIR-owned"',
+                '/bin/mkdir -m 0700 "$TMPDIR"',
+                'printf preserve > "$TMPDIR/replacement.txt"',
+            ]
+        )
+    elif scratch_replacement == "symlink":
+        if scratch_replacement_target is None:
+            raise ValueError("symlink scratch replacement requires a target")
+        lines.extend(
+            [
+                '/bin/mv "$TMPDIR" "$TMPDIR-owned"',
+                (
+                    f'/bin/ln -s {shlex.quote(str(scratch_replacement_target))} '
+                    '"$TMPDIR"'
+                ),
+            ]
+        )
+    elif scratch_replacement is not None:
+        raise ValueError(f"unsupported scratch replacement: {scratch_replacement}")
     validator = source / "scripts/verify-capability-pack"
     validator.write_text("\n".join(lines) + "\n", encoding="utf-8")
     validator.chmod(0o755)
@@ -535,6 +560,17 @@ def _assert_private_gate_scratch_cleaned(record: Path) -> Path:
     assert mode == "700"
     assert not scratch.exists()
     return scratch
+
+
+def _macos_acl_entries(path: Path) -> list[str]:
+    completed = subprocess.run(
+        ["/bin/ls", "-lde", str(path)],
+        check=True,
+        capture_output=True,
+        text=True,
+        env={"PATH": "/usr/bin:/bin", "LANG": "C", "LC_ALL": "C"},
+    )
+    return completed.stdout.splitlines()[1:]
 
 
 def _replace(path: Path, old: str, new: str) -> None:
@@ -902,6 +938,103 @@ def test_managed_profile_candidate_gate_cleans_private_scratch_after_timeout(
         get_registered_capability_pack(root, CAPABILITY_ID)
 
     _assert_private_gate_scratch_cleaned(record)
+
+
+@pytest.mark.parametrize("replacement", ["directory", "symlink"])
+def test_managed_profile_candidate_gate_preserves_scratch_path_replacement(
+    tmp_path: Path,
+    replacement: str,
+):
+    record = tmp_path / "gate-scratch.txt"
+    replacement_target = tmp_path / "replacement-target"
+    replacement_target.mkdir()
+    marker = replacement_target / "unrelated.txt"
+    marker.write_text("preserve", encoding="utf-8")
+    root, _ = _managed_profile_harness(
+        tmp_path,
+        scratch_record=record,
+        scratch_replacement=replacement,
+        scratch_replacement_target=replacement_target,
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="managed runtime scratch public identity changed",
+    ):
+        get_registered_capability_pack(root, CAPABILITY_ID)
+
+    scratch = Path(record.read_text(encoding="utf-8").splitlines()[0])
+    if replacement == "directory":
+        assert (scratch / "replacement.txt").read_text(encoding="utf-8") == (
+            "preserve"
+        )
+    else:
+        assert scratch.is_symlink()
+        assert scratch.readlink() == replacement_target
+    assert marker.read_text(encoding="utf-8") == "preserve"
+    assert not Path(f"{scratch}-owned").exists()
+
+
+@pytest.mark.skipif(platform.system() != "Darwin", reason="macOS ACL contract")
+def test_managed_runtime_scratch_neutralizes_inherited_acl_on_private_parent(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from evolution_harness import toolchain_provisioning
+
+    root, expected = _managed_profile_harness(tmp_path)
+    profile_id = expected["validator"]["toolchainProfile"]["profileId"]
+    runtime_parent = binding_path(root, profile_id).parent.parent / "runtime"
+    runtime_parent.mkdir()
+    runtime_parent.chmod(0o700)
+    subprocess.run(
+        [
+            "/bin/chmod",
+            "+a",
+            (
+                "everyone allow list,search,add_file,add_subdirectory,"
+                "delete_child,file_inherit,directory_inherit"
+            ),
+            str(runtime_parent),
+        ],
+        check=True,
+        capture_output=True,
+        env={"PATH": "/usr/bin:/bin", "LANG": "C", "LC_ALL": "C"},
+    )
+    assert _macos_acl_entries(runtime_parent)
+
+    real_mkdir = os.mkdir
+    scratch_acl_injected = False
+
+    def mkdir_with_inherited_acl(path, mode=0o777, *, dir_fd=None):
+        nonlocal scratch_acl_injected
+        result = real_mkdir(path, mode, dir_fd=dir_fd)
+        if str(path).startswith(".capability-pack-gate-"):
+            subprocess.run(
+                [
+                    "/bin/chmod",
+                    "+ai",
+                    "everyone allow readsecurity",
+                    str(runtime_parent / str(path)),
+                ],
+                check=True,
+                capture_output=True,
+                env={"PATH": "/usr/bin:/bin", "LANG": "C", "LC_ALL": "C"},
+            )
+            scratch_acl_injected = True
+        return result
+
+    monkeypatch.setattr(toolchain_provisioning.os, "mkdir", mkdir_with_inherited_acl)
+
+    with toolchain_provisioning.managed_runtime_scratch(root) as scratch:
+        assert scratch.parent == runtime_parent
+        assert stat.S_IMODE(scratch.stat().st_mode) == 0o700
+        assert stat.S_IMODE(runtime_parent.stat().st_mode) == 0o700
+        assert _macos_acl_entries(scratch) == []
+        assert _macos_acl_entries(runtime_parent) == []
+
+    assert scratch_acl_injected is True
+    assert not scratch.exists()
 
 
 def test_managed_profile_candidate_gate_rejects_binding_relocation_during_gate(

@@ -4,7 +4,6 @@ import hashlib
 import os
 import platform
 import signal
-import stat
 import subprocess
 import sys
 import tempfile
@@ -26,6 +25,7 @@ from .hashing import canonical_json_bytes, sha256_bytes
 from .schema import SchemaStore, SchemaValidationError
 from .toolchain_provisioning import (
     binding_path_entry_exists,
+    managed_runtime_scratch,
     missing_toolchain_binding_message,
 )
 from .toolchain_profile import (
@@ -616,6 +616,7 @@ def _validator_environment(
 
 @contextmanager
 def _candidate_gate_runtime_environment(
+    repository_root: Path,
     registration: Mapping[str, Any],
     verified_toolchain: VerifiedToolchain,
 ) -> Iterator[dict[str, str]]:
@@ -625,18 +626,7 @@ def _candidate_gate_runtime_environment(
         yield environment
         return
 
-    with tempfile.TemporaryDirectory(prefix="capability-pack-gate-scratch-") as directory:
-        scratch = Path(directory).resolve(strict=True)
-        scratch.chmod(0o700)
-        metadata = scratch.lstat()
-        if (
-            not scratch.is_absolute()
-            or scratch.is_symlink()
-            or not stat.S_ISDIR(metadata.st_mode)
-            or scratch.resolve(strict=True) != scratch
-            or stat.S_IMODE(metadata.st_mode) != 0o700
-        ):
-            raise ValueError("capability pack candidate Gate scratch is unavailable or unsafe")
+    with managed_runtime_scratch(repository_root) as scratch:
         runtime_environment = dict(environment)
         runtime_environment["TMPDIR"] = str(scratch)
         yield runtime_environment
@@ -1447,7 +1437,7 @@ def _materialize_verified_capability_pack(
             raise ValueError("capability pack executed validator identity mismatch")
         session._record("full_candidate_gate_count", key=key)
         with _candidate_gate_runtime_environment(
-            registration, toolchain
+            repository_root, registration, toolchain
         ) as runtime_environment:
             completed = _run_candidate_gate(
                 [_CANDIDATE_GATE_INTERPRETER, str(validator_path), commit, tree],

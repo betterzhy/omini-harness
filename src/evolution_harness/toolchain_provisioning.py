@@ -1,15 +1,19 @@
 from __future__ import annotations
 
+import ctypes
+import errno
 import hashlib
 import io
 import os
 import socket
 import stat
+import sys
 import tarfile
 import time
 import unicodedata
 import uuid
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable
@@ -42,6 +46,8 @@ _READ_FLAGS = (
     | getattr(os, "O_NOFOLLOW", 0)
     | getattr(os, "O_CLOEXEC", 0)
 )
+_ACL_TYPE_EXTENDED = 0x00000100
+_ACL_FIRST_ENTRY = 0
 
 
 def _provision_command(profile_id: str) -> str:
@@ -886,6 +892,224 @@ def _remove_tree_at(
         raise ValueError("toolchain temporary cleanup identity mismatch")
     os.rmdir(name, dir_fd=parent_descriptor)
     os.fsync(parent_descriptor)
+
+
+def _macos_acl_api() -> ctypes.CDLL:
+    api = ctypes.CDLL(None, use_errno=True)
+    api.acl_init.argtypes = [ctypes.c_int]
+    api.acl_init.restype = ctypes.c_void_p
+    api.acl_free.argtypes = [ctypes.c_void_p]
+    api.acl_free.restype = ctypes.c_int
+    api.acl_set_fd_np.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_int]
+    api.acl_set_fd_np.restype = ctypes.c_int
+    api.acl_get_fd_np.argtypes = [ctypes.c_int, ctypes.c_int]
+    api.acl_get_fd_np.restype = ctypes.c_void_p
+    api.acl_get_entry.argtypes = [
+        ctypes.c_void_p,
+        ctypes.c_int,
+        ctypes.POINTER(ctypes.c_void_p),
+    ]
+    api.acl_get_entry.restype = ctypes.c_int
+    return api
+
+
+def _neutralize_macos_acl(descriptor: int, message: str) -> None:
+    if sys.platform != "darwin":
+        return
+    api = _macos_acl_api()
+    empty_acl = api.acl_init(0)
+    if not empty_acl:
+        raise ValueError(message)
+    try:
+        ctypes.set_errno(0)
+        if api.acl_set_fd_np(descriptor, empty_acl, _ACL_TYPE_EXTENDED) != 0:
+            raise ValueError(message)
+    finally:
+        api.acl_free(empty_acl)
+
+    ctypes.set_errno(0)
+    observed_acl = api.acl_get_fd_np(descriptor, _ACL_TYPE_EXTENDED)
+    if not observed_acl:
+        if ctypes.get_errno() == errno.ENOENT:
+            return
+        raise ValueError(message)
+    try:
+        entry = ctypes.c_void_p()
+        result = api.acl_get_entry(
+            observed_acl, _ACL_FIRST_ENTRY, ctypes.byref(entry)
+        )
+        if result != 0:
+            raise ValueError(message)
+    finally:
+        api.acl_free(observed_acl)
+
+
+def _make_private_directory(descriptor: int, message: str) -> os.stat_result:
+    before = os.fstat(descriptor)
+    if not stat.S_ISDIR(before.st_mode) or before.st_uid != os.geteuid():
+        raise ValueError(message)
+    os.fchmod(descriptor, 0o700)
+    _neutralize_macos_acl(descriptor, message)
+    after = os.fstat(descriptor)
+    if (
+        not _same_inode(before, after)
+        or after.st_uid != os.geteuid()
+        or stat.S_IMODE(after.st_mode) != 0o700
+    ):
+        raise ValueError(message)
+    return after
+
+
+def _cleanup_managed_runtime_scratch(
+    parent_descriptor: int,
+    public_name: str,
+    scratch_descriptor: int,
+    expected: os.stat_result,
+) -> None:
+    public_entry = _entry_lstat(parent_descriptor, public_name)
+    public_changed = public_entry is None or not _same_inode(expected, public_entry)
+
+    _remove_directory_contents(scratch_descriptor)
+    owned_names: list[str] = []
+    for name in os.listdir(parent_descriptor):
+        current = _entry_lstat(parent_descriptor, name)
+        if current is not None and _same_inode(expected, current):
+            owned_names.append(name)
+    if len(owned_names) > 1:
+        raise ValueError("toolchain managed runtime scratch cleanup identity mismatch")
+    if owned_names:
+        _remove_tree_at(parent_descriptor, owned_names[0], expected)
+    elif os.fstat(scratch_descriptor).st_nlink != 0:
+        raise ValueError(
+            "toolchain managed runtime scratch cleanup ownership cannot be proven"
+        )
+    else:
+        os.fsync(parent_descriptor)
+
+    if public_changed:
+        raise ValueError("toolchain managed runtime scratch public identity changed")
+
+
+@contextmanager
+def managed_runtime_scratch(repository_root: Path) -> Iterator[Path]:
+    managed_cache = binding_path(
+        repository_root, "capability-pack-managed-runtime-scratch"
+    ).parent.parent
+    common_root = managed_cache.parents[1]
+    common_root_parts = _absolute_parts(
+        common_root, "toolchain managed runtime root is unavailable or unsafe"
+    )
+    filesystem_root_descriptor = os.open("/", _DIRECTORY_FLAGS)
+    common_root_descriptor = -1
+    runtime_parent_descriptor = -1
+    scratch_descriptor = -1
+    scratch_identity: os.stat_result | None = None
+    scratch_created = False
+    scratch_name = f".capability-pack-gate-{uuid.uuid4().hex}"
+    try:
+        common_root_descriptor = _open_relative_directory(
+            filesystem_root_descriptor,
+            common_root_parts,
+            create=False,
+            message="toolchain managed runtime root is unavailable or unsafe",
+        )
+        runtime_parent_parts = (
+            *managed_cache.relative_to(common_root).parts,
+            "runtime",
+        )
+        runtime_parent_descriptor = _open_relative_directory(
+            common_root_descriptor,
+            runtime_parent_parts,
+            create=True,
+            message="toolchain managed runtime parent is unavailable or unsafe",
+        )
+        _make_private_directory(
+            runtime_parent_descriptor,
+            "toolchain managed runtime parent is unavailable or unsafe",
+        )
+        os.mkdir(scratch_name, 0o700, dir_fd=runtime_parent_descriptor)
+        scratch_created = True
+        scratch_identity = os.stat(
+            scratch_name,
+            dir_fd=runtime_parent_descriptor,
+            follow_symlinks=False,
+        )
+        if not stat.S_ISDIR(scratch_identity.st_mode):
+            raise ValueError(
+                "toolchain managed runtime scratch is unavailable or unsafe"
+            )
+        os.fsync(runtime_parent_descriptor)
+        scratch_descriptor = os.open(
+            scratch_name, _DIRECTORY_FLAGS, dir_fd=runtime_parent_descriptor
+        )
+        if not _same_inode(scratch_identity, os.fstat(scratch_descriptor)):
+            raise ValueError(
+                "toolchain managed runtime scratch public identity changed"
+            )
+        scratch_identity = _make_private_directory(
+            scratch_descriptor,
+            "toolchain managed runtime scratch is unavailable or unsafe",
+        )
+        _require_pinned_directory_at(
+            filesystem_root_descriptor,
+            common_root_parts,
+            common_root_descriptor,
+            "toolchain managed runtime root identity changed",
+        )
+        _require_pinned_directory_at(
+            common_root_descriptor,
+            runtime_parent_parts,
+            runtime_parent_descriptor,
+            "toolchain managed runtime parent identity changed",
+        )
+        _require_pinned_directory_at(
+            runtime_parent_descriptor,
+            (scratch_name,),
+            scratch_descriptor,
+            "toolchain managed runtime scratch public identity changed",
+        )
+        yield managed_cache / "runtime" / scratch_name
+    finally:
+        try:
+            if (
+                runtime_parent_descriptor >= 0
+                and scratch_descriptor >= 0
+                and scratch_identity is not None
+            ):
+                _cleanup_managed_runtime_scratch(
+                    runtime_parent_descriptor,
+                    scratch_name,
+                    scratch_descriptor,
+                    scratch_identity,
+                )
+            elif (
+                runtime_parent_descriptor >= 0
+                and scratch_created
+                and scratch_identity is not None
+            ):
+                current = _entry_lstat(runtime_parent_descriptor, scratch_name)
+                if current is not None and _same_inode(scratch_identity, current):
+                    _remove_tree_at(
+                        runtime_parent_descriptor,
+                        scratch_name,
+                        scratch_identity,
+                    )
+                elif current is not None:
+                    raise ValueError(
+                        "toolchain managed runtime scratch public identity changed"
+                    )
+                else:
+                    raise ValueError(
+                        "toolchain managed runtime scratch cleanup ownership cannot be proven"
+                    )
+        finally:
+            if scratch_descriptor >= 0:
+                os.close(scratch_descriptor)
+            if runtime_parent_descriptor >= 0:
+                os.close(runtime_parent_descriptor)
+            if common_root_descriptor >= 0:
+                os.close(common_root_descriptor)
+            os.close(filesystem_root_descriptor)
 
 
 def _binding_record(

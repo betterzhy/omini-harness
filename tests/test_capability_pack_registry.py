@@ -18,6 +18,7 @@ import yaml
 
 from evolution_harness import capability_pack_registry
 from evolution_harness.capability_pack_registry import (
+    _canonical_registry_entry,
     _registration_fingerprint,
     build_capability_pack_registry,
     get_registered_capability_pack,
@@ -38,6 +39,11 @@ JAVA_CAPABILITY_ID = "framework:java:java-engineering-standard"
 JAVA_REGISTRATION_ID = "pack:java-engineering-standard"
 JAVA_SOURCE_COMMIT = "01d0e7d15ef9f6aa7814b0b001fa0b7c2c30e882"
 JAVA_SOURCE_TREE = "4bfc51d75c9e01e585db4cc073f952043ea01393"
+PROFILE_ID = "toolchain-profile:java-engineering-standard:darwin-arm64:v1"
+PROFILE_DIGEST = "sha256:c852142343ea97aef6d3a555e5500ecb633baf1a23d846d7bbe72a8bcf5e4490"
+REGISTRATION_FINGERPRINT = (
+    "sha256:cd5bbf5e763b38c96fccbf4c5a9357497c82e10fbf2272e4693fbcd2f63a708b"
+)
 
 
 def _git(repository: Path, *arguments: str) -> str:
@@ -709,15 +715,32 @@ def test_registration_fingerprint_binds_harness_declared_manifest(tmp_path: Path
 
 
 def test_pack_owner_preserves_canonical_java_registration_fingerprint_bytes():
+    registration = _java_registration()
+
+    assert _registration_fingerprint(registration) == REGISTRATION_FINGERPRINT
+
+
+def _java_registration() -> dict[str, Any]:
     root = Path(__file__).parents[1]
-    registration = next(
+    return next(
         item
         for item in load_capability_pack_registrations(root)
         if item["registrationId"] == JAVA_REGISTRATION_ID
     )
 
-    assert _registration_fingerprint(registration) == (
-        "sha256:5257755a93fafa35f7cb40fcdcd0a50aaf829ec66848e50c8c3e5db9a879e92b"
+
+def test_java_registration_uses_locator_free_managed_profile():
+    registration = _java_registration()
+    assert registration["validator"]["environmentContract"] == (
+        "MANAGED_TOOLCHAIN_PROFILE"
+    )
+    assert registration["validator"]["toolchainProfile"] == {
+        "profileId": PROFILE_ID,
+        "profileDigest": PROFILE_DIGEST,
+    }
+    assert "toolchain" not in registration["validator"]
+    assert b"ChatGPT.app" not in canonical_json_bytes(
+        _canonical_registry_entry(registration)
     )
 
 

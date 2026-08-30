@@ -1,6 +1,6 @@
 schemaVersion: capability-lock/v2
 project: java-engineering-standard-registration-fixture
-sourceHarnessRevision: content-sha256:a025abffa19e91c778ead415ecc15e61b07bc4d3cb1599f2ff45505404a9a45a
+sourceHarnessRevision: content-sha256:5dca53baa96b90b7786f9d1546d191d60e5c2dfd73a734c91fd9367f02ac366b
 disabledCapabilities: []
 capabilities:
 - capabilityId: framework:java:java-engineering-standard
@@ -14,36 +14,14 @@ capabilities:
   validatorIdentity:
     relativePath: scripts/verify-capability-pack
     sha256: sha256:5bd70fd85092be6424410a42c0f0a1330820cc3d7d36bc1ee0e948958e54ee01
-    environmentContract: REGISTERED_TOOLCHAIN_OFFLINE_CACHE
-    toolchain:
-      ruby:
-        absolutePath: /opt/homebrew/bin/ruby
-        sha256: sha256:4694e9689687f3c2d30339c3d444a7c3f3eb39d68c7e1d9e37194ece9fe15512
-      rg:
-        absolutePath: /Applications/ChatGPT.app/Contents/Resources/rg
-        sha256: sha256:83761933102235b0932142806cd2f56f76f2b02721078549ffa64866b165ceaf
-      java:
-        absolutePath: /Library/Java/JavaVirtualMachines/temurin-21.jdk/Contents/Home/bin/java
-        sha256: sha256:1069d726eae63d510d2983a2a4c7869f14db200605685c98117d9a27aaa5270f
-      javac:
-        absolutePath: /Library/Java/JavaVirtualMachines/temurin-21.jdk/Contents/Home/bin/javac
-        sha256: sha256:68411beb17069d4a26f54fee148c2540251f42368f991d80a8087dcfa4c90a39
-      mvn:
-        absolutePath: /Users/yuzhuangzhuang/Projects/omini-harness/.worktrees/.capability-pack-cache/java-engineering-standard/home/.m2/wrapper/dists/apache-maven-3.9.16/56ba1f9f/bin/mvn
-        sha256: sha256:f9381d0cb98abaaf9592dae421eddc497e84ed9bfb723b84c111d1350863c3a2
-      javaHome:
-        absolutePath: /Library/Java/JavaVirtualMachines/temurin-21.jdk/Contents/Home
-        sha256: sha256:a30ae0a3178be8aa787ecdb850d150f529e811e9b712c3bfcdbdfc2fdf91fd90
-      mavenHome:
-        absolutePath: /Users/yuzhuangzhuang/Projects/omini-harness/.worktrees/.capability-pack-cache/java-engineering-standard/home/.m2/wrapper/dists/apache-maven-3.9.16/56ba1f9f
-        sha256: sha256:5447e4224f32bb94d26420a62ee18a39ccef3b2dfe62c7739c36c313991c2286
-      mavenRepository:
-        absolutePath: /Users/yuzhuangzhuang/Projects/omini-harness/.worktrees/.capability-pack-cache/java-engineering-standard/home/.m2/repository
-        sha256: sha256:5187065b1bb4bf7d0a139cc97b3fb19213ed3ee713a15d83b525760ed3d520fe
+    environmentContract: MANAGED_TOOLCHAIN_PROFILE
+    toolchainProfile:
+      profileId: toolchain-profile:java-engineering-standard:darwin-arm64:v1
+      profileDigest: sha256:c852142343ea97aef6d3a555e5500ecb633baf1a23d846d7bbe72a8bcf5e4490
     gitHistoryContract: CANDIDATE_PARENT_TREE
     timeoutSeconds: 600
-  registrationFingerprint: sha256:5257755a93fafa35f7cb40fcdcd0a50aaf829ec66848e50c8c3e5db9a879e92b
-  sourceHarnessRevision: content-sha256:a025abffa19e91c778ead415ecc15e61b07bc4d3cb1599f2ff45505404a9a45a
+  registrationFingerprint: sha256:cd5bbf5e763b38c96fccbf4c5a9357497c82e10fbf2272e4693fbcd2f63a708b
+  sourceHarnessRevision: content-sha256:5dca53baa96b90b7786f9d1546d191d60e5c2dfd73a734c91fd9367f02ac366b
   resolvedBecause:
   - explicit-binding
-lockFingerprint: sha256:72b8083dfd7f10f4dfad87dae4106c8f37d27cec5a27209ed9c653cf2ed35568
+lockFingerprint: sha256:90cf64c1425e75240e1225bea8e1d1f574420d06ee7bff9955e794ea6c20fb73

@@ -1,5 +1,5 @@
 {
-  "capabilityLockFingerprint": "sha256:72b8083dfd7f10f4dfad87dae4106c8f37d27cec5a27209ed9c653cf2ed35568",
+  "capabilityLockFingerprint": "sha256:90cf64c1425e75240e1225bea8e1d1f574420d06ee7bff9955e794ea6c20fb73",
   "generatedFiles": [
     {
       "path": "discussion-contract.md",
@@ -11,11 +11,11 @@
     },
     {
       "path": "resolved-context.json",
-      "sha256": "0bf9bd0ab93098bdd6002ad25876ad5af3b77a6be3ec734e12dd46a785df4e1d"
+      "sha256": "e936d4f8160e2df49c6f1053a95a218b5881b5962e6c14ef0d1f27bf386a6a20"
     },
     {
       "path": "resolved-task-context.md",
-      "sha256": "96ab7df8e32136a2fc81c96e047f33d6a79dddf056a48418e2b148742ff69a5e"
+      "sha256": "2b2a168613e40418a09f71f9bf80f791d36cd723437dcd0667a0e67fc19f7282"
     },
     {
       "path": "skills/java-engineering-standard/AGENTS.md",
@@ -204,7 +204,7 @@
       "id": "framework:java:java-engineering-standard",
       "path": "skills/java-engineering-standard/SKILL.md",
       "projectionContract": "SELF_CONTAINED_SKILL_BUNDLE",
-      "registrationFingerprint": "sha256:5257755a93fafa35f7cb40fcdcd0a50aaf829ec66848e50c8c3e5db9a879e92b",
+      "registrationFingerprint": "sha256:cd5bbf5e763b38c96fccbf4c5a9357497c82e10fbf2272e4693fbcd2f63a708b",
       "resolvedContentDigest": "sha256:4e5920ddd604d7905647af94eb460f7ab20124fb96ffdea73f50ed6efd5a4581",
       "resourceFiles": [
         {
@@ -442,44 +442,14 @@
       "sourceSkillPath": "skills/java-engineering-standard/SKILL.md",
       "sourceTree": "4bfc51d75c9e01e585db4cc073f952043ea01393",
       "validatorIdentity": {
-        "environmentContract": "REGISTERED_TOOLCHAIN_OFFLINE_CACHE",
+        "environmentContract": "MANAGED_TOOLCHAIN_PROFILE",
         "gitHistoryContract": "CANDIDATE_PARENT_TREE",
         "relativePath": "scripts/verify-capability-pack",
         "sha256": "sha256:5bd70fd85092be6424410a42c0f0a1330820cc3d7d36bc1ee0e948958e54ee01",
         "timeoutSeconds": 600,
-        "toolchain": {
-          "java": {
-            "absolutePath": "/Library/Java/JavaVirtualMachines/temurin-21.jdk/Contents/Home/bin/java",
-            "sha256": "sha256:1069d726eae63d510d2983a2a4c7869f14db200605685c98117d9a27aaa5270f"
-          },
-          "javaHome": {
-            "absolutePath": "/Library/Java/JavaVirtualMachines/temurin-21.jdk/Contents/Home",
-            "sha256": "sha256:a30ae0a3178be8aa787ecdb850d150f529e811e9b712c3bfcdbdfc2fdf91fd90"
-          },
-          "javac": {
-            "absolutePath": "/Library/Java/JavaVirtualMachines/temurin-21.jdk/Contents/Home/bin/javac",
-            "sha256": "sha256:68411beb17069d4a26f54fee148c2540251f42368f991d80a8087dcfa4c90a39"
-          },
-          "mavenHome": {
-            "absolutePath": "/Users/yuzhuangzhuang/Projects/omini-harness/.worktrees/.capability-pack-cache/java-engineering-standard/home/.m2/wrapper/dists/apache-maven-3.9.16/56ba1f9f",
-            "sha256": "sha256:5447e4224f32bb94d26420a62ee18a39ccef3b2dfe62c7739c36c313991c2286"
-          },
-          "mavenRepository": {
-            "absolutePath": "/Users/yuzhuangzhuang/Projects/omini-harness/.worktrees/.capability-pack-cache/java-engineering-standard/home/.m2/repository",
-            "sha256": "sha256:5187065b1bb4bf7d0a139cc97b3fb19213ed3ee713a15d83b525760ed3d520fe"
-          },
-          "mvn": {
-            "absolutePath": "/Users/yuzhuangzhuang/Projects/omini-harness/.worktrees/.capability-pack-cache/java-engineering-standard/home/.m2/wrapper/dists/apache-maven-3.9.16/56ba1f9f/bin/mvn",
-            "sha256": "sha256:f9381d0cb98abaaf9592dae421eddc497e84ed9bfb723b84c111d1350863c3a2"
-          },
-          "rg": {
-            "absolutePath": "/Applications/ChatGPT.app/Contents/Resources/rg",
-            "sha256": "sha256:83761933102235b0932142806cd2f56f76f2b02721078549ffa64866b165ceaf"
-          },
-          "ruby": {
-            "absolutePath": "/opt/homebrew/bin/ruby",
-            "sha256": "sha256:4694e9689687f3c2d30339c3d444a7c3f3eb39d68c7e1d9e37194ece9fe15512"
-          }
+        "toolchainProfile": {
+          "profileDigest": "sha256:c852142343ea97aef6d3a555e5500ecb633baf1a23d846d7bbe72a8bcf5e4490",
+          "profileId": "toolchain-profile:java-engineering-standard:darwin-arm64:v1"
         }
       },
       "version": "0.4.0"
@@ -498,55 +468,25 @@
       "contentHash": "4e5920ddd604d7905647af94eb460f7ab20124fb96ffdea73f50ed6efd5a4581",
       "id": "framework:java:java-engineering-standard",
       "kind": "FRAMEWORK",
-      "registrationFingerprint": "sha256:5257755a93fafa35f7cb40fcdcd0a50aaf829ec66848e50c8c3e5db9a879e92b",
+      "registrationFingerprint": "sha256:cd5bbf5e763b38c96fccbf4c5a9357497c82e10fbf2272e4693fbcd2f63a708b",
       "resolvedContentDigest": "sha256:4e5920ddd604d7905647af94eb460f7ab20124fb96ffdea73f50ed6efd5a4581",
       "sourceCommit": "01d0e7d15ef9f6aa7814b0b001fa0b7c2c30e882",
       "sourceKind": "EXTERNAL_CAPABILITY_PACK",
       "sourceRegistrationId": "pack:java-engineering-standard",
       "sourceTree": "4bfc51d75c9e01e585db4cc073f952043ea01393",
       "validatorIdentity": {
-        "environmentContract": "REGISTERED_TOOLCHAIN_OFFLINE_CACHE",
+        "environmentContract": "MANAGED_TOOLCHAIN_PROFILE",
         "gitHistoryContract": "CANDIDATE_PARENT_TREE",
         "relativePath": "scripts/verify-capability-pack",
         "sha256": "sha256:5bd70fd85092be6424410a42c0f0a1330820cc3d7d36bc1ee0e948958e54ee01",
         "timeoutSeconds": 600,
-        "toolchain": {
-          "java": {
-            "absolutePath": "/Library/Java/JavaVirtualMachines/temurin-21.jdk/Contents/Home/bin/java",
-            "sha256": "sha256:1069d726eae63d510d2983a2a4c7869f14db200605685c98117d9a27aaa5270f"
-          },
-          "javaHome": {
-            "absolutePath": "/Library/Java/JavaVirtualMachines/temurin-21.jdk/Contents/Home",
-            "sha256": "sha256:a30ae0a3178be8aa787ecdb850d150f529e811e9b712c3bfcdbdfc2fdf91fd90"
-          },
-          "javac": {
-            "absolutePath": "/Library/Java/JavaVirtualMachines/temurin-21.jdk/Contents/Home/bin/javac",
-            "sha256": "sha256:68411beb17069d4a26f54fee148c2540251f42368f991d80a8087dcfa4c90a39"
-          },
-          "mavenHome": {
-            "absolutePath": "/Users/yuzhuangzhuang/Projects/omini-harness/.worktrees/.capability-pack-cache/java-engineering-standard/home/.m2/wrapper/dists/apache-maven-3.9.16/56ba1f9f",
-            "sha256": "sha256:5447e4224f32bb94d26420a62ee18a39ccef3b2dfe62c7739c36c313991c2286"
-          },
-          "mavenRepository": {
-            "absolutePath": "/Users/yuzhuangzhuang/Projects/omini-harness/.worktrees/.capability-pack-cache/java-engineering-standard/home/.m2/repository",
-            "sha256": "sha256:5187065b1bb4bf7d0a139cc97b3fb19213ed3ee713a15d83b525760ed3d520fe"
-          },
-          "mvn": {
-            "absolutePath": "/Users/yuzhuangzhuang/Projects/omini-harness/.worktrees/.capability-pack-cache/java-engineering-standard/home/.m2/wrapper/dists/apache-maven-3.9.16/56ba1f9f/bin/mvn",
-            "sha256": "sha256:f9381d0cb98abaaf9592dae421eddc497e84ed9bfb723b84c111d1350863c3a2"
-          },
-          "rg": {
-            "absolutePath": "/Applications/ChatGPT.app/Contents/Resources/rg",
-            "sha256": "sha256:83761933102235b0932142806cd2f56f76f2b02721078549ffa64866b165ceaf"
-          },
-          "ruby": {
-            "absolutePath": "/opt/homebrew/bin/ruby",
-            "sha256": "sha256:4694e9689687f3c2d30339c3d444a7c3f3eb39d68c7e1d9e37194ece9fe15512"
-          }
+        "toolchainProfile": {
+          "profileDigest": "sha256:c852142343ea97aef6d3a555e5500ecb633baf1a23d846d7bbe72a8bcf5e4490",
+          "profileId": "toolchain-profile:java-engineering-standard:darwin-arm64:v1"
         }
       },
       "version": "0.4.0"
     }
   ],
-  "sourceResolutionId": "resolution:a31a2e1197349eeb389606c3"
+  "sourceResolutionId": "resolution:98d8d78cc3019c7cf33696a1"
 }

@@ -378,7 +378,11 @@ def test_external_pack_lock_rejects_registry_digest_or_revision_drift(tmp_path: 
 def test_external_pack_lock_rejects_copied_registration_identity_drift(
     tmp_path: Path, field: str, value: str
 ):
-    from evolution_harness.project import build_capability_lock, verify_capability_lock
+    from evolution_harness.project import (
+        _ExternalCapabilityLockRegistrationDrift,
+        build_capability_lock,
+        verify_capability_lock,
+    )
 
     root, project = _project_selecting_registered_pack(tmp_path)
     build_capability_lock(root, project, write=True)
@@ -391,12 +395,19 @@ def test_external_pack_lock_rejects_copied_registration_identity_drift(
     _resign_v2_lock(lock)
     lock_path.write_text(yaml.safe_dump(lock, sort_keys=False), encoding="utf-8")
 
-    with pytest.raises(ValueError, match="external capability pack lock registration drift"):
+    with pytest.raises(_ExternalCapabilityLockRegistrationDrift) as exc_info:
         verify_capability_lock(root, project)
+    assert str(exc_info.value) == (
+        f"external capability pack lock registration drift: {EXTERNAL_CAPABILITY_ID}"
+    )
 
 
 def test_external_pack_lock_rejects_validator_identity_drift(tmp_path: Path):
-    from evolution_harness.project import build_capability_lock, verify_capability_lock
+    from evolution_harness.project import (
+        _ExternalCapabilityLockRegistrationDrift,
+        build_capability_lock,
+        verify_capability_lock,
+    )
 
     root, project = _project_selecting_registered_pack(tmp_path)
     build_capability_lock(root, project, write=True)
@@ -409,8 +420,58 @@ def test_external_pack_lock_rejects_validator_identity_drift(tmp_path: Path):
     _resign_v2_lock(lock)
     lock_path.write_text(yaml.safe_dump(lock, sort_keys=False), encoding="utf-8")
 
-    with pytest.raises(ValueError, match="external capability pack lock registration drift"):
+    with pytest.raises(_ExternalCapabilityLockRegistrationDrift) as exc_info:
         verify_capability_lock(root, project)
+    assert str(exc_info.value) == (
+        f"external capability pack lock registration drift: {EXTERNAL_CAPABILITY_ID}"
+    )
+
+
+@pytest.mark.parametrize(
+    "failure_message",
+    [
+        "capability pack candidate Gate failed",
+        "capability pack validator toolchain identity mismatch",
+        "capability pack source commit does not match checkout HEAD",
+    ],
+)
+def test_external_pack_verification_failure_is_not_registration_drift(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure_message: str,
+):
+    import evolution_harness.project as project_module
+    from evolution_harness.project import (
+        _ExternalCapabilityLockRegistrationDrift,
+        build_capability_lock,
+        verify_capability_lock,
+    )
+
+    root, project = _project_selecting_registered_pack(tmp_path)
+    build_capability_lock(root, project, write=True)
+    original_failure = ValueError(failure_message)
+
+    def fail_pack_verification(*args, **kwargs):
+        del args, kwargs
+        raise original_failure
+
+    monkeypatch.setattr(
+        project_module,
+        "_get_verified_capability_pack",
+        fail_pack_verification,
+    )
+
+    with pytest.raises(ValueError) as exc_info:
+        verify_capability_lock(root, project)
+    assert str(exc_info.value) == (
+        f"external capability pack lock registration drift: {EXTERNAL_CAPABILITY_ID}"
+    )
+    assert type(exc_info.value) is ValueError
+    assert not isinstance(
+        exc_info.value,
+        _ExternalCapabilityLockRegistrationDrift,
+    )
+    assert exc_info.value.__cause__ is original_failure
 
 
 def test_external_pack_lock_rejects_changed_resolved_reasons(tmp_path: Path):

@@ -23,6 +23,14 @@ from .registry import build_design_registry
 from .schema import SchemaStore
 
 
+class _ExternalCapabilityLockRegistrationDrift(ValueError):
+    def __init__(self, capability_id: str) -> None:
+        super().__init__(
+            f"external capability pack lock registration drift: {capability_id}"
+        )
+        self.capability_id = capability_id
+
+
 def _freeze(value: Any) -> Any:
     if isinstance(value, VerifiedCapabilityPack):
         return value
@@ -557,9 +565,7 @@ def _verify_capability_lock_context(
     external_ids = {item["capabilityId"] for item in external_items}
     collisions = sorted(active_internal_ids & external_ids)
     if collisions:
-        raise ValueError(
-            f"external capability pack lock registration drift: {collisions[0]}"
-        )
+        raise _ExternalCapabilityLockRegistrationDrift(collisions[0])
     external_by_id: dict[str, VerifiedCapabilityPack] = {}
     for item in external_items:
         capability_id = item["capabilityId"]
@@ -583,25 +589,19 @@ def _verify_capability_lock_context(
         if item.get("sourceKind") == "EXTERNAL_CAPABILITY_PACK":
             verified_pack = external_by_id.get(capability_id)
             if verified_pack is None:
-                raise ValueError(
-                    f"external capability pack lock registration drift: {capability_id}"
-                )
+                raise _ExternalCapabilityLockRegistrationDrift(capability_id)
             expected_source = _external_lock_source(verified_pack.registration)
             actual_source = {
                 key: item[key] for key in _source_identity_keys(item)
             }
             if actual_source != expected_source:
-                raise ValueError(
-                    f"external capability pack lock registration drift: {capability_id}"
-                )
+                raise _ExternalCapabilityLockRegistrationDrift(capability_id)
             registration_copy = _thaw(verified_pack.registration)
             locator_fingerprint = _locator_bound_blob_access_fingerprint(
                 registration_copy
             )
             if locator_fingerprint != verified_pack._locator_bound_fingerprint:
-                raise ValueError(
-                    f"external capability pack lock registration drift: {capability_id}"
-                )
+                raise _ExternalCapabilityLockRegistrationDrift(capability_id)
             verified[capability_id] = _freeze(
                 {
                     **registration_copy,

@@ -174,7 +174,11 @@ def test_pay_nexus_projection_contains_byte_identical_java_bundle():
 def test_pay_nexus_real_integration_fails_closed_on_exact_registration_drift(
     pay_source: Path,
 ):
-    from evolution_harness.capability_pack_registry import CapabilityVerificationSession
+    from evolution_harness.capability_pack_registry import (
+        CapabilityVerificationSession,
+        get_registered_capability_pack,
+    )
+    from evolution_harness.project import _ExternalCapabilityLockRegistrationDrift
 
     root = Path(__file__).parents[1]
     integration = root / "integrations/pay-nexus-shadow"
@@ -183,7 +187,29 @@ def test_pay_nexus_real_integration_fails_closed_on_exact_registration_drift(
         root,
         allowed_capability_ids={CAPABILITY_ID},
     ) as session:
-        with pytest.raises(ValueError) as exc_info:
+        get_registered_capability_pack(
+            root,
+            CAPABILITY_ID,
+            verification_session=session,
+        )
+        before_scenario = session.stats
+        assert before_scenario.full_candidate_gate_count == 1
+        assert before_scenario.isolated_checkout_count == 1
+        assert before_scenario.toolchain_directory_digest_count == 6
+        assert before_scenario.verified_pack_count == 1
+        assert before_scenario.verified_lock_count == 0
+        assert before_scenario.pack_reuse_hit_count == 0
+        assert before_scenario.lock_reuse_hit_count == 0
+        assert before_scenario.source_recheck_count == 1
+        assert before_scenario.registration_recheck_count == 1
+        assert before_scenario.lock_witness_recheck_count == 0
+        assert before_scenario.active_use_lease_count == 0
+        checkout = next(iter(session._verified.values()))._checkout_root
+        assert checkout.exists()
+
+        with pytest.raises(
+            _ExternalCapabilityLockRegistrationDrift
+        ) as exc_info:
             run_integration_scenario(
                 root,
                 integration,
@@ -192,5 +218,37 @@ def test_pay_nexus_real_integration_fails_closed_on_exact_registration_drift(
                 verification_session=session,
             )
         assert str(exc_info.value) == EXPECTED_REGISTRATION_DRIFT
+        after_scenario = session.stats
+        assert (
+            after_scenario.full_candidate_gate_count,
+            after_scenario.isolated_checkout_count,
+            after_scenario.toolchain_directory_digest_count,
+            after_scenario.verified_pack_count,
+        ) == (
+            before_scenario.full_candidate_gate_count,
+            before_scenario.isolated_checkout_count,
+            before_scenario.toolchain_directory_digest_count,
+            before_scenario.verified_pack_count,
+        )
+        assert after_scenario.verified_lock_count == (
+            before_scenario.verified_lock_count
+        )
+        assert after_scenario.pack_reuse_hit_count == (
+            before_scenario.pack_reuse_hit_count + 1
+        )
+        assert after_scenario.lock_reuse_hit_count == (
+            before_scenario.lock_reuse_hit_count
+        )
+        assert after_scenario.source_recheck_count == (
+            before_scenario.source_recheck_count + 1
+        )
+        assert after_scenario.registration_recheck_count == (
+            before_scenario.registration_recheck_count + 1
+        )
+        assert after_scenario.lock_witness_recheck_count == (
+            before_scenario.lock_witness_recheck_count
+        )
+        assert after_scenario.active_use_lease_count == 0
         assert before == _git_state(pay_source)
     assert session.stats.active_use_lease_count == 0
+    assert not checkout.exists()

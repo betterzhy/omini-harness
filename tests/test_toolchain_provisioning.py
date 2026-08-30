@@ -1100,7 +1100,7 @@ def test_apply_without_archive_uses_fixed_download_with_timeout(
     assert calls == [("https://example.invalid/ripgrep.tar.gz", 30)]
     assert toolchain_status(provision_harness.root, provision_harness.profile_id)[
         "status"
-    ] == "READY"
+    ] == "VERIFIED"
 
 
 def test_download_response_over_64_mib_is_rejected(

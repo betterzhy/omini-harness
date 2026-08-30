@@ -726,6 +726,64 @@ def test_toolchain_provision_apply_uses_offline_archive(
     assert harness.published_root.is_dir()
 
 
+@pytest.mark.parametrize("output_format", ["json", "text"])
+def test_toolchain_status_reports_verified_after_full_verification(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    output_format: str,
+):
+    harness = make_provision_harness(tmp_path)
+    monkeypatch.setattr(
+        "evolution_harness.toolchain_provisioning.urlopen",
+        lambda *_args, **_kwargs: pytest.fail("network used"),
+    )
+    apply_result = main(
+        [
+            "--repository-root",
+            str(harness.root),
+            "toolchain",
+            "provision",
+            "--profile",
+            harness.profile_id,
+            "--archive",
+            str(harness.archive_path),
+            *_toolchain_bind_arguments(harness),
+            "--apply",
+            "--format",
+            "json",
+        ]
+    )
+    apply_payload = json.loads(capsys.readouterr().out)
+    assert apply_result == 0
+    assert apply_payload["data"]["apply"] is True
+
+    result = main(
+        [
+            "--repository-root",
+            str(harness.root),
+            "toolchain",
+            "status",
+            "--profile",
+            harness.profile_id,
+            "--format",
+            output_format,
+        ]
+    )
+
+    output = capsys.readouterr().out
+    if output_format == "json":
+        payload = json.loads(output)
+        assert payload["schemaVersion"] == "harness-cli/v1"
+        assert payload["command"] == "toolchain status"
+        assert payload["ok"] is True
+        status = payload["data"]["status"]
+    else:
+        status = yaml.safe_load(output)["status"]
+    assert result == 0
+    assert status == "VERIFIED"
+
+
 def test_toolchain_status_missing_binding_is_deterministic_and_offline(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

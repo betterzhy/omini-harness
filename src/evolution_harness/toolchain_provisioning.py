@@ -1294,7 +1294,7 @@ def toolchain_status(repository_root: Path, profile_id: str) -> dict[str, Any]:
             "command": command,
         }
     return {
-        "status": "READY",
+        "status": "VERIFIED",
         **identity,
         "bindingWitness": verified.binding_witness,
         "resolvedPaths": _resolved_paths(verified),

@@ -10,7 +10,7 @@
         "relativePath": {"type": "string", "minLength": 1},
         "sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
         "environmentContract": {
-          "enum": ["SANITIZED", "REGISTERED_TOOLCHAIN_OFFLINE_CACHE"]
+          "enum": ["SANITIZED", "REGISTERED_TOOLCHAIN_OFFLINE_CACHE", "MANAGED_TOOLCHAIN_PROFILE"]
         },
         "gitHistoryContract": {
           "enum": ["CANDIDATE_ONLY", "CANDIDATE_PARENT_TREE"]
@@ -34,9 +34,30 @@
             "mavenRepository": {"$ref": "#/$defs/directoryIdentity"}
           },
           "additionalProperties": false
+        },
+        "toolchainProfile": {
+          "$ref": "#/$defs/toolchainProfileIdentity"
         }
       },
-      "additionalProperties": false
+      "additionalProperties": false,
+      "oneOf": [
+        {
+          "required": ["toolchain"],
+          "not": {"required": ["toolchainProfile"]}
+        },
+        {
+          "required": ["toolchainProfile"],
+          "not": {"required": ["toolchain"]}
+        },
+        {
+          "not": {
+            "anyOf": [
+              {"required": ["toolchain"]},
+              {"required": ["toolchainProfile"]}
+            ]
+          }
+        }
+      ]
     },
     "toolIdentity": {
       "type": "object",
@@ -53,6 +74,21 @@
       "properties": {
         "absolutePath": {"type": "string", "pattern": "^/(?:[^/]+/)*[^/]+$"},
         "sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+      },
+      "additionalProperties": false
+    },
+    "toolchainProfileIdentity": {
+      "type": "object",
+      "required": ["profileId", "profileDigest"],
+      "properties": {
+        "profileId": {
+          "type": "string",
+          "pattern": "^toolchain-profile:[a-z0-9._:-]+$"
+        },
+        "profileDigest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        }
       },
       "additionalProperties": false
     },

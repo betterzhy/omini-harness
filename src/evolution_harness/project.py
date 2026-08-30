@@ -278,6 +278,15 @@ def _external_lock_source(registration: Mapping[str, Any]) -> dict[str, Any]:
             ),
             **(
                 {
+                    "toolchainProfile": _thaw(
+                        registration["validator"]["toolchainProfile"]
+                    )
+                }
+                if "toolchainProfile" in registration["validator"]
+                else {}
+            ),
+            **(
+                {
                     "gitHistoryContract": registration["validator"][
                         "gitHistoryContract"
                     ]

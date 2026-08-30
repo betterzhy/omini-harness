@@ -40,7 +40,7 @@ from .toolchain_profile import (
 _REGISTRATION_SCHEMA = "core/schemas/capability-pack-registration.schema.json"
 _MANIFEST_SCHEMA = "core/schemas/capability-pack-manifest.schema.json"
 _REGISTRY_SOURCE = "core/registries/capability-packs.yaml"
-CAPABILITY_PACK_VALIDATION_ABI = "v1"
+CAPABILITY_PACK_VALIDATION_ABI = "v2"
 _CANDIDATE_GATE_INTERPRETER = "/bin/bash"
 _GIT_ENVIRONMENT = {
     "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
@@ -1098,6 +1098,11 @@ def _canonical_registration_identity_record(
                 else {}
             ),
             **(
+                {"toolchainProfile": _thaw(validator["toolchainProfile"])}
+                if "toolchainProfile" in validator
+                else {}
+            ),
+            **(
                 {"gitHistoryContract": validator["gitHistoryContract"]}
                 if "gitHistoryContract" in validator
                 else {}
@@ -1168,7 +1173,15 @@ def _pack_verification_key(
                 "environmentContract", "SANITIZED"
             ),
             "timeoutSeconds": registration["validator"].get("timeoutSeconds", 300),
-            "toolchain": registration["validator"].get("toolchain"),
+            **(
+                {
+                    "toolchainProfile": _thaw(
+                        registration["validator"]["toolchainProfile"]
+                    )
+                }
+                if "toolchainProfile" in registration["validator"]
+                else {"toolchain": registration["validator"].get("toolchain")}
+            ),
         },
         "platform": {
             "osName": os.name,
@@ -1287,6 +1300,18 @@ def _assert_pack_source_content(
 
 def _recheck_verified_pack_witness(pack: VerifiedCapabilityPack) -> None:
     root = pack._session._repository_root
+    profile_id = pack.verified_toolchain.profile_id
+    if profile_id is not None:
+        try:
+            binding = load_toolchain_binding(root, profile_id)
+        except ValueError as exc:
+            raise ValueError(
+                "toolchain binding changed during verification session"
+            ) from exc
+        if binding.witness_digest != pack.verified_toolchain.binding_witness:
+            raise ValueError(
+                "toolchain binding changed during verification session"
+            )
     registrations = load_capability_pack_registrations(root)
     if pack.registration["status"] == "ACTIVE":
         active_matches = [

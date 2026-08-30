@@ -1,9 +1,15 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import os
+import platform
 import shutil
 import subprocess
+from copy import deepcopy
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import pytest
 import yaml
@@ -12,6 +18,453 @@ from capability_pack_test_support import retain_web_registration_fixture
 
 
 EXTERNAL_CAPABILITY_ID = "workflow:web-high-fidelity:reference-driven-visual-fidelity"
+PROFILE_CAPABILITY_ID = "skill:synthetic:profile-relocation"
+PROFILE_ID = "toolchain-profile:test:canonical-relocation:v1"
+
+
+def _profile_git(repository: Path, *arguments: str) -> str:
+    return subprocess.run(
+        ["/usr/bin/git", "-C", str(repository), *arguments],
+        check=True,
+        capture_output=True,
+        text=True,
+        env={
+            "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
+            "HOME": "/var/empty",
+            "GIT_CONFIG_GLOBAL": "/dev/null",
+            "GIT_CONFIG_NOSYSTEM": "1",
+        },
+    ).stdout.strip()
+
+
+def _profile_make_read_only(root: Path) -> None:
+    for path in sorted(root.rglob("*"), reverse=True):
+        path.chmod(0o555 if path.is_dir() or os.access(path, os.X_OK) else 0o444)
+    root.chmod(0o555)
+
+
+def _profile_binding_record(toolchain_root: Path) -> dict[str, Any]:
+    return {
+        "schemaVersion": "capability-validator-toolchain-binding/v1",
+        "profileId": PROFILE_ID,
+        "commands": {
+            "ruby": str(toolchain_root / "bin/ruby"),
+            "rg": str(toolchain_root / "bin/rg"),
+            "java": str(toolchain_root / "java/bin/java"),
+            "javac": str(toolchain_root / "java/bin/javac"),
+            "mvn": str(
+                toolchain_root
+                / "home/.m2/wrapper/dists/apache-maven/fixture/bin/mvn"
+            ),
+        },
+        "directories": {
+            "javaHome": str(toolchain_root / "java"),
+            "mavenHome": str(
+                toolchain_root / "home/.m2/wrapper/dists/apache-maven/fixture"
+            ),
+            "mavenRepository": str(toolchain_root / "home/.m2/repository"),
+        },
+    }
+
+
+@dataclass(frozen=True)
+class ProfileCanonicalOutputs:
+    registry_bytes: bytes
+    lock_bytes: bytes
+    resolution_bytes: bytes
+    projection_bytes: bytes
+    install_plan_bytes: bytes
+    projection_file_bytes: tuple[tuple[str, bytes], ...]
+    source_revision: str
+    source_digest: str
+    registration_fingerprint: str
+    lock_fingerprint: str
+    selected_capability: dict[str, Any]
+    projected_source: dict[str, Any]
+    projected_skill: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class ProfileProjectPair:
+    first_root: Path
+    second_root: Path
+    first_binding_root: Path
+    second_binding_root: Path
+    profile_digest: str
+
+    def build(self, root: Path) -> ProfileCanonicalOutputs:
+        from evolution_harness.capability_pack_registry import (
+            CapabilityVerificationSession,
+            build_capability_pack_registry,
+        )
+        from evolution_harness.generated import deterministic_json_bytes
+        from evolution_harness.hashing import canonical_json_bytes
+        from evolution_harness.install import install_projection
+        from evolution_harness.project import build_capability_lock
+        from evolution_harness.projection import build_projection_pack
+        from evolution_harness.resolver import resolve_design_context
+
+        project = root / "examples/project-fixture"
+        target = root / "install-target"
+        target.mkdir()
+        with CapabilityVerificationSession(
+            root,
+            allowed_capability_ids={PROFILE_CAPABILITY_ID},
+        ) as session:
+            registry = build_capability_pack_registry(
+                root, write=False, verification_session=session
+            )
+            lock = build_capability_lock(
+                root, project, write=True, verification_session=session
+            )
+            resolved = resolve_design_context(
+                root,
+                project,
+                intent="architecture-review",
+                topic="resolver-mvp",
+                requested_output="review findings",
+                runtime="CODEX",
+                verification_session=session,
+            )
+            manifest = build_projection_pack(
+                root,
+                project,
+                resolved,
+                runtime="CODEX",
+                verification_session=session,
+            )
+            pack = root / "generated/projections/codex/project-fixture"
+            install_plan = install_projection(
+                root,
+                pack,
+                target,
+                verification_session=session,
+            )
+
+        locator_free_registry = deepcopy(registry)
+        for entry in locator_free_registry["entries"]:
+            entry["source"].pop("repositoryPath")
+        external_lock = next(
+            item
+            for item in lock["capabilities"]
+            if item["capabilityId"] == PROFILE_CAPABILITY_ID
+        )
+        selected = next(
+            item
+            for item in resolved["selectedCapabilities"]
+            if item["id"] == PROFILE_CAPABILITY_ID
+        )
+        projected_source = next(
+            item
+            for item in manifest["sourceCapabilities"]
+            if item["id"] == PROFILE_CAPABILITY_ID
+        )
+        projected_skill = next(
+            item
+            for item in manifest["generatedSkills"]
+            if item["id"] == PROFILE_CAPABILITY_ID
+        )
+        projection_files = tuple(
+            (path.relative_to(pack).as_posix(), path.read_bytes())
+            for path in sorted(pack.rglob("*"))
+            if path.is_file()
+        )
+        return ProfileCanonicalOutputs(
+            registry_bytes=canonical_json_bytes(locator_free_registry),
+            lock_bytes=canonical_json_bytes(lock),
+            resolution_bytes=canonical_json_bytes(resolved),
+            projection_bytes=deterministic_json_bytes(manifest),
+            install_plan_bytes=canonical_json_bytes(install_plan),
+            projection_file_bytes=projection_files,
+            source_revision=registry["sourceRevision"],
+            source_digest=external_lock["resolvedContentDigest"],
+            registration_fingerprint=external_lock["registrationFingerprint"],
+            lock_fingerprint=lock["lockFingerprint"],
+            selected_capability=selected,
+            projected_source=projected_source,
+            projected_skill=projected_skill,
+        )
+
+
+def _create_profile_pack_source(base: Path) -> tuple[Path, dict[str, Any]]:
+    from evolution_harness.capability_pack_registry import (
+        _digest_entries,
+        _selected_entries,
+        _tree_entries,
+    )
+
+    source = base / "profile-pack-source"
+    (source / "docs/history").mkdir(parents=True)
+    (source / "skills/profile-relocation").mkdir(parents=True)
+    (source / "scripts").mkdir()
+    manifest = {
+        "schemaVersion": "capability-pack/v1",
+        "projectPackName": "profile-pack-source",
+        "skillName": "profile-relocation",
+        "displayName": "Synthetic Profile Relocation",
+        "capabilityId": PROFILE_CAPABILITY_ID,
+        "version": "1.0.0",
+        "contentDigestContract": "capability-pack-content/v1",
+        "contentRoots": ["docs", "skills"],
+        "excludedContentRoots": ["docs/history"],
+        "skillPath": "skills/profile-relocation/SKILL.md",
+        "validator": {
+            "kind": "FIXED_CANDIDATE_GATE",
+            "path": "scripts/verify-capability-pack",
+            "argumentsContract": "CANDIDATE_COMMIT_TREE",
+        },
+    }
+    (source / "VERSION").write_text("1.0.0\n", encoding="utf-8")
+    (source / "docs/evidence.txt").write_text(
+        "canonical profile evidence\n", encoding="utf-8"
+    )
+    (source / "docs/history/ignored.txt").write_text("ignored\n", encoding="utf-8")
+    (source / "skills/profile-relocation/SKILL.md").write_text(
+        "---\nname: profile-relocation\ndescription: Synthetic profile relocation.\n---\n\n"
+        "# Profile relocation\n",
+        encoding="utf-8",
+    )
+    validator = source / "scripts/verify-capability-pack"
+    validator.write_bytes(b"#!/bin/sh\nexit 0\n")
+    validator.chmod(0o755)
+    _profile_git(source, "init", "-q")
+    _profile_git(source, "config", "user.name", "Profile Pair")
+    _profile_git(source, "config", "user.email", "profile-pair@example.invalid")
+    _profile_git(source, "add", "-A")
+    _profile_git(source, "commit", "-qm", "test: profile relocation pack")
+    commit = _profile_git(source, "rev-parse", "HEAD")
+    tree = _profile_git(source, "rev-parse", "HEAD^{tree}")
+    registration = {
+        "schemaVersion": "capability-pack-registration/v1",
+        "registrationId": "pack:profile-relocation",
+        "capabilityId": PROFILE_CAPABILITY_ID,
+        "packVersion": "1.0.0",
+        "status": "ACTIVE",
+        "distributionStatus": "LOCAL_ONLY",
+        "source": {
+            "kind": "LOCAL_GIT",
+            "repositoryId": "profile-pack-source",
+            "repositoryPath": str(source),
+            "commit": commit,
+            "tree": tree,
+        },
+        "contentDeclaration": {
+            "kind": "HARNESS_DECLARED_MANIFEST",
+            "manifest": manifest,
+            "projectionContract": "SELF_CONTAINED_SKILL_BUNDLE",
+        },
+        "resolvedContentDigest": _digest_entries(
+            source,
+            _selected_entries(
+                _tree_entries(source, commit),
+                manifest,
+                tracked_manifest_path=None,
+            ),
+        ),
+        "validator": {
+            "kind": "FIXED_CANDIDATE_GATE",
+            "relativePath": "scripts/verify-capability-pack",
+            "sha256": "sha256:" + hashlib.sha256(validator.read_bytes()).hexdigest(),
+            "argumentsContract": "CANDIDATE_COMMIT_TREE",
+            "environmentContract": "MANAGED_TOOLCHAIN_PROFILE",
+        },
+    }
+    return source, registration
+
+
+def _create_profile_toolchain(root: Path) -> Path:
+    toolchain = root / ".worktrees/.capability-pack-cache/store/profile-toolchain"
+    executable = b"#!/bin/sh\nexit 0\n"
+    for relative in (
+        "bin/ruby",
+        "bin/rg",
+        "java/bin/java",
+        "java/bin/javac",
+        "home/.m2/wrapper/dists/apache-maven/fixture/bin/mvn",
+    ):
+        path = toolchain / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(executable)
+        path.chmod(0o555)
+    (toolchain / "home/.m2/wrapper/dists/apache-maven/fixture/lib").mkdir()
+    (toolchain / "home/.m2/wrapper/dists/apache-maven/fixture/lib/core.jar").write_bytes(
+        b"maven-core"
+    )
+    repository = toolchain / "home/.m2/repository"
+    (repository / "org/example/plugin/1.0").mkdir(parents=True)
+    (repository / "org/example/plugin/1.0/plugin.jar").write_bytes(b"plugin")
+    _profile_make_read_only(toolchain)
+    return toolchain
+
+
+def _profile_definition(toolchain: Path) -> dict[str, Any]:
+    from evolution_harness.hashing import sha256_bytes
+    from evolution_harness.toolchain_profile import directory_identity_digest
+
+    command_digest = "sha256:" + sha256_bytes(b"#!/bin/sh\nexit 0\n")
+    return {
+        "schemaVersion": "capability-validator-toolchain-profile/v1",
+        "profileId": PROFILE_ID,
+        "environmentAdapter": "JAVA_MAVEN_OFFLINE_V1",
+        "platform": {
+            "os": platform.system().lower(),
+            "architecture": platform.machine().lower(),
+        },
+        "commands": {
+            name: {
+                "artifactId": f"artifact:{name}:canonical-relocation",
+                "fileName": name,
+                "sha256": command_digest,
+                "bindingPolicy": "HOST_ATTESTED",
+            }
+            for name in ("ruby", "rg", "java", "javac", "mvn")
+        },
+        "directories": {
+            "javaHome": {
+                "artifactId": "artifact:java:canonical-relocation",
+                "sha256": directory_identity_digest(toolchain / "java"),
+                "bindingPolicy": "HOST_ATTESTED",
+            },
+            "mavenHome": {
+                "artifactId": "artifact:maven:canonical-relocation",
+                "sha256": directory_identity_digest(
+                    toolchain / "home/.m2/wrapper/dists/apache-maven/fixture"
+                ),
+                "bindingPolicy": "HOST_ATTESTED",
+            },
+            "mavenRepository": {
+                "artifactId": "artifact:repository:canonical-relocation",
+                "sha256": directory_identity_digest(
+                    toolchain / "home/.m2/repository"
+                ),
+                "bindingPolicy": "HOST_ATTESTED",
+            },
+        },
+        "relationships": {
+            "javaHomeCommands": ["java", "javac"],
+            "mavenHomeCommand": "mvn",
+            "mavenRepositoryLayout": "DOT_M2_REPOSITORY",
+        },
+    }
+
+
+def _create_profile_harness_root(
+    root: Path,
+    registration: dict[str, Any],
+    profile: dict[str, Any],
+    toolchain: Path,
+) -> None:
+    from evolution_harness.toolchain_profile import binding_path
+
+    source = Path(__file__).parents[1]
+    for name in ("core", "design", "runtime", "examples"):
+        shutil.copytree(source / name, root / name)
+    _profile_git(root, "init", "-q")
+    (root / "core/registries/capability-packs.yaml").write_text(
+        yaml.safe_dump([registration], sort_keys=False), encoding="utf-8"
+    )
+    (root / "core/registries/capability-validator-toolchains.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "schemaVersion": "capability-validator-toolchain-registry/v1",
+                "artifacts": [],
+                "profiles": [profile],
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    project_binding_path = root / "examples/project-fixture/.agent-evolution/capabilities.yaml"
+    project_binding = yaml.safe_load(project_binding_path.read_text(encoding="utf-8"))
+    project_binding["capabilities"].append(PROFILE_CAPABILITY_ID)
+    project_binding_path.write_text(
+        yaml.safe_dump(project_binding, sort_keys=False), encoding="utf-8"
+    )
+    local_binding_path = binding_path(root, PROFILE_ID)
+    local_binding_path.parent.mkdir(parents=True, exist_ok=True)
+    local_binding_path.write_text(
+        json.dumps(_profile_binding_record(toolchain), sort_keys=True),
+        encoding="utf-8",
+    )
+    local_binding_path.chmod(0o444)
+
+
+@pytest.fixture
+def profile_project_pair(tmp_path: Path) -> ProfileProjectPair:
+    from evolution_harness.toolchain_profile import profile_digest
+
+    _, registration = _create_profile_pack_source(tmp_path)
+    first_root = tmp_path / "first-harness"
+    second_root = tmp_path / "second-harness"
+    first_root.mkdir()
+    second_root.mkdir()
+    first_toolchain = _create_profile_toolchain(first_root)
+    second_toolchain = _create_profile_toolchain(second_root)
+    profile = _profile_definition(first_toolchain)
+    digest = profile_digest(profile)
+    registration["validator"]["toolchainProfile"] = {
+        "profileId": PROFILE_ID,
+        "profileDigest": digest,
+    }
+    _create_profile_harness_root(
+        first_root, deepcopy(registration), deepcopy(profile), first_toolchain
+    )
+    _create_profile_harness_root(
+        second_root, deepcopy(registration), deepcopy(profile), second_toolchain
+    )
+    return ProfileProjectPair(
+        first_root=first_root,
+        second_root=second_root,
+        first_binding_root=first_toolchain,
+        second_binding_root=second_toolchain,
+        profile_digest=digest,
+    )
+
+
+def test_profile_binding_relocation_preserves_all_canonical_outputs(
+    profile_project_pair: ProfileProjectPair,
+):
+    first = profile_project_pair.build(profile_project_pair.first_root)
+    second = profile_project_pair.build(profile_project_pair.second_root)
+
+    assert first.registry_bytes == second.registry_bytes
+    assert first.lock_bytes == second.lock_bytes
+    assert first.resolution_bytes == second.resolution_bytes
+    assert first.projection_bytes == second.projection_bytes
+    assert first.install_plan_bytes == second.install_plan_bytes
+    assert first.projection_file_bytes == second.projection_file_bytes
+    for payload in (
+        first.registry_bytes,
+        first.lock_bytes,
+        first.resolution_bytes,
+        first.projection_bytes,
+        first.install_plan_bytes,
+    ):
+        assert str(profile_project_pair.first_binding_root).encode() not in payload
+        assert str(profile_project_pair.second_binding_root).encode() not in payload
+        assert b"ChatGPT.app" not in payload
+
+    expected_profile = {
+        "profileId": "toolchain-profile:test:canonical-relocation:v1",
+        "profileDigest": profile_project_pair.profile_digest,
+    }
+    assert first.source_revision == second.source_revision
+    assert first.source_digest == second.source_digest
+    assert first.registration_fingerprint == second.registration_fingerprint
+    assert first.lock_fingerprint == second.lock_fingerprint
+    assert first.selected_capability == second.selected_capability
+    assert first.selected_capability["selectedBecause"] == ["explicit-binding"]
+    assert first.projected_source == second.projected_source
+    assert first.projected_skill == second.projected_skill
+    assert first.projected_source["validatorIdentity"]["toolchainProfile"] == (
+        expected_profile
+    )
+    assert first.projected_skill["validatorIdentity"]["toolchainProfile"] == (
+        expected_profile
+    )
+    assert first.projected_skill["resourceSetDigest"] == second.projected_skill[
+        "resourceSetDigest"
+    ]
 
 
 def _pack(tmp_path: Path) -> tuple[Path, Path, Path]:

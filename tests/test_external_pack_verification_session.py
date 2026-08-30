@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
+import platform
 import shutil
 import subprocess
 import threading
@@ -172,6 +174,63 @@ class PackHarness:
         _write_registrations(self.root, self.registrations)
 
 
+@dataclass
+class ProfilePackHarness:
+    root: Path
+    capability_id: str
+    profile_id: str
+    profile_digest: str
+    first_root: Path
+    second_root: Path
+
+    def binding_record(self, toolchain_root: Path) -> dict[str, Any]:
+        return {
+            "schemaVersion": "capability-validator-toolchain-binding/v1",
+            "profileId": self.profile_id,
+            "commands": {
+                "ruby": str(toolchain_root / "bin/ruby"),
+                "rg": str(toolchain_root / "bin/rg"),
+                "java": str(toolchain_root / "java/bin/java"),
+                "javac": str(toolchain_root / "java/bin/javac"),
+                "mvn": str(
+                    toolchain_root
+                    / "home/.m2/wrapper/dists/apache-maven/fixture/bin/mvn"
+                ),
+            },
+            "directories": {
+                "javaHome": str(toolchain_root / "java"),
+                "mavenHome": str(
+                    toolchain_root
+                    / "home/.m2/wrapper/dists/apache-maven/fixture"
+                ),
+                "mavenRepository": str(toolchain_root / "home/.m2/repository"),
+            },
+        }
+
+    @property
+    def binding_file(self) -> Path:
+        from evolution_harness.toolchain_profile import binding_path
+
+        return binding_path(self.root, self.profile_id)
+
+    def write_binding(self, toolchain_root: Path) -> None:
+        path = self.binding_file
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if path.exists():
+            path.chmod(0o644)
+        path.write_text(
+            json.dumps(self.binding_record(toolchain_root), sort_keys=True),
+            encoding="utf-8",
+        )
+        path.chmod(0o444)
+
+
+def _make_profile_tree_read_only(root: Path) -> None:
+    for path in sorted(root.rglob("*"), reverse=True):
+        path.chmod(0o555 if path.is_dir() or os.access(path, os.X_OK) else 0o444)
+    root.chmod(0o555)
+
+
 @pytest.fixture
 def pack_harness(tmp_path: Path) -> PackHarness:
     root = tmp_path / "harness"
@@ -193,6 +252,149 @@ def pack_harness(tmp_path: Path) -> PackHarness:
         sources={first_id: first_source, second_id: second_source},
     )
     harness.write()
+    return harness
+
+
+@pytest.fixture
+def profile_pack_harness(
+    pack_harness: PackHarness,
+) -> ProfilePackHarness:
+    from evolution_harness.hashing import canonical_json_bytes, sha256_bytes
+    from evolution_harness.toolchain_profile import (
+        directory_identity_digest,
+        profile_digest,
+    )
+
+    root = pack_harness.root
+    repository = Path(__file__).parents[1]
+    for name in (
+        "capability-validator-toolchain-registry.schema.json",
+        "capability-validator-toolchain-binding.schema.json",
+    ):
+        shutil.copy2(repository / "core/schemas" / name, root / "core/schemas" / name)
+    _git(root, "init", "-q")
+
+    managed_store = root / ".worktrees/.capability-pack-cache/store"
+    first_root = managed_store / "first"
+    second_root = managed_store / "second"
+    executable = b"#!/bin/sh\nexit 0\n"
+    for relative in (
+        "bin/ruby",
+        "bin/rg",
+        "java/bin/java",
+        "java/bin/javac",
+        "home/.m2/wrapper/dists/apache-maven/fixture/bin/mvn",
+    ):
+        path = first_root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(executable)
+        path.chmod(0o555)
+    (first_root / "home/.m2/wrapper/dists/apache-maven/fixture/lib").mkdir()
+    (first_root / "home/.m2/wrapper/dists/apache-maven/fixture/lib/core.jar").write_bytes(
+        b"maven-core"
+    )
+    repository_root = first_root / "home/.m2/repository"
+    (repository_root / "org/example/plugin/1.0").mkdir(parents=True)
+    (repository_root / "org/example/plugin/1.0/plugin.jar").write_bytes(b"plugin")
+    shutil.copytree(first_root, second_root)
+    _make_profile_tree_read_only(first_root)
+    _make_profile_tree_read_only(second_root)
+
+    command_digest = "sha256:" + sha256_bytes(executable)
+    artifact = {
+        "artifactId": "artifact:ripgrep:test:darwin-arm64",
+        "kind": "OFFICIAL_RELEASE_ARCHIVE",
+        "platform": {
+            "os": platform.system().lower(),
+            "architecture": platform.machine().lower(),
+        },
+        "sourceUri": "https://example.invalid/ripgrep.tar.gz",
+        "archiveFormat": "TAR_GZ",
+        "archiveSha256": "sha256:" + "1" * 64,
+        "extractedRoot": "ripgrep-test",
+        "extractedFiles": {"rg": command_digest},
+        "provenancePolicy": "OFFICIAL_GITHUB_RELEASE_ARCHIVE_SHA256",
+    }
+    artifact_digest = "sha256:" + sha256_bytes(canonical_json_bytes(artifact))
+    profile_id = "toolchain-profile:test:darwin-arm64:v1"
+    profile = {
+        "schemaVersion": "capability-validator-toolchain-profile/v1",
+        "profileId": profile_id,
+        "environmentAdapter": "JAVA_MAVEN_OFFLINE_V1",
+        "platform": artifact["platform"],
+        "commands": {
+            name: {
+                "artifactId": (
+                    artifact["artifactId"] if name == "rg" else f"artifact:{name}:test"
+                ),
+                "fileName": name,
+                "sha256": command_digest,
+                "bindingPolicy": (
+                    "HARNESS_MANAGED_STORE" if name == "rg" else "HOST_ATTESTED"
+                ),
+                **({"artifactDigest": artifact_digest} if name == "rg" else {}),
+            }
+            for name in ("ruby", "rg", "java", "javac", "mvn")
+        },
+        "directories": {
+            "javaHome": {
+                "artifactId": "artifact:java:test",
+                "sha256": directory_identity_digest(first_root / "java"),
+                "bindingPolicy": "HOST_ATTESTED",
+            },
+            "mavenHome": {
+                "artifactId": "artifact:maven:test",
+                "sha256": directory_identity_digest(
+                    first_root / "home/.m2/wrapper/dists/apache-maven/fixture"
+                ),
+                "bindingPolicy": "HOST_ATTESTED",
+            },
+            "mavenRepository": {
+                "artifactId": "artifact:maven-repository:test",
+                "sha256": directory_identity_digest(first_root / "home/.m2/repository"),
+                "bindingPolicy": "HOST_ATTESTED",
+            },
+        },
+        "relationships": {
+            "javaHomeCommands": ["java", "javac"],
+            "mavenHomeCommand": "mvn",
+            "mavenRepositoryLayout": "DOT_M2_REPOSITORY",
+        },
+    }
+    registry_path = root / "core/registries/capability-validator-toolchains.yaml"
+    registry_path.parent.mkdir(parents=True, exist_ok=True)
+    registry_path.write_text(
+        yaml.safe_dump(
+            {
+                "schemaVersion": "capability-validator-toolchain-registry/v1",
+                "artifacts": [artifact],
+                "profiles": [profile],
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    digest = profile_digest(profile)
+    registration = pack_harness.registrations[0]
+    registration["validator"].update(
+        {
+            "environmentContract": "MANAGED_TOOLCHAIN_PROFILE",
+            "toolchainProfile": {
+                "profileId": profile_id,
+                "profileDigest": digest,
+            },
+        }
+    )
+    pack_harness.write()
+    harness = ProfilePackHarness(
+        root=root,
+        capability_id=pack_harness.capability_id,
+        profile_id=profile_id,
+        profile_digest=digest,
+        first_root=first_root,
+        second_root=second_root,
+    )
+    harness.write_binding(first_root)
     return harness
 
 
@@ -265,6 +467,39 @@ def test_public_lookup_without_session_still_runs_one_full_gate(
 
     assert result["capabilityId"] == pack_harness.capability_id
     assert gates == 1
+
+
+def test_profile_public_lookup_persists_no_verification_result(
+    profile_pack_harness: ProfilePackHarness,
+):
+    result = get_registered_capability_pack(
+        profile_pack_harness.root,
+        profile_pack_harness.capability_id,
+    )
+
+    assert result["validator"]["toolchainProfile"] == {
+        "profileId": "toolchain-profile:test:darwin-arm64:v1",
+        "profileDigest": profile_pack_harness.profile_digest,
+    }
+    forbidden = (
+        b"full_candidate_gate_count",
+        b"verified_pack_count",
+        b"session_token",
+        b"reuse_hit_count",
+    )
+    inspected = [profile_pack_harness.binding_file]
+    inspected.extend(
+        path
+        for path in (
+            profile_pack_harness.root
+            / ".worktrees/.capability-pack-cache/store"
+        ).rglob("*")
+        if path.is_file()
+    )
+    assert inspected
+    for path in inspected:
+        data = path.read_bytes()
+        assert all(marker not in data for marker in forbidden)
 
 
 def test_stats_are_new_immutable_snapshots(pack_harness: PackHarness):
@@ -1069,6 +1304,7 @@ def test_validator_abi_change_poisons_session_and_fresh_session_revalidates(
         gates += 1
         return real_gate(*args, **kwargs)
 
+    assert capability_pack_registry.CAPABILITY_PACK_VALIDATION_ABI == "v2"
     monkeypatch.setattr(capability_pack_registry, "_run_candidate_gate", counted_gate)
     with CapabilityVerificationSession(
         pack_harness.root,
@@ -1080,7 +1316,7 @@ def test_validator_abi_change_poisons_session_and_fresh_session_revalidates(
             verification_session=session,
         )
         monkeypatch.setattr(
-            capability_pack_registry, "CAPABILITY_PACK_VALIDATION_ABI", "v2"
+            capability_pack_registry, "CAPABILITY_PACK_VALIDATION_ABI", "v1"
         )
         with pytest.raises(ValueError, match="identity changed"):
             get_registered_capability_pack(
@@ -1088,7 +1324,7 @@ def test_validator_abi_change_poisons_session_and_fresh_session_revalidates(
                 pack_harness.capability_id,
                 verification_session=session,
             )
-    monkeypatch.setattr(capability_pack_registry, "CAPABILITY_PACK_VALIDATION_ABI", "v1")
+    monkeypatch.setattr(capability_pack_registry, "CAPABILITY_PACK_VALIDATION_ABI", "v2")
     with CapabilityVerificationSession(
         pack_harness.root,
         allowed_capability_ids={pack_harness.capability_id},
@@ -1281,10 +1517,126 @@ def test_pack_key_binds_manifest_abi_and_platform_but_excludes_locator(
     assert capability_pack_registry._pack_verification_key(
         registration, "sha256:" + "2" * 64
     ) != original
-    monkeypatch.setattr(capability_pack_registry, "CAPABILITY_PACK_VALIDATION_ABI", "v2")
+    monkeypatch.setattr(capability_pack_registry, "CAPABILITY_PACK_VALIDATION_ABI", "v1")
     assert capability_pack_registry._pack_verification_key(
         registration, "sha256:" + "1" * 64
     ) != original
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "profile-id",
+        "profile-digest",
+        "profile-platform",
+        "profile-command-digest",
+        "profile-directory-digest",
+        "managed-artifact-manifest-digest",
+    ],
+)
+def test_profile_identity_mutations_change_key_or_fail_loading_before_gate(
+    profile_pack_harness: ProfilePackHarness,
+    monkeypatch: pytest.MonkeyPatch,
+    mutation: str,
+):
+    registration_path = (
+        profile_pack_harness.root / "core/registries/capability-packs.yaml"
+    )
+    registrations = yaml.safe_load(registration_path.read_text(encoding="utf-8"))
+    registration = registrations[0]
+    original_key = capability_pack_registry._pack_verification_key(
+        registration, "sha256:" + "1" * 64
+    )
+    if mutation == "profile-id":
+        registration["validator"]["toolchainProfile"]["profileId"] = (
+            "toolchain-profile:test:darwin-arm64:v2"
+        )
+        assert capability_pack_registry._pack_verification_key(
+            registration, "sha256:" + "1" * 64
+        ) != original_key
+        return
+    if mutation == "profile-digest":
+        registration["validator"]["toolchainProfile"]["profileDigest"] = (
+            "sha256:" + "f" * 64
+        )
+        assert capability_pack_registry._pack_verification_key(
+            registration, "sha256:" + "1" * 64
+        ) != original_key
+        return
+
+    profile_path = (
+        profile_pack_harness.root
+        / "core/registries/capability-validator-toolchains.yaml"
+    )
+    registry = yaml.safe_load(profile_path.read_text(encoding="utf-8"))
+    profile = registry["profiles"][0]
+    if mutation == "profile-platform":
+        profile["platform"]["os"] = "not-" + profile["platform"]["os"]
+    elif mutation == "profile-command-digest":
+        profile["commands"]["ruby"]["sha256"] = "sha256:" + "2" * 64
+    elif mutation == "profile-directory-digest":
+        profile["directories"]["javaHome"]["sha256"] = "sha256:" + "3" * 64
+    else:
+        registry["artifacts"][0]["archiveSha256"] = "sha256:" + "4" * 64
+    profile_path.write_text(yaml.safe_dump(registry, sort_keys=False), encoding="utf-8")
+    gates = 0
+    original_gate = capability_pack_registry._run_candidate_gate
+
+    def observe_gate(*args, **kwargs):
+        nonlocal gates
+        gates += 1
+        return original_gate(*args, **kwargs)
+
+    monkeypatch.setattr(capability_pack_registry, "_run_candidate_gate", observe_gate)
+    with pytest.raises(
+        ValueError, match="toolchain (?:profile|artifact) identity mismatch"
+    ):
+        get_registered_capability_pack(
+            profile_pack_harness.root,
+            profile_pack_harness.capability_id,
+        )
+    assert gates == 0
+
+
+def test_open_session_rejects_binding_relocation_but_fresh_session_revalidates(
+    profile_pack_harness: ProfilePackHarness,
+):
+    with CapabilityVerificationSession(
+        profile_pack_harness.root,
+        allowed_capability_ids={profile_pack_harness.capability_id},
+    ) as session:
+        get_registered_capability_pack(
+            profile_pack_harness.root,
+            profile_pack_harness.capability_id,
+            verification_session=session,
+        )
+        profile_pack_harness.write_binding(profile_pack_harness.second_root)
+        with pytest.raises(
+            ValueError,
+            match="toolchain binding changed during verification session",
+        ):
+            get_registered_capability_pack(
+                profile_pack_harness.root,
+                profile_pack_harness.capability_id,
+                verification_session=session,
+            )
+        with pytest.raises(ValueError, match="failed"):
+            get_registered_capability_pack(
+                profile_pack_harness.root,
+                profile_pack_harness.capability_id,
+                verification_session=session,
+            )
+    with CapabilityVerificationSession(
+        profile_pack_harness.root,
+        allowed_capability_ids={profile_pack_harness.capability_id},
+    ) as fresh:
+        get_registered_capability_pack(
+            profile_pack_harness.root,
+            profile_pack_harness.capability_id,
+            verification_session=fresh,
+        )
+        assert fresh.stats.full_candidate_gate_count == 1
+        assert fresh.stats.toolchain_directory_digest_count == 6
 
 
 def test_new_session_remeasures_mutated_registered_toolchain(

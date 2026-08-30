@@ -443,6 +443,47 @@ def test_external_lock_source_preserves_plain_toolchain_compatibility_fields(
     assert canonical_json_bytes(source)
 
 
+def test_external_lock_source_copies_only_canonical_profile_identity(
+    tmp_path: Path,
+):
+    from types import MappingProxyType
+
+    from evolution_harness.hashing import canonical_json_bytes
+    from evolution_harness.project import _external_lock_source
+
+    root, _ = _copy_repo(tmp_path)
+    registrations = yaml.safe_load(
+        (root / "core/registries/capability-packs.yaml").read_text(encoding="utf-8")
+    )
+    registration = registrations[0]
+    registration["validator"]["environmentContract"] = "MANAGED_TOOLCHAIN_PROFILE"
+    registration["validator"]["toolchainProfile"] = {
+        "profileId": "toolchain-profile:test:canonical-relocation:v1",
+        "profileDigest": "sha256:" + "a" * 64,
+    }
+
+    def readonly(value):
+        if isinstance(value, dict):
+            return MappingProxyType(
+                {key: readonly(item) for key, item in value.items()}
+            )
+        if isinstance(value, list):
+            return tuple(readonly(item) for item in value)
+        return value
+
+    source = _external_lock_source(readonly(registration))
+
+    assert source["validatorIdentity"]["toolchainProfile"] == {
+        "profileId": "toolchain-profile:test:canonical-relocation:v1",
+        "profileDigest": "sha256:" + "a" * 64,
+    }
+    serialized = canonical_json_bytes(source)
+    assert b"absolutePath" not in serialized
+    assert b"binding" not in serialized
+    assert b"witness" not in serialized
+    assert b"ChatGPT.app" not in serialized
+
+
 @pytest.mark.parametrize(
     "witness",
     [

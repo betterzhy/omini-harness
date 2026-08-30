@@ -1,6 +1,6 @@
 # Registered Validator Trust Boundary Design
 
-**Status:** APPROVED BASE; BENCHMARK-ISOLATION APPROACH APPROVED — written amendment pending user review
+**Status:** APPROVED — base and benchmark-isolation amendment user-reviewed 2026-08-30
 
 **Date:** 2026-08-30
 

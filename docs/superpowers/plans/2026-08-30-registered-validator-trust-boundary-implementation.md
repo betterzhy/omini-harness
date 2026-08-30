@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Remove the rejected same-UID process-containment claim, retain safe managed runtime scratch and operation-scoped Pack reuse, complete the App-independent Java toolchain migration, and prove the 14→1 performance result.
+**Goal:** Remove the rejected same-UID process-containment claim, retain safe managed runtime scratch and operation-scoped Pack reuse, complete the App-independent Java toolchain migration, and prove the 14→1 performance result with a Harness-owned immutable benchmark that is independent of Pay-Nexus adoption drift.
 
-**Architecture:** The exact registered Validator bytes are a pinned trust root; the Validator owns isolation for candidate-derived execution. Harness restores the direct Validator process contract, retains descriptor-safe runtime scratch and pre/post TOCTOU checks, and reuses one `VerifiedCapabilityPack` inside an explicit `CapabilityVerificationSession`.
+**Architecture:** The exact registered Validator bytes are a pinned trust root; the Validator owns isolation for candidate-derived execution. Harness restores the direct Validator process contract, retains descriptor-safe runtime scratch and pre/post TOCTOU checks, and reuses one `VerifiedCapabilityPack` inside an explicit `CapabilityVerificationSession`. Performance acceptance uses a test-only neutral Pay-shaped fixture; the real Pay shadow remains an exact fail-closed drift sentinel and is not rebound by this task.
 
 **Tech Stack:** Python 3.12, pytest 8, Git, YAML/JSON schemas, Java 21, Maven 3.9.16, Ruby 3.4, macOS Darwin arm64.
 
@@ -17,10 +17,13 @@
 - Candidate-derived command isolation remains owned and self-tested by the registered Validator; do not modify Java Pack content or Validator bytes.
 - Keep private runtime `TMPDIR` out of canonical registration, profile, binding witness, lock, projection, Pack key, and `VerifiedToolchain.environment`.
 - Keep operation/session reuse in-process only. No persistent or cross-process Gate trust cache.
-- Preserve the four paused Task 5 working-tree files until Task 2 owns them: `core/registries/capability-packs.yaml`, `core/registries/capability-validator-toolchains.yaml`, `tests/test_capability_pack_registry.py`, and `tests/test_java_engineering_standard_registration_fixture.py`.
+- Preserve the four paused Java-migration working-tree files until Task 2 owns them: `core/registries/capability-packs.yaml`, `core/registries/capability-validator-toolchains.yaml`, `tests/test_capability_pack_registry.py`, and `tests/test_java_engineering_standard_registration_fixture.py`.
 - Use `/Users/yuzhuangzhuang/Projects/omini-harness/.venv/bin/python` with `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1` and `PYTHONPATH=src`.
 - Execute the real Java Gate outside the outer Codex filesystem sandbox because the fixed Java Validator deliberately probes nested isolation and fails closed when that capability is unavailable.
 - No Pay-Nexus repository write, Java Pack write, App modification, merge, push, release, deploy, Skill install/apply, Authority change, or business execution authorization.
+- Do not modify `integrations/pay-nexus-shadow/**`. The benchmark fixture is test-only, non-Authority, and must not be described as Pay adoption, projection, or implementation readiness.
+- Do not xfail or skip the stale real-Pay success nodes. Replace their obsolete success contract with one exact Pack-E2E registration-drift sentinel while preserving structural identity tests.
+- Preserve the benchmark workload contract: six independently collected scenarios, 45 Java resources, one existing internal architecture-review Skill action, and therefore 46 install dry-run actions.
 - Preserve prior benchmark receipts; never overwrite them. Every new receipt has stdout, stderr, exit code, command/node selection, and SHA-256 evidence.
 
 ---
@@ -138,7 +141,7 @@ PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 PYTHONPATH=src /Users/yuzhuangzhuang/Projects/o
 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 PYTHONPATH=src /Users/yuzhuangzhuang/Projects/omini-harness/.venv/bin/python -m pytest -q tests/test_toolchain_provisioning.py
 ```
 
-Expected: all selected tests PASS; the known paused Task 5 artifact-only assertion may be excluded only if its failure is exactly the ungenerated migration state.
+Expected: all selected tests PASS; the known paused Java-migration artifact-only assertion may be excluded only if its failure is exactly the ungenerated migration state.
 
 - [ ] **Step 7: Verify the final Task 1 diff and commit**
 
@@ -177,7 +180,7 @@ git commit -m "fix(pack): 恢复注册 Validator 运行契约"
 - Ripgrep executable SHA-256: `a326a1fb48074202e9ad41e4cd1e389eeea372c8c6f7d7e80da81176d5d9430e`
 - Artifact digest: `sha256:bfa2614eba25313624c604d16c6c727f3b243e5453b5b261321858f7eee75512`
 
-- [ ] **Step 1: Re-audit the paused Task 5 diff and run its focused RED**
+- [ ] **Step 1: Re-audit the paused Java-migration diff and run its focused RED**
 
 Inspect the four pre-existing dirty files before changing them. The diff must contain only the previously approved App-independent Java profile migration and its assertions; do not absorb unrelated edits.
 
@@ -262,30 +265,134 @@ git commit -m "fix(pack): 迁移 Java Validator 到受管工具链 Profile"
 
 ---
 
-### Task 3: Close mutation, semantic, and performance evidence
+### Task 3: Add the Harness-owned Java profile benchmark and real-Pay drift sentinel
 
 **Files:**
-- Modify only if a missing assertion is demonstrated: `tests/test_toolchain_profile.py`
-- Modify only if a missing assertion is demonstrated: `tests/test_toolchain_provisioning.py`
-- Modify only if a missing assertion is demonstrated: `tests/test_external_pack_verification_session.py`
-- Modify only if a missing assertion is demonstrated: `tests/test_lock_enforcement.py`
-- Modify only if a missing assertion is demonstrated: `tests/test_resolver.py`
-- Modify only if a missing assertion is demonstrated: `tests/test_pay_nexus_java_capability_adoption_pilot.py`
+- Create: `tests/fixtures/java-toolchain-profile-pay-benchmark/source/AGENTS.md`
+- Create: `tests/fixtures/java-toolchain-profile-pay-benchmark/source/TEST_ONLY.md`
+- Create: `tests/fixtures/java-toolchain-profile-pay-benchmark/integration/integration.yaml`
+- Create: `tests/fixtures/java-toolchain-profile-pay-benchmark/integration/authority-map.yaml`
+- Create: `tests/fixtures/java-toolchain-profile-pay-benchmark/integration/control-plane/.agent-evolution/capabilities.yaml`
+- Create: `tests/fixtures/java-toolchain-profile-pay-benchmark/integration/control-plane/.agent-evolution/design-state.yaml`
+- Create: six scenario YAML files under `tests/fixtures/java-toolchain-profile-pay-benchmark/integration/scenarios/`
+- Create: `tests/test_java_toolchain_profile_pay_benchmark.py`
+- Modify: `tests/test_pay_nexus_java_capability_adoption_pilot.py`
+- Do not modify: `integrations/pay-nexus-shadow/**`
+
+The fixture is a test input, not Authority. It uses the active neutral Java profile registration and generates its lock and projections only under a per-process temporary Harness root. No lock or generated projection is committed.
+
+- [ ] **Step 1: Write and run the missing-fixture RED**
+
+Create `tests/test_java_toolchain_profile_pay_benchmark.py` with the seven stable test contracts but before adding fixture files:
+
+```python
+@pytest.mark.integration
+@pytest.mark.pack_e2e
+@pytest.mark.parametrize("scenario_name", BENCHMARK_SCENARIO_NAMES)
+def test_java_toolchain_profile_pay_scenario_benchmark(...): ...
+
+@pytest.mark.integration
+@pytest.mark.pack_e2e
+def test_java_toolchain_profile_pay_install_plan_benchmark(...): ...
+```
+
+Run one scenario node and require RED because the fixture is absent. The failure must not be a Java Gate, App path, or Pay-shadow error.
+
+- [ ] **Step 2: Build the neutral Pay-shaped fixture**
+
+Model exactly six independent scenario vectors with the same behavioral dimensions as the historical Pay workload:
+
+- closed architecture protection selects no Java;
+- consumed-stage evidence does not authorize Wave 0;
+- current Authority denies execution;
+- next-slice readiness remains read-only;
+- review `GO` does not authorize implementation;
+- Stage 4 stop replay remains read-only.
+
+Use neutral synthetic names and source facts. Preserve `PROJECT_TRUTH_WINS`, selected/excluded capability IDs, immutable read-only source inputs, and all business execution decisions as `DENY`. The Java framework contributes exactly 45 resources; the existing internal architecture-review Skill contributes one additional read-only install action.
+
+- [ ] **Step 3: Materialize a temporary Harness root and one explicit session**
+
+Follow the repository-local fixture pattern from `tests/test_neutral_integration_fixture.py`: copy only the required `core`, `design`, and `runtime` roots plus the new source/integration fixture into `tmp_path_factory` storage so the integration stays inside its Harness root.
+
+Within one module-scoped setup:
+
+1. create one `CapabilityVerificationSession`;
+2. build the active capability lock in the temporary integration;
+3. build the integration projection;
+4. run the six scenario resolutions;
+5. run freshness/projection validation;
+6. run the install dry-run;
+7. expose immutable results and the session stats to the seven tests.
+
+Do not spawn a second Python process or create a second verification session inside this benchmark module.
+
+- [ ] **Step 4: Assert benchmark equivalence and exact cost**
+
+Across the seven nodes assert:
+
+- six independently collected scenario results retain their expected facts, selected/excluded IDs, `PROJECT_TRUTH_WINS`, closed-scenario Java exclusion, and `DENY` decisions;
+- lock, projection, resource digests, and source bytes remain unchanged after resolution, freshness, and install dry-run;
+- Java registration status is `VERIFIED`, no App path occurs, and the projection contains exactly 45 Java resources;
+- the install plan contains exactly 46 read-only actions: 45 Java resource actions plus one internal Skill action;
+- final session stats are exactly one Java candidate Gate, one isolated checkout, six toolchain-directory digests, and one verified Java Pack;
+- later resolver/freshness/install operations add zero validation counts.
+
+Run all seven nodes outside the outer sandbox. Expected GREEN: `7 passed`.
+
+- [ ] **Step 5: Replace obsolete real-Pay success expectations with one exact drift sentinel**
+
+Keep all structural Pay identity, source, registration-history, projection-shape, and read-only assertions that remain current. Remove the seven obsolete expected-success benchmark nodes and any now-unused module-scoped Pay verification session.
+
+Add one `integration + pack_e2e` test that invokes one representative real Pay integration path with a fresh session and asserts the exact fail-closed error:
+
+```text
+external capability pack lock registration drift: framework:java:java-engineering-standard
+```
+
+Also assert the cloned Pay source bytes are unchanged. Do not xfail, skip, regenerate, rebind, or write the Pay shadow.
+
+- [ ] **Step 6: Run focused semantic GREEN and commit**
+
+Run:
+
+```bash
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 PYTHONPATH=src /Users/yuzhuangzhuang/Projects/omini-harness/.venv/bin/python -m pytest -q \
+  tests/test_java_toolchain_profile_pay_benchmark.py \
+  tests/test_pay_nexus_java_capability_adoption_pilot.py \
+  tests/test_lock_enforcement.py \
+  tests/test_resolver.py \
+  tests/test_projection.py \
+  tests/test_projection_install.py
+```
+
+Require no xfail/skip and no tracked write outside the Task 3 WriteSet. Then:
+
+```bash
+git diff --check
+git add tests/fixtures/java-toolchain-profile-pay-benchmark tests/test_java_toolchain_profile_pay_benchmark.py tests/test_pay_nexus_java_capability_adoption_pilot.py
+git diff --cached --check
+git commit -m "test(pack): 增加独立 Java Profile 性能基准"
+```
+
+- [ ] **Step 7: Obtain Task 3 implementation review**
+
+Use a fresh reviewer against the Task 3 commit. Require confirmation that the fixture is non-Authority, preserves the historical workload dimensions, proves exact cost, and does not weaken or hide the real Pay fail-closed state. Resolve all P0/P1 findings before evidence collection.
+
+---
+
+### Task 4: Close mutation, semantic, and performance evidence
+
+**Files:**
+- Verify only: production source, registries, generated artifacts, and tests
+- Modify tests only by routing a demonstrated missing assertion back to Task 3
 - Write receipts outside Git: `/private/tmp/harness-pack-profile-optimized-*`
 
-Once this task starts, production code is frozen. Any source-code defect routes back to the owning implementation task, followed by rerunning the affected evidence; do not patch production opportunistically inside the benchmark task.
+Once this task starts, the candidate source and tests are frozen. Any source defect routes back to Task 1/2; any benchmark-test defect routes back to Task 3. After a fix, rerun all affected evidence.
 
 - [ ] **Step 1: Run deterministic invalidation and TOCTOU tests**
 
-Run the focused negative matrix covering:
-
-- source commit/tree/content mutation;
-- registered Validator identity/bytes/ABI mutation;
-- registration and exact lock fingerprint mutation;
-- toolchain profile, binding witness, archive, executable, Java, Maven, Ruby, and Maven-repository mutation;
-- public-chain, runtime scratch directory, symlink, ancestor, moved-inode, ownership, mode, and ACL mutation;
-- pre-Gate and post-Gate source/toolchain TOCTOU mutation;
-- operation/session boundary: reuse within one session and mandatory revalidation in a new session or public API call without verified context.
+Run the focused negative matrix covering source identity, Validator identity/ABI, registration/lock fingerprint, profile/binding/archive/executable/Java/Maven/Ruby/repository mutation, scratch/public-chain/ACL/inode mutation, pre/post Gate TOCTOU, and session-boundary revalidation:
 
 ```bash
 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 PYTHONPATH=src /Users/yuzhuangzhuang/Projects/omini-harness/.venv/bin/python -m pytest -q \
@@ -295,9 +402,9 @@ PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 PYTHONPATH=src /Users/yuzhuangzhuang/Projects/o
   tests/test_capability_pack_registry.py -k 'mutation or drift or toctou or scratch or session or cache or candidate_gate'
 ```
 
-Expected: every mutation fails closed deterministically, while unchanged identity reuses only the current in-process session.
+Expected: every mutation fails closed deterministically; unchanged identity reuses only the current in-process session.
 
-- [ ] **Step 2: Run the semantic equivalence suite**
+- [ ] **Step 2: Run semantic equivalence including both evidence chains**
 
 ```bash
 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 PYTHONPATH=src /Users/yuzhuangzhuang/Projects/omini-harness/.venv/bin/python -m pytest -q \
@@ -305,69 +412,40 @@ PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 PYTHONPATH=src /Users/yuzhuangzhuang/Projects/o
   tests/test_resolver.py \
   tests/test_projection.py \
   tests/test_projection_install.py \
+  tests/test_java_toolchain_profile_pay_benchmark.py \
   tests/test_pay_nexus_java_capability_adoption_pilot.py
 ```
 
-Verify byte/semantic equality for lock, resource digests, resolver output, both projections, and install dry-run, plus the immutable identity, canonical-fingerprint exclusion, closed-scenario, `DENY`, and fail-closed invariants from the spec.
+Require the neutral benchmark to pass with exact lock/resource/resolver/projection/install invariants and require the real Pay sentinel to pass only by observing the exact registration drift. This proves Harness behavior without claiming Pay readiness.
 
 - [ ] **Step 3: Freeze the exact seven benchmark node IDs**
 
-Collect and store the six parameterized scenario node IDs plus the install-plan node ID. The receipt must list all seven explicit node IDs, not a filename-only selector.
-
-```bash
-PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 PYTHONPATH=src /Users/yuzhuangzhuang/Projects/omini-harness/.venv/bin/python -m pytest --collect-only -q tests/test_pay_nexus_java_capability_adoption_pilot.py -m pack_e2e
-```
-
-Expected collection: seven selected Pack-E2E nodes; any additional collected nodes are recorded as deselected and are not silently included in the benchmark denominator.
+Collect only `tests/test_java_toolchain_profile_pay_benchmark.py -m pack_e2e`. Store the six parameterized scenario IDs and one install-plan ID explicitly; do not benchmark the real-Pay drift sentinel.
 
 - [ ] **Step 4: Execute three independent optimized benchmark processes**
 
-Run each benchmark outside the outer Codex filesystem sandbox. For `run_id` 1, 2, and 3, execute the same seven explicit node IDs in a fresh Python process and write distinct receipts:
+For run IDs 1, 2, and 3, execute the same seven explicit node IDs in fresh Python processes outside the outer sandbox. Preserve distinct `.command`, `.nodes`, `.stdout`, `.stderr`, `.exit`, and duration receipts under `/private/tmp/harness-pack-profile-optimized-<run_id>.*`. Wrap with `/usr/bin/time -lp` and preserve the real pytest exit status.
 
-```text
-/private/tmp/harness-pack-profile-optimized-<run_id>.command
-/private/tmp/harness-pack-profile-optimized-<run_id>.nodes
-/private/tmp/harness-pack-profile-optimized-<run_id>.stdout
-/private/tmp/harness-pack-profile-optimized-<run_id>.stderr
-/private/tmp/harness-pack-profile-optimized-<run_id>.exit
-```
-
-Wrap the invocation with `/usr/bin/time -lp`; save its real pytest exit status even on failure. Do not overwrite the historical baseline or the earlier invalid optimized attempt. Require for each run:
-
-- exit code `0`;
-- exactly seven passed benchmark nodes;
-- exactly one Java candidate Gate;
-- exactly one Java isolated checkout;
-- exactly six Java toolchain-directory digests;
-- no App path dependency;
-- registered profile status `VERIFIED`.
+Require per run: exit `0`, seven passed, one Java Gate, one checkout, six directory digests, 45 Java resources, 46 read-only install actions, no App path, and `VERIFIED` profile status.
 
 - [ ] **Step 5: Compare the measured median with the fixed baseline**
 
-Use the three historical successful baseline durations `4037.40s`, `2910.40s`, and `2654.28s`; their fixed median is `2910.40s`. Compute the optimized median from the three new successful runs.
-
-The 70% reduction target is met only when:
+Use historical durations `4037.40s`, `2910.40s`, and `2654.28s`; baseline median is `2910.40s`. Compute:
 
 ```text
-optimized median < 873.12 seconds
 reduction = 1 - optimized_median / 2910.40
+target: optimized_median < 873.12 seconds
 ```
 
-Report measured values rather than projecting a result. If any run fails or the threshold is missed, preserve all receipts and report the actual outcome; do not substitute the earlier `96.76s / 7 failed` attempt.
+Report actual values. Preserve failed or slow receipts; never substitute the earlier invalid `96.76s / 7 failed` attempt.
 
-- [ ] **Step 6: Hash the benchmark evidence and commit test-only additions if any**
+- [ ] **Step 6: Hash all benchmark evidence**
 
-Create `/private/tmp/harness-pack-profile-benchmark.sha256` covering all baseline and optimized stdout/stderr/exit/node/command receipts. Run `git diff --check`. If and only if Step 1 or Step 2 required new tests, stage those test hunks and commit:
-
-```bash
-git commit -m "test(pack): 固化工具链解耦与 TOCTOU 负向矩阵"
-```
-
-Do not create an empty commit when existing tests already close the matrix.
+Create `/private/tmp/harness-pack-profile-benchmark.sha256` over baseline and optimized command/node/stdout/stderr/exit receipts. Require `git status --short` unchanged from Task 3. Do not create an evidence-only commit.
 
 ---
 
-### Task 4: Run tiered regression, fix the candidate, and obtain independent review
+### Task 5: Run tiered regression, fix the candidate, and obtain independent review
 
 **Files:**
 - Verify only: all tracked source, tests, registries, locks, and generated projections
@@ -429,6 +507,8 @@ Request one `deep_reviewer` review at `gpt-5.6-sol / xhigh` against the exact Ca
 - Is candidate-derived isolation still owned and fail-closed by the exact registered Validator?
 - Are runtime scratch and verified-session reuse bounded, noncanonical, TOCTOU-safe, and invalidated by every required identity mutation?
 - Are lock, projection, resolver, Registry, Authority, and business execution semantics unchanged?
+- Does the Harness-owned benchmark faithfully preserve the six-scenario/45-resource/46-action workload while remaining non-Authority and independent of Pay adoption drift?
+- Does the real Pay sentinel remain exact and fail-closed without xfail, skip, rebind, or shadow writes?
 - Do the receipts prove the actual `14 -> <=2, target 1` Gate and `~84 -> <=12, target 6` digest result and the measured runtime outcome?
 
 Final Gate requires `GO` with no unresolved P0/P1 finding. Resolve lesser findings or explicitly document why they do not block the approved acceptance criteria; any candidate-changing fix requires a new fixed candidate and affected reruns.

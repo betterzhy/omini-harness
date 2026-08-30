@@ -1,6 +1,6 @@
 # Registered Validator Trust Boundary Design
 
-**Status:** APPROVED — user-reviewed 2026-08-30
+**Status:** APPROVED BASE; BENCHMARK-ISOLATION APPROACH APPROVED — written amendment pending user review
 
 **Date:** 2026-08-30
 
@@ -145,6 +145,100 @@ six directory digests, with an allowed maximum of twelve, for the equivalent
 scenario/install group. The total runtime reduction target remains at least 70%,
 subject to the fixed before/after benchmark.
 
+## Benchmark isolation amendment
+
+### Why the original Pay benchmark cannot remain the acceptance fixture
+
+The active Java registration now uses `MANAGED_TOOLCHAIN_PROFILE` and registration
+fingerprint
+`sha256:cd5bbf5e763b38c96fccbf4c5a9357497c82e10fbf2272e4693fbcd2f63a708b`.
+The committed `integrations/pay-nexus-shadow` lock intentionally remains bound to
+the real Pay historical registration, whose legacy Validator identity uses
+`REGISTERED_TOOLCHAIN_OFFLINE_CACHE`, contains the App-local `rg` locator, and has
+a different registration fingerprint.
+
+Harness correctly rejects that drift before scenario resolution. Refreshing only
+the Harness shadow would break its exact binding to the real Pay historical
+registration and would amount to an unauthorized Pay rebind. Keeping those seven
+nodes as the performance acceptance fixture would therefore make the Harness
+optimization depend on a separate consumer migration—the coupling this task is
+intended to remove.
+
+### Harness-owned immutable benchmark fixture
+
+Add a committed, test-only fixture at
+`tests/fixtures/java-toolchain-profile-pay-benchmark/` with:
+
+- a synthetic source containing only stable Markdown authority facts required by
+  the benchmark;
+- a neutral integration and control plane that select the exact registered Java
+  Pack plus the existing internal architecture-review Skill;
+- six scenario YAML files preserving the original benchmark's intent, topic,
+  requested output, stage/reopen inputs, and expected resolver results, but using
+  benchmark-specific IDs;
+- no copied Pay lock, Pay projection, Pay repository locator, Pay Git identity,
+  or claim that the fixture is Pay Authority.
+
+The benchmark test copies the minimal Harness roots and this fixture into a
+temporary directory. In one explicit `CapabilityVerificationSession`, it builds
+the current lock and CODEX integration projection, executes the six scenario
+nodes, checks freshness, and performs one install dry-run. Lock/projection outputs
+are runtime evidence in the temporary directory; they are never committed as a
+second source of truth.
+
+The seven stable acceptance nodes are:
+
+```text
+tests/test_java_toolchain_profile_pay_benchmark.py::test_java_toolchain_profile_pay_scenario_benchmark[closed-architecture-protection]
+tests/test_java_toolchain_profile_pay_benchmark.py::test_java_toolchain_profile_pay_scenario_benchmark[consumed-stage-does-not-authorize-wave0]
+tests/test_java_toolchain_profile_pay_benchmark.py::test_java_toolchain_profile_pay_scenario_benchmark[current-authority-denies-execution]
+tests/test_java_toolchain_profile_pay_benchmark.py::test_java_toolchain_profile_pay_scenario_benchmark[next-slice-readiness-resolution]
+tests/test_java_toolchain_profile_pay_benchmark.py::test_java_toolchain_profile_pay_scenario_benchmark[review-go-does-not-authorize]
+tests/test_java_toolchain_profile_pay_benchmark.py::test_java_toolchain_profile_pay_scenario_benchmark[stage4-stop-replay]
+tests/test_java_toolchain_profile_pay_benchmark.py::test_java_toolchain_profile_pay_install_plan_benchmark
+```
+
+All seven remain `integration` and `pack_e2e`; no production API or Registry
+algorithm is added for the fixture.
+
+### Equivalence contract
+
+The benchmark proves Harness validation cost only when every run establishes:
+
+- the same six scenario input/expectation vectors and PASS results as the original
+  baseline, including `PROJECT_TRUTH_WINS`, required authority facts, selected and
+  excluded capability IDs, and the closed scenario's Java exclusion;
+- immutable Java commit/tree/content/Validator/history/timeout identity plus the
+  fixed managed profile and registration fingerprint;
+- exactly 45 byte-identical Java resource files and the fixed Java resource-set
+  digest;
+- the existing internal architecture-review Skill remains present, so the install
+  dry-run has the original 46 total actions: 45 Java resources plus one internal
+  Skill action;
+- all development, repository landing, DDL, database write, Wave 0, and Git push
+  permissions remain `DENY`;
+- exactly one Java candidate Gate, one isolated checkout, and six toolchain
+  directory digests across all six scenarios, projection freshness, and install;
+- the source fixture is byte-identical before and after every read-only operation;
+- no App path, fallback toolchain identity, persistent cache, or cross-process
+  verified result enters the operation.
+
+The fixed historical baseline durations remain `4037.40s`, `2910.40s`, and
+`2654.28s`. The optimized three-run median is compared with the same `2910.40s`
+median because the scenario/install workload is preserved. The result is evidence
+of Harness cost reduction, not evidence that Pay adoption has been rebound or is
+ready for implementation.
+
+### Real Pay adoption sentinel
+
+Do not mark the stale Pay nodes `xfail` or skip them: either mechanism could hide
+an unrelated regression behind the expected drift. Keep the structural Pay
+identity tests, and replace the seven no-longer-runnable success nodes with one
+explicit Pack-E2E sentinel that calls the real integration path, asserts the exact
+legacy-lock registration-drift failure, and proves the cloned Pay source remains
+unchanged. Removing that sentinel or restoring Pay scenario success requires the
+separate Pay rebind/Authority task.
+
 ## Implementation sequence
 
 1. Add deterministic tests that express this trust boundary and preserve legacy
@@ -157,8 +251,10 @@ subject to the fixed before/after benchmark.
    Validator bytes.
 5. Regenerate Harness Registry and neutral fixture lock/projections from one real
    Java Gate executed outside the outer Codex filesystem sandbox.
-6. Run the fixed scenario/install benchmark and assert per-Pack counters.
-7. Complete focused regressions, disjoint tier receipts, one full unfiltered
+6. Add the Harness-owned immutable seven-node benchmark fixture and retain one
+   exact fail-closed sentinel for the unchanged real Pay adoption lock.
+7. Run the fixed equivalent scenario/install benchmark and assert per-Pack counters.
+8. Complete focused regressions, disjoint tier receipts, one full unfiltered
    regression, and one fixed-candidate independent `deep_reviewer / xhigh` gate.
 
 Product-level resumable shard receipts remain the separately deferred scope in
@@ -178,11 +274,15 @@ implement that subsystem.
 - Java Pack candidate Gate passes using the registered toolchain profile with no
   ChatGPT App path or fallback;
 - Java Gate and directory-digest counts meet the stated limits;
+- the Harness-owned benchmark passes all seven stable nodes with the equivalence
+  contract above, while the real Pay sentinel passes only by observing the exact
+  expected legacy-lock drift;
 - Registry, lock, resolution, projection, closed-scenario selection, business
   `DENY`, and exact fingerprint semantics remain unchanged except for the approved
   one-time Java profile migration;
-- no Pay-Nexus, Java Pack, Validator, merge, push, release, deploy, or business
-  execution write occurs in this Harness candidate.
+- no `integrations/pay-nexus-shadow`, real Pay-Nexus, Java Pack, Validator, merge,
+  push, release, deploy, or business execution write occurs in this Harness
+  candidate.
 
 ## Rejected alternatives
 
@@ -207,3 +307,17 @@ runtime bootstrap on every host. It is not a transparent performance fix.
 Rejected because process groups are not a complete descendant boundary and the
 supervisor changed legacy signal semantics. The final review of `f0807f3` remains
 valid NO-GO evidence for that implementation.
+
+### Rebind the Harness Pay shadow inside this performance task
+
+Rejected because the shadow is intentionally tied to a real Pay historical
+registration. Refreshing only its lock/projection would falsify that contract;
+refreshing the real Pay registration requires a separate project Authority and
+rebind task.
+
+### Mark the seven stale Pay success nodes xfail or skip
+
+Rejected because a broad expected-failure marker accepts any failure cause and a
+skip stops testing the fail-closed boundary. One exact drift sentinel is smaller,
+deterministic, and preserves the adoption truth without contaminating the Harness
+performance benchmark.

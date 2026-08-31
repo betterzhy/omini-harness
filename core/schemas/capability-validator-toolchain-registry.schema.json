@@ -1,0 +1,214 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-evolution.local/core/schemas/capability-validator-toolchain-registry.schema.json",
+  "type": "object",
+  "required": ["schemaVersion", "artifacts", "profiles"],
+  "properties": {
+    "schemaVersion": {"const": "capability-validator-toolchain-registry/v1"},
+    "artifacts": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/artifact"}
+    },
+    "profiles": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/profile"}
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "platform": {
+      "type": "object",
+      "required": ["os", "architecture"],
+      "properties": {
+        "os": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$"},
+        "architecture": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$"}
+      },
+      "additionalProperties": false
+    },
+    "artifact": {
+      "type": "object",
+      "required": [
+        "artifactId",
+        "kind",
+        "platform",
+        "sourceUri",
+        "archiveFormat",
+        "archiveSha256",
+        "extractedRoot"
+      ],
+      "properties": {
+        "artifactId": {
+          "type": "string",
+          "pattern": "^artifact:[A-Za-z0-9][A-Za-z0-9._-]*(?::[A-Za-z0-9][A-Za-z0-9._-]*)+$"
+        },
+        "kind": {"const": "OFFICIAL_RELEASE_ARCHIVE"},
+        "platform": {"$ref": "#/$defs/platform"},
+        "sourceUri": {
+          "type": "string",
+          "pattern": "^https://[^\\s]+$"
+        },
+        "archiveFormat": {"const": "TAR_GZ"},
+        "archiveSha256": {"$ref": "#/$defs/sha256"},
+        "extractedRoot": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._+-]*$"
+        },
+        "extractedFiles": {
+          "type": "object",
+          "minProperties": 1,
+          "patternProperties": {
+            "^[A-Za-z0-9][A-Za-z0-9._+-]*$": {"$ref": "#/$defs/sha256"}
+          },
+          "additionalProperties": false
+        },
+        "provenancePolicy": {
+          "const": "OFFICIAL_GITHUB_RELEASE_ARCHIVE_SHA256"
+        }
+      },
+      "additionalProperties": false
+    },
+    "commandIdentity": {
+      "type": "object",
+      "required": ["artifactId", "fileName", "sha256", "bindingPolicy"],
+      "properties": {
+        "artifactId": {
+          "type": "string",
+          "pattern": "^artifact:[A-Za-z0-9][A-Za-z0-9._-]*(?::[A-Za-z0-9][A-Za-z0-9._-]*)+$"
+        },
+        "artifactDigest": {"$ref": "#/$defs/sha256"},
+        "fileName": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._+-]*$"
+        },
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "bindingPolicy": {
+          "enum": ["HOST_ATTESTED", "HARNESS_MANAGED_CACHE", "HARNESS_MANAGED_STORE"]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "required": ["bindingPolicy"],
+            "properties": {"bindingPolicy": {"const": "HARNESS_MANAGED_STORE"}}
+          },
+          "then": {"required": ["artifactDigest"]}
+        }
+      ],
+      "additionalProperties": false
+    },
+    "directoryIdentity": {
+      "type": "object",
+      "required": ["artifactId", "sha256", "bindingPolicy"],
+      "properties": {
+        "artifactId": {
+          "type": "string",
+          "pattern": "^artifact:[A-Za-z0-9][A-Za-z0-9._-]*(?::[A-Za-z0-9][A-Za-z0-9._-]*)+$"
+        },
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "bindingPolicy": {
+          "enum": ["HOST_ATTESTED", "HARNESS_MANAGED_CACHE", "HARNESS_MANAGED_STORE"]
+        }
+      },
+      "additionalProperties": false
+    },
+    "relationships": {
+      "type": "object",
+      "minProperties": 1,
+      "patternProperties": {
+        "^[A-Za-z][A-Za-z0-9]*$": {
+          "oneOf": [
+            {
+              "type": "string",
+              "pattern": "^[A-Za-z][A-Za-z0-9_]*$"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^[A-Za-z][A-Za-z0-9_]*$"
+              },
+              "minItems": 1,
+              "uniqueItems": true
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "profile": {
+      "type": "object",
+      "required": [
+        "schemaVersion",
+        "profileId",
+        "environmentAdapter",
+        "platform",
+        "commands",
+        "directories",
+        "relationships"
+      ],
+      "properties": {
+        "schemaVersion": {"const": "capability-validator-toolchain-profile/v1"},
+        "profileId": {
+          "type": "string",
+          "pattern": "^toolchain-profile:[a-z0-9][a-z0-9._-]*(?::[a-z0-9][a-z0-9._-]*)+$"
+        },
+        "environmentAdapter": {
+          "type": "string",
+          "pattern": "^[A-Z][A-Z0-9_]*_V[1-9][0-9]*$"
+        },
+        "platform": {"$ref": "#/$defs/platform"},
+        "commands": {
+          "type": "object",
+          "minProperties": 1,
+          "patternProperties": {
+            "^[A-Za-z][A-Za-z0-9]*$": {"$ref": "#/$defs/commandIdentity"}
+          },
+          "additionalProperties": false
+        },
+        "directories": {
+          "type": "object",
+          "minProperties": 1,
+          "patternProperties": {
+            "^[A-Za-z][A-Za-z0-9]*$": {"$ref": "#/$defs/directoryIdentity"}
+          },
+          "additionalProperties": false
+        },
+        "relationships": {"$ref": "#/$defs/relationships"}
+      },
+      "allOf": [
+        {
+          "if": {
+            "required": ["environmentAdapter"],
+            "properties": {"environmentAdapter": {"const": "JAVA_MAVEN_OFFLINE_V1"}}
+          },
+          "then": {
+            "properties": {
+              "commands": {
+                "required": ["ruby", "rg", "java", "javac", "mvn"],
+                "maxProperties": 5
+              },
+              "directories": {
+                "required": ["javaHome", "mavenHome", "mavenRepository"],
+                "maxProperties": 3
+              },
+              "relationships": {
+                "required": ["javaHomeCommands", "mavenHomeCommand", "mavenRepositoryLayout"],
+                "maxProperties": 3,
+                "properties": {
+                  "javaHomeCommands": {"const": ["java", "javac"]},
+                  "mavenHomeCommand": {"const": "mvn"},
+                  "mavenRepositoryLayout": {"const": "DOT_M2_REPOSITORY"}
+                }
+              }
+            }
+          }
+        }
+      ],
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

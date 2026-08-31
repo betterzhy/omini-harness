@@ -16,6 +16,141 @@ from capability_pack_test_support import retain_web_registration_fixture
 EXTERNAL_CAPABILITY_ID = "workflow:web-high-fidelity:reference-driven-visual-fidelity"
 
 
+def _projection_schema_toolchain_identity() -> dict:
+    identities = {
+        name: {
+            "absolutePath": f"/opt/toolchain/bin/{name}",
+            "sha256": "sha256:" + "a" * 64,
+        }
+        for name in ("ruby", "rg", "java", "javac", "mvn")
+    }
+    identities.update(
+        {
+            name: {
+                "absolutePath": f"/opt/toolchain/{name}",
+                "sha256": "sha256:" + "b" * 64,
+            }
+            for name in ("javaHome", "mavenHome", "mavenRepository")
+        }
+    )
+    return identities
+
+
+def _projection_schema_profile_identity() -> dict[str, str]:
+    return {
+        "profileId": "toolchain-profile:test:validator-coupling:v1",
+        "profileDigest": "sha256:" + "c" * 64,
+    }
+
+
+def _minimal_projection_manifest(validator_identity: dict) -> dict:
+    digest = "d" * 64
+    return {
+        "schemaVersion": "runtime-projection-manifest/v1",
+        "projectionType": "CODEX_REPOSITORY_PACK",
+        "projectionVersion": "codex-project-pack/1",
+        "runtime": "CODEX",
+        "project": "schema-fixture",
+        "sourceResolutionId": "resolution:schema-fixture",
+        "capabilityLockFingerprint": "sha256:" + "e" * 64,
+        "projectStateHash": "1" * 64,
+        "projectBindingHash": "2" * 64,
+        "sourceCapabilities": [
+            {
+                "id": "framework:test:validator-coupling",
+                "kind": "FRAMEWORK",
+                "version": "1.0.0",
+                "contentHash": digest,
+                "sourceKind": "EXTERNAL_CAPABILITY_PACK",
+                "sourceRegistrationId": "pack:validator-coupling",
+                "sourceCommit": "3" * 40,
+                "sourceTree": "4" * 40,
+                "resolvedContentDigest": "sha256:" + digest,
+                "validatorIdentity": validator_identity,
+                "registrationFingerprint": "sha256:" + "f" * 64,
+            }
+        ],
+        "generatedSkills": [],
+        "omittedReferences": [],
+        "generatedFiles": [],
+    }
+
+
+@pytest.mark.parametrize(
+    ("case", "validator_fields", "valid"),
+    [
+        ("sanitized-empty", {"environmentContract": "SANITIZED"}, True),
+        (
+            "registered-toolchain",
+            {
+                "environmentContract": "REGISTERED_TOOLCHAIN_OFFLINE_CACHE",
+                "toolchain": _projection_schema_toolchain_identity(),
+            },
+            True,
+        ),
+        (
+            "managed-profile",
+            {
+                "environmentContract": "MANAGED_TOOLCHAIN_PROFILE",
+                "toolchainProfile": _projection_schema_profile_identity(),
+            },
+            True,
+        ),
+        (
+            "registered-missing-toolchain",
+            {"environmentContract": "REGISTERED_TOOLCHAIN_OFFLINE_CACHE"},
+            False,
+        ),
+        (
+            "managed-missing-profile",
+            {"environmentContract": "MANAGED_TOOLCHAIN_PROFILE"},
+            False,
+        ),
+        (
+            "managed-both-identities",
+            {
+                "environmentContract": "MANAGED_TOOLCHAIN_PROFILE",
+                "toolchain": _projection_schema_toolchain_identity(),
+                "toolchainProfile": _projection_schema_profile_identity(),
+            },
+            False,
+        ),
+        (
+            "sanitized-profile",
+            {
+                "environmentContract": "SANITIZED",
+                "toolchainProfile": _projection_schema_profile_identity(),
+            },
+            False,
+        ),
+    ],
+)
+def test_projection_validator_identity_enforces_environment_coupling(
+    case: str,
+    validator_fields: dict,
+    valid: bool,
+):
+    del case
+    from evolution_harness.schema import SchemaStore, SchemaValidationError
+
+    root = Path(__file__).parents[1]
+    validator_identity = {
+        "relativePath": "scripts/verify-capability-pack",
+        "sha256": "sha256:" + "9" * 64,
+        **validator_fields,
+    }
+    manifest = _minimal_projection_manifest(validator_identity)
+    if valid:
+        SchemaStore(root).validate(
+            "core/schemas/runtime-projection-manifest.schema.json", manifest
+        )
+        return
+    with pytest.raises(SchemaValidationError):
+        SchemaStore(root).validate(
+            "core/schemas/runtime-projection-manifest.schema.json", manifest
+        )
+
+
 def _copy_repo(tmp_path: Path) -> tuple[Path, Path]:
     source = Path(__file__).parents[1]
     root = tmp_path / "repo"
@@ -211,28 +346,87 @@ def test_projection_snapshots_external_skill_from_locked_git_blob(tmp_path: Path
     ] == [manifest["generatedSkills"][-1]]
 
 
+def test_projection_build_and_freshness_reuse_one_external_verification_session_without_output_drift(
+    tmp_path: Path,
+):
+    from evolution_harness.capability_pack_registry import CapabilityVerificationSession
+    from evolution_harness.projection import build_projection_pack, check_projection_freshness
+    from evolution_harness.resolver import resolve_design_context
+
+    root, project, _ = _external_pack_project(tmp_path)
+    request = {
+        "intent": "visual-reference-review",
+        "topic": "web-fidelity",
+        "requested_output": "review findings",
+        "runtime": "CODEX",
+    }
+    expected_resolved = resolve_design_context(root, project, **request)
+    expected_manifest = build_projection_pack(
+        root,
+        project,
+        expected_resolved,
+        runtime="CODEX",
+    )
+    pack = root / "generated/projections/codex/project-fixture"
+    expected_bytes = _file_snapshot(pack)
+
+    with CapabilityVerificationSession(
+        root,
+        allowed_capability_ids={EXTERNAL_CAPABILITY_ID},
+    ) as session:
+        resolved = resolve_design_context(
+            root,
+            project,
+            **request,
+            verification_session=session,
+        )
+        manifest = build_projection_pack(
+            root,
+            project,
+            resolved,
+            runtime="CODEX",
+            verification_session=session,
+        )
+        freshness = check_projection_freshness(
+            root,
+            project,
+            runtime="CODEX",
+            verification_session=session,
+        )
+        stats = session.stats
+
+    assert resolved == expected_resolved
+    assert manifest == expected_manifest
+    assert _file_snapshot(pack) == expected_bytes
+    assert manifest["capabilityLockFingerprint"] == resolved["capabilityLockFingerprint"]
+    assert freshness.fresh
+    assert stats.full_candidate_gate_count == 1
+    assert stats.isolated_checkout_count == 1
+
+
 def test_projection_build_rejects_external_identity_drift_after_blob_read_without_replacing_canonical(
     tmp_path: Path, monkeypatch
 ):
     from evolution_harness import projection
+    from evolution_harness.capability_pack_registry import VerifiedCapabilityPack
 
     root, project, source = _external_pack_project(tmp_path)
     resolved = _resolved(root, project, runtime="CODEX")
     projection.build_projection_pack(root, project, resolved, runtime="CODEX")
     pack = root / "generated/projections/codex/project-fixture"
     before = _file_snapshot(pack)
-    original_read = projection.read_registered_pack_blob
+    original_read = VerifiedCapabilityPack.read_blob
     advanced = False
 
-    def read_then_advance(registration, relative_path):
+    def read_then_advance(verified_pack, relative_path):
         nonlocal advanced
-        data = original_read(registration, relative_path)
+        data = original_read(verified_pack, relative_path)
         if not advanced:
             advanced = True
             _advance_external_pack_identity(root, project, source)
         return data
 
-    monkeypatch.setattr(projection, "read_registered_pack_blob", read_then_advance)
+    monkeypatch.setattr(VerifiedCapabilityPack, "read_blob", read_then_advance)
 
     with pytest.raises(projection.ProjectionError, match="external source identity drift"):
         projection.build_projection_pack(root, project, resolved, runtime="CODEX")
@@ -310,24 +504,25 @@ def test_projection_validation_rejects_external_identity_drift_after_blob_read(
     tmp_path: Path, monkeypatch
 ):
     from evolution_harness import projection
+    from evolution_harness.capability_pack_registry import VerifiedCapabilityPack
 
     root, project, source = _external_pack_project(tmp_path)
     resolved = _resolved(root, project, runtime="CODEX")
     projection.build_projection_pack(root, project, resolved, runtime="CODEX")
     pack = root / "generated/projections/codex/project-fixture"
     before = _file_snapshot(pack)
-    original_read = projection.read_registered_pack_blob
+    original_read = VerifiedCapabilityPack.read_blob
     advanced = False
 
-    def read_then_advance(registration, relative_path):
+    def read_then_advance(verified_pack, relative_path):
         nonlocal advanced
-        data = original_read(registration, relative_path)
+        data = original_read(verified_pack, relative_path)
         if not advanced:
             advanced = True
             _advance_external_pack_identity(root, project, source)
         return data
 
-    monkeypatch.setattr(projection, "read_registered_pack_blob", read_then_advance)
+    monkeypatch.setattr(VerifiedCapabilityPack, "read_blob", read_then_advance)
 
     with pytest.raises(projection.ProjectionError, match="external source identity drift"):
         projection.validate_projection_pack(root, project, pack, runtime="CODEX")

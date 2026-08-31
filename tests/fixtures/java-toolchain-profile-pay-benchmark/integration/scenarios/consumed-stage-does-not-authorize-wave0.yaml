@@ -1,0 +1,26 @@
+schemaVersion: project-integration-scenario/v1
+id: benchmark-consumed-stage-does-not-authorize-wave0
+intent: architecture-review
+topic: benchmark-read-only
+requestedOutput: stage authorization boundary review
+runtime: CODEX
+expected:
+  authorityGate: PASS
+  topicGuard: OPEN_OR_IN_PROGRESS
+  facts:
+    permission.stage4-closure-projection: CONSUMED
+    permission.landing-preflight: CONSUMED
+    permission.local-landing: CONSUMED
+    slice.benchmark.stage1-authorization: CONSUMED
+    slice.benchmark.stage3-authorization: CONSUMED
+    slice.benchmark.stage4-authorization: CONSUMED
+    slice.benchmark.stage5-authorization: CONSUMED
+    permission.wave0: DENY
+  selectedCapabilities:
+    - framework:agent-design:authority-analysis
+    - framework:agent-design:lifecycle-analysis
+    - principle:agent-design:project-truth-over-generic-guidance
+    - skill:agent-design:architecture-review
+    - framework:java:java-engineering-standard
+  conflictResolutionRules:
+    - PROJECT_TRUTH_WINS

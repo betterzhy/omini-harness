@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-evolution.local/core/schemas/capability-validator-toolchain-binding.schema.json",
+  "type": "object",
+  "required": ["schemaVersion", "profileId", "commands", "directories"],
+  "properties": {
+    "schemaVersion": {"const": "capability-validator-toolchain-binding/v1"},
+    "profileId": {
+      "type": "string",
+      "pattern": "^toolchain-profile:[a-z0-9][a-z0-9._-]*(?::[a-z0-9][a-z0-9._-]*)+$"
+    },
+    "commands": {"$ref": "#/$defs/locatorMap"},
+    "directories": {"$ref": "#/$defs/locatorMap"}
+  },
+  "$defs": {
+    "absolutePath": {
+      "type": "string",
+      "pattern": "^/(?:[^/]+/)*[^/]+$"
+    },
+    "locatorMap": {
+      "type": "object",
+      "minProperties": 1,
+      "patternProperties": {
+        "^[A-Za-z][A-Za-z0-9]*$": {"$ref": "#/$defs/absolutePath"}
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

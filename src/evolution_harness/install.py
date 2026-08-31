@@ -5,6 +5,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from .anchored_fs import AnchoredPathError, AnchoredRoot
+from .capability_pack_registry import CapabilityVerificationSession
 from .hashing import sha256_bytes
 from .paths import PathBoundaryError, resolve_without_symlinks, safe_relative_path
 from .projection import validate_projection_pack
@@ -46,6 +47,8 @@ def _projection_inputs(
     repository_root: Path,
     pack_root: Path,
     source_root: Path | None = None,
+    *,
+    verification_session: CapabilityVerificationSession | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     repository = Path(repository_root).resolve()
     pack = Path(pack_root).resolve()
@@ -79,6 +82,7 @@ def _projection_inputs(
             pack,
             runtime=runtime,
             authority_snapshot=authority_snapshot,
+            verification_session=verification_session,
         )
     except Exception as exc:
         raise ProjectionInstallError(f"projection pack is not a canonical projection: {exc}") from exc
@@ -169,6 +173,7 @@ def _install_projection_unlocked(
     *,
     source_root: Path | None = None,
     apply: bool = False,
+    verification_session: CapabilityVerificationSession | None = None,
 ) -> dict[str, Any]:
     if apply:
         raise ProjectionInstallError(
@@ -192,7 +197,12 @@ def _install_projection_unlocked(
                 raise ProjectionInstallError(
                     "pending projection transaction requires manual recovery; automatic recovery is disabled"
                 )
-            projection, inputs = _projection_inputs(repository, pack_root, source)
+            projection, inputs = _projection_inputs(
+                repository,
+                pack_root,
+                source,
+                verification_session=verification_session,
+            )
             resolved = projection.pop("_validatedResolvedContext")
             integration_root_value = projection.pop("_validatedIntegrationRoot")
             if integration_root_value is not None:
@@ -208,6 +218,7 @@ def _install_projection_unlocked(
                     requested_output=resolved["requestedOutput"],
                     explicit_stage=resolved["stage"],
                     reopen_signal=resolved.get("reopenSignal"),
+                    verification_session=verification_session,
                 )
                 if not freshness.fresh:
                     raise ProjectionInstallError(
@@ -278,6 +289,7 @@ def install_projection(
     *,
     source_root: Path | None = None,
     apply: bool = False,
+    verification_session: CapabilityVerificationSession | None = None,
 ) -> dict[str, Any]:
     target_identity = process_lock_identity("projection-install", Path(target_root))
     pack_identity = process_lock_identity("projection-pack", Path(pack_root))
@@ -289,6 +301,7 @@ def install_projection(
                 target_root,
                 source_root=source_root,
                 apply=apply,
+                verification_session=verification_session,
             )
     except ProcessLockError as exc:
         raise ProjectionInstallError(f"concurrent projection install or projection pack access rejected: {exc}") from exc

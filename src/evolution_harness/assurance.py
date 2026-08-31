@@ -6,7 +6,11 @@ from typing import Any, Iterable
 import json
 import yaml
 
-from .capability_pack_registry import build_capability_pack_registry
+from .capability_pack_registry import (
+    CapabilityVerificationSession,
+    build_capability_pack_registry,
+    load_capability_pack_registrations,
+)
 from .catalog import build_all_catalogs
 from .generated import deterministic_json_bytes
 from .integration import load_integration
@@ -20,6 +24,9 @@ from .registry import (
 )
 from .schema import SchemaStore
 from .validation import validate_repository
+
+
+_VALIDATION_SCOPES = frozenset({"all", "core", "adoption"})
 
 
 def _issue(code: str, message: str, path: str | None = None) -> dict[str, Any]:
@@ -87,16 +94,34 @@ def _validate_engineering(root: Path, issues: list[dict[str, Any]]) -> None:
         issues.append(_issue("ENGINEERING_INVALID", str(exc), "engineering"))
 
 
-def _validate_integrations(root: Path, issues: list[dict[str, Any]]) -> int:
+def _validate_integrations(
+    root: Path,
+    issues: list[dict[str, Any]],
+    *,
+    verification_session: CapabilityVerificationSession | None,
+) -> tuple[int, bool]:
     store = SchemaStore(root)
     integration_roots = sorted(path.parent for path in (root / "integrations").glob("*/integration.yaml"))
+    primary_session_failed = False
     for integration in integration_roots:
         try:
             loaded = load_integration(root, integration)
             control_plane = loaded["controlPlaneRoot"]
             load_project_state(root, control_plane)
             load_project_binding(root, control_plane)
-            expected_lock = build_capability_lock(root, control_plane, write=False)
+            try:
+                expected_lock = build_capability_lock(
+                    root,
+                    control_plane,
+                    write=False,
+                    verification_session=(
+                        None if primary_session_failed else verification_session
+                    ),
+                )
+            except Exception:
+                if verification_session is not None and not primary_session_failed:
+                    primary_session_failed = True
+                raise
             lock_path = control_plane / ".agent-evolution/capabilities.lock.yaml"
             if not lock_path.exists():
                 issues.append(_issue("INTEGRATION_LOCK_MISSING", "integration capability lock missing", str(lock_path)))
@@ -109,7 +134,7 @@ def _validate_integrations(root: Path, issues: list[dict[str, Any]]) -> int:
                 store.validate("core/schemas/project-integration-scenario.schema.json", value)
         except Exception as exc:
             issues.append(_issue("INTEGRATION_INVALID", str(exc), str(integration)))
-    return len(integration_roots)
+    return len(integration_roots), primary_session_failed
 
 
 def structural_validate(
@@ -117,32 +142,81 @@ def structural_validate(
     *,
     project_roots: Iterable[Path] = (),
     check_generated: bool = False,
+    scope: str = "all",
 ) -> dict[str, Any]:
     root = Path(repository_root)
+    if scope not in _VALIDATION_SCOPES:
+        raise ValueError(f"unsupported validation scope: {scope}")
+    projects = tuple(Path(value) for value in project_roots)
+    if scope == "core" and projects:
+        raise ValueError("core validation scope does not accept project roots")
+    if scope == "core":
+        return _structural_validate(
+            root,
+            project_roots=(),
+            check_generated=check_generated,
+            verification_session=None,
+            scope=scope,
+        )
+    try:
+        registrations = load_capability_pack_registrations(root)
+    except Exception:
+        return _structural_validate(
+            root,
+            project_roots=projects,
+            check_generated=check_generated,
+            verification_session=None,
+            scope=scope,
+        )
+    external_ids = {registration["capabilityId"] for registration in registrations}
+    with CapabilityVerificationSession(
+        root,
+        allowed_capability_ids=external_ids,
+    ) as verification_session:
+        return _structural_validate(
+            root,
+            project_roots=projects,
+            check_generated=check_generated,
+            verification_session=verification_session,
+            scope=scope,
+        )
+
+
+def _structural_validate(
+    root: Path,
+    *,
+    project_roots: Iterable[Path],
+    check_generated: bool,
+    verification_session: CapabilityVerificationSession | None,
+    scope: str,
+) -> dict[str, Any]:
     issues: list[dict[str, Any]] = []
-    base = validate_repository(root)
-    for item in base.issues:
-        issues.append(_issue(item.code, item.message, item.path))
-    _validate_learning(root, issues)
-    _validate_engineering(root, issues)
-    integration_count = _validate_integrations(root, issues)
+    run_core = scope in {"all", "core"}
+    run_adoption = scope in {"all", "adoption"}
+    if run_core:
+        base = validate_repository(root)
+        for item in base.issues:
+            issues.append(_issue(item.code, item.message, item.path))
+        _validate_learning(root, issues)
+        _validate_engineering(root, issues)
 
     store = SchemaStore(root)
     projects = [Path(value) for value in project_roots]
-    for project in projects:
-        try:
-            load_project_state(root, project)
-            load_project_binding(root, project)
-        except Exception as exc:
-            issues.append(_issue("PROJECT_CONTROL_PLANE_INVALID", str(exc), str(project)))
-        handoff_path = project / ".agent-evolution/design-handoff.yaml"
-        if handoff_path.exists():
+    if run_adoption:
+        for project in projects:
             try:
-                store.validate("core/schemas/design-handoff.schema.json", yaml.safe_load(handoff_path.read_text(encoding="utf-8")) or {})
+                load_project_state(root, project)
+                load_project_binding(root, project)
             except Exception as exc:
-                issues.append(_issue("HANDOFF_INVALID", str(exc), str(handoff_path)))
+                issues.append(_issue("PROJECT_CONTROL_PLANE_INVALID", str(exc), str(project)))
+            handoff_path = project / ".agent-evolution/design-handoff.yaml"
+            if handoff_path.exists():
+                try:
+                    store.validate("core/schemas/design-handoff.schema.json", yaml.safe_load(handoff_path.read_text(encoding="utf-8")) or {})
+                except Exception as exc:
+                    issues.append(_issue("HANDOFF_INVALID", str(exc), str(handoff_path)))
 
-    if check_generated:
+    if check_generated and run_core:
         try:
             _check_json_file(
                 root / "generated/registries/design-registry.json",
@@ -165,16 +239,14 @@ def structural_validate(
             _check_json_file(root / "engineering/generated/active-catalog.json", catalogs["engineering"], issues)
         except Exception as exc:
             issues.append(_issue("GENERATED_CHECK_FAILED", str(exc)))
-        try:
-            _check_json_file(
-                root / "generated/registries/capability-pack-registry.json",
-                build_capability_pack_registry(root, write=False),
-                issues,
-            )
-        except Exception as exc:
-            issues.append(_issue("GENERATED_CHECK_FAILED", str(exc)))
+    if check_generated and run_adoption:
         for project in projects:
-            expected_lock = build_capability_lock(root, project, write=False)
+            expected_lock = build_capability_lock(
+                root,
+                project,
+                write=False,
+                verification_session=verification_session,
+            )
             lock_path = project / ".agent-evolution/capabilities.lock.yaml"
             if not lock_path.exists():
                 issues.append(_issue("CAPABILITY_LOCK_MISSING", "capability lock missing", str(lock_path)))
@@ -183,9 +255,39 @@ def structural_validate(
                 if actual_lock != expected_lock:
                     issues.append(_issue("CAPABILITY_LOCK_DRIFT", "capability lock differs from deterministic resolution", str(lock_path)))
             for runtime in ("CHATGPT", "CODEX"):
-                check = check_projection_freshness(root, project, runtime=runtime)
+                check = check_projection_freshness(
+                    root,
+                    project,
+                    runtime=runtime,
+                    verification_session=verification_session,
+                )
                 if not check.fresh:
                     issues.append(_issue("PROJECTION_STALE", f"{runtime} projection stale: {', '.join(check.reasons)}", str(project)))
+
+    if run_adoption:
+        integration_count, primary_session_failed = _validate_integrations(
+            root,
+            issues,
+            verification_session=verification_session,
+        )
+    else:
+        integration_count = 0
+        primary_session_failed = False
+    if check_generated and run_adoption:
+        try:
+            _check_json_file(
+                root / "generated/registries/capability-pack-registry.json",
+                build_capability_pack_registry(
+                    root,
+                    write=False,
+                    verification_session=(
+                        None if primary_session_failed else verification_session
+                    ),
+                ),
+                issues,
+            )
+        except Exception as exc:
+            issues.append(_issue("GENERATED_CHECK_FAILED", str(exc)))
 
     issues.sort(key=lambda item: (item["code"], item.get("path", ""), item["message"]))
     return {

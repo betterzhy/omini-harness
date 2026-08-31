@@ -3,8 +3,10 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import signal
+import platform
+import shlex
 import shutil
+import stat
 import subprocess
 import time
 from copy import deepcopy
@@ -14,10 +16,19 @@ from typing import Any
 import pytest
 import yaml
 
+from evolution_harness import capability_pack_registry
 from evolution_harness.capability_pack_registry import (
-    _directory_identity_digest,
+    _canonical_registry_entry,
+    _registration_fingerprint,
     build_capability_pack_registry,
     get_registered_capability_pack,
+    load_capability_pack_registrations,
+)
+from evolution_harness.hashing import canonical_json_bytes, sha256_bytes
+from evolution_harness.toolchain_profile import (
+    binding_path,
+    directory_identity_digest,
+    profile_digest,
 )
 
 
@@ -28,6 +39,11 @@ JAVA_CAPABILITY_ID = "framework:java:java-engineering-standard"
 JAVA_REGISTRATION_ID = "pack:java-engineering-standard"
 JAVA_SOURCE_COMMIT = "01d0e7d15ef9f6aa7814b0b001fa0b7c2c30e882"
 JAVA_SOURCE_TREE = "4bfc51d75c9e01e585db4cc073f952043ea01393"
+PROFILE_ID = "toolchain-profile:java-engineering-standard:darwin-arm64:v1"
+PROFILE_DIGEST = "sha256:c852142343ea97aef6d3a555e5500ecb633baf1a23d846d7bbe72a8bcf5e4490"
+REGISTRATION_FINGERPRINT = (
+    "sha256:cd5bbf5e763b38c96fccbf4c5a9357497c82e10fbf2272e4693fbcd2f63a708b"
+)
 
 
 def _git(repository: Path, *arguments: str) -> str:
@@ -270,6 +286,8 @@ def _write_test_schemas(root: Path, _source: Path) -> None:
     for name in [
         "capability-pack-manifest.schema.json",
         "capability-pack-registration.schema.json",
+        "capability-validator-toolchain-binding.schema.json",
+        "capability-validator-toolchain-registry.schema.json",
     ]:
         shutil.copy2(repository / "core/schemas" / name, destination / name)
 
@@ -286,6 +304,308 @@ def _harness_with_pack(tmp_path: Path) -> tuple[Path, Path, str, str]:
     _write_test_schemas(root, source)
     _write_registrations(root, [_registration(source, commit, tree)])
     return root, source, commit, tree
+
+
+def _make_toolchain_read_only(root: Path) -> None:
+    for path in sorted(root.rglob("*"), reverse=True):
+        path.chmod(0o555 if path.is_dir() or os.access(path, os.X_OK) else 0o444)
+    root.chmod(0o555)
+
+
+def _managed_profile_harness(
+    tmp_path: Path,
+    *,
+    mutate_binding_during_gate: bool = False,
+    mutate_profile_during_gate: bool = False,
+    scratch_record: Path | None = None,
+    gate_outcome: str = "success",
+    scratch_replacement: str | None = None,
+    scratch_replacement_target: Path | None = None,
+    scratch_ancestor_replacement: str | None = None,
+    scratch_move_target: Path | None = None,
+    scratch_reinject_acl: bool = False,
+) -> tuple[Path, dict[str, Any]]:
+    root = tmp_path / "harness"
+    root.mkdir()
+    _git(root, "init", "-q")
+    source = tmp_path / "pack"
+    source.mkdir()
+    _write_valid_pack(source)
+    _write_test_schemas(root, source)
+
+    managed_store = root / ".worktrees/.capability-pack-cache/store"
+    first = managed_store / "first"
+    second = managed_store / "second"
+    executable = b"#!/bin/sh\nexit 0\n"
+    relative_commands = {
+        "ruby": "bin/ruby",
+        "rg": "bin/rg",
+        "java": "java/bin/java",
+        "javac": "java/bin/javac",
+        "mvn": "home/.m2/wrapper/dists/apache-maven/fixture/bin/mvn",
+    }
+    for relative in relative_commands.values():
+        path = first / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(executable)
+        path.chmod(0o555)
+    shadow_bash = first / "bin/bash"
+    shadow_bash.write_bytes(b"#!/bin/sh\nexit 97\n")
+    shadow_bash.chmod(0o555)
+    maven_home = first / "home/.m2/wrapper/dists/apache-maven/fixture"
+    (maven_home / "lib").mkdir()
+    (maven_home / "lib/core.jar").write_bytes(b"core")
+    repository = first / "home/.m2/repository"
+    (repository / "org/example/tool/1.0").mkdir(parents=True)
+    (repository / "org/example/tool/1.0/tool.jar").write_bytes(b"tool")
+    shutil.copytree(first, second)
+    _make_toolchain_read_only(first)
+    _make_toolchain_read_only(second)
+
+    platform_identity = {
+        "os": platform.system().lower(),
+        "architecture": platform.machine().lower(),
+    }
+    command_digest = "sha256:" + sha256_bytes(executable)
+    artifact = {
+        "artifactId": "artifact:ripgrep:test:darwin-arm64",
+        "kind": "OFFICIAL_RELEASE_ARCHIVE",
+        "platform": platform_identity,
+        "sourceUri": "https://example.invalid/ripgrep.tar.gz",
+        "archiveFormat": "TAR_GZ",
+        "archiveSha256": "sha256:" + "1" * 64,
+        "extractedRoot": "ripgrep-test",
+        "extractedFiles": {"rg": command_digest},
+        "provenancePolicy": "OFFICIAL_GITHUB_RELEASE_ARCHIVE_SHA256",
+    }
+    artifact_digest = "sha256:" + sha256_bytes(canonical_json_bytes(artifact))
+    profile_id = "toolchain-profile:test:darwin-arm64:v1"
+    profile = {
+        "schemaVersion": "capability-validator-toolchain-profile/v1",
+        "profileId": profile_id,
+        "environmentAdapter": "JAVA_MAVEN_OFFLINE_V1",
+        "platform": platform_identity,
+        "commands": {
+            name: {
+                "artifactId": (
+                    artifact["artifactId"] if name == "rg" else f"artifact:{name}:test"
+                ),
+                "fileName": name,
+                "sha256": command_digest,
+                "bindingPolicy": (
+                    "HARNESS_MANAGED_STORE" if name == "rg" else "HOST_ATTESTED"
+                ),
+                **({"artifactDigest": artifact_digest} if name == "rg" else {}),
+            }
+            for name in ("ruby", "rg", "java", "javac", "mvn")
+        },
+        "directories": {
+            "javaHome": {
+                "artifactId": "artifact:java:test",
+                "sha256": directory_identity_digest(first / "java"),
+                "bindingPolicy": "HOST_ATTESTED",
+            },
+            "mavenHome": {
+                "artifactId": "artifact:maven:test",
+                "sha256": directory_identity_digest(maven_home),
+                "bindingPolicy": "HARNESS_MANAGED_CACHE",
+            },
+            "mavenRepository": {
+                "artifactId": "artifact:maven-repository:test",
+                "sha256": directory_identity_digest(repository),
+                "bindingPolicy": "HARNESS_MANAGED_CACHE",
+            },
+        },
+        "relationships": {
+            "javaHomeCommands": ["java", "javac"],
+            "mavenHomeCommand": "mvn",
+            "mavenRepositoryLayout": "DOT_M2_REPOSITORY",
+        },
+    }
+    registry_path = root / "core/registries/capability-validator-toolchains.yaml"
+    registry_path.parent.mkdir(parents=True)
+    registry = {
+        "schemaVersion": "capability-validator-toolchain-registry/v1",
+        "artifacts": [artifact],
+        "profiles": [profile],
+    }
+    registry_path.write_text(
+        yaml.safe_dump(registry, sort_keys=False),
+        encoding="utf-8",
+    )
+
+    def binding_record(toolchain_root: Path) -> dict[str, Any]:
+        return {
+            "schemaVersion": "capability-validator-toolchain-binding/v1",
+            "profileId": profile_id,
+            "commands": {
+                name: str(toolchain_root / relative)
+                for name, relative in relative_commands.items()
+            },
+            "directories": {
+                "javaHome": str(toolchain_root / "java"),
+                "mavenHome": str(
+                    toolchain_root
+                    / "home/.m2/wrapper/dists/apache-maven/fixture"
+                ),
+                "mavenRepository": str(toolchain_root / "home/.m2/repository"),
+            },
+        }
+
+    binding_file = binding_path(root, profile_id)
+    binding_file.parent.mkdir(parents=True)
+    binding_file.write_text(json.dumps(binding_record(first)), encoding="utf-8")
+    binding_file.chmod(0o444)
+
+    expected_commands = {
+        name: first / relative for name, relative in relative_commands.items()
+    }
+    expected_path = ":".join(
+        dict.fromkeys(
+            [str(path.parent) for path in expected_commands.values()]
+            + ["/usr/bin", "/bin", "/usr/sbin", "/sbin"]
+        )
+    )
+    lines = [
+        "#!/usr/bin/env bash",
+        "set -euo pipefail",
+        f"[ \"$PATH\" = {shlex.quote(expected_path)} ]",
+        f"[ \"$HOME\" = {shlex.quote(str(first / 'home'))} ]",
+        f"[ \"$JAVA_HOME\" = {shlex.quote(str(first / 'java'))} ]",
+        f"[ \"$(command -v bash)\" = {shlex.quote(str(shadow_bash))} ]",
+    ]
+    lines.extend(
+        f"[ \"$(command -v {name})\" = {shlex.quote(str(path))} ]"
+        for name, path in expected_commands.items()
+    )
+    if scratch_record is not None:
+        record = shlex.quote(str(scratch_record))
+        lines.extend(
+            [
+                ': "${TMPDIR:?managed profile Gate requires TMPDIR}"',
+                'case "$TMPDIR" in /*) ;; *) exit 81 ;; esac',
+                '[ -d "$TMPDIR" ]',
+                '[ ! -L "$TMPDIR" ]',
+                '[ -w "$TMPDIR" ]',
+                '[ "$(cd "$TMPDIR" && pwd -P)" = "$TMPDIR" ]',
+                f'printf "%s\\n" "$TMPDIR" > {record}',
+                f'/usr/bin/stat -f "%Lp" "$TMPDIR" >> {record}',
+                'printf writable > "$TMPDIR/probe"',
+            ]
+        )
+    if mutate_binding_during_gate:
+        replacement = json.dumps(binding_record(second))
+        lines.extend(
+            [
+                f"/bin/chmod 0644 {shlex.quote(str(binding_file))}",
+                f"printf '%s' {shlex.quote(replacement)} > {shlex.quote(str(binding_file))}",
+                f"/bin/chmod 0444 {shlex.quote(str(binding_file))}",
+            ]
+        )
+    if mutate_profile_during_gate:
+        replacement_registry = deepcopy(registry)
+        replacement_registry["profiles"][0]["commands"]["ruby"]["sha256"] = (
+            "sha256:" + "0" * 64
+        )
+        replacement = json.dumps(replacement_registry)
+        lines.append(
+            f"printf '%s' {shlex.quote(replacement)} > {shlex.quote(str(registry_path))}"
+        )
+    if gate_outcome == "failure":
+        lines.append("exit 23")
+    elif gate_outcome == "timeout":
+        lines.append("/bin/sleep 60")
+    elif gate_outcome != "success":
+        raise ValueError(f"unsupported test Gate outcome: {gate_outcome}")
+    if scratch_replacement == "directory":
+        lines.extend(
+            [
+                '/bin/mv "$TMPDIR" "$TMPDIR-owned"',
+                '/bin/mkdir -m 0700 "$TMPDIR"',
+                'printf preserve > "$TMPDIR/replacement.txt"',
+            ]
+        )
+    elif scratch_replacement == "symlink":
+        if scratch_replacement_target is None:
+            raise ValueError("symlink scratch replacement requires a target")
+        lines.extend(
+            [
+                '/bin/mv "$TMPDIR" "$TMPDIR-owned"',
+                (
+                    f'/bin/ln -s {shlex.quote(str(scratch_replacement_target))} '
+                    '"$TMPDIR"'
+                ),
+            ]
+        )
+    elif scratch_replacement is not None:
+        raise ValueError(f"unsupported scratch replacement: {scratch_replacement}")
+    if scratch_ancestor_replacement is not None:
+        if scratch_ancestor_replacement == "runtime-parent":
+            lines.append('scratch_ancestor="${TMPDIR%/*}"')
+        elif scratch_ancestor_replacement == "managed-cache":
+            lines.append('scratch_ancestor="${TMPDIR%/runtime/*}"')
+        else:
+            raise ValueError(
+                "unsupported scratch ancestor replacement: "
+                f"{scratch_ancestor_replacement}"
+            )
+        lines.extend(
+            [
+                '/bin/mv "$scratch_ancestor" "$scratch_ancestor-owned"',
+                '/bin/mkdir -p "$TMPDIR"',
+                'printf preserve > "$TMPDIR/replacement.txt"',
+            ]
+        )
+    if scratch_move_target is not None:
+        if scratch_reinject_acl:
+            lines.append(
+                '/bin/chmod +a "everyone allow readsecurity" "$TMPDIR"'
+            )
+        lines.append(
+            f'/bin/mv "$TMPDIR" {shlex.quote(str(scratch_move_target))}'
+        )
+    elif scratch_reinject_acl:
+        raise ValueError("scratch ACL reinjection requires a move target")
+    validator = source / "scripts/verify-capability-pack"
+    validator.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    validator.chmod(0o755)
+    _git(source, "init", "-q")
+    _git(source, "config", "user.name", "Pack Test")
+    _git(source, "config", "user.email", "pack-test@example.invalid")
+    _git(source, "add", "-A")
+    _git(source, "commit", "-qm", "test: managed profile Gate")
+    commit = _git(source, "rev-parse", "HEAD")
+    tree = _git(source, "rev-parse", "HEAD^{tree}")
+    registration = _registration(source, commit, tree)
+    registration["validator"]["environmentContract"] = "MANAGED_TOOLCHAIN_PROFILE"
+    registration["validator"]["toolchainProfile"] = {
+        "profileId": profile_id,
+        "profileDigest": profile_digest(profile),
+    }
+    if gate_outcome == "timeout":
+        registration["validator"]["timeoutSeconds"] = 1
+    _write_registrations(root, [registration])
+    return root, registration
+
+
+def _assert_private_gate_scratch_cleaned(record: Path) -> Path:
+    scratch_value, mode = record.read_text(encoding="utf-8").splitlines()
+    scratch = Path(scratch_value)
+    assert scratch.is_absolute()
+    assert mode == "700"
+    assert not scratch.exists()
+    return scratch
+
+
+def _macos_acl_entries(path: Path) -> list[str]:
+    completed = subprocess.run(
+        ["/bin/ls", "-lde", str(path)],
+        check=True,
+        capture_output=True,
+        text=True,
+        env={"PATH": "/usr/bin:/bin", "LANG": "C", "LC_ALL": "C"},
+    )
+    return completed.stdout.splitlines()[1:]
 
 
 def _replace(path: Path, old: str, new: str) -> None:
@@ -386,14 +706,42 @@ def test_registry_canonical_revision_excludes_relocated_discovery_locator(
 
 
 def test_registration_fingerprint_binds_harness_declared_manifest(tmp_path: Path):
-    from evolution_harness.project import _registration_fingerprint
-
     source, commit, tree = _manifestless_pack_fixture(tmp_path)
     registration = _declared_manifest_registration(source, commit, tree)
     changed = deepcopy(registration)
     changed["contentDeclaration"]["manifest"]["displayName"] = "Changed"
 
     assert _registration_fingerprint(changed) != _registration_fingerprint(registration)
+
+
+def test_pack_owner_preserves_canonical_java_registration_fingerprint_bytes():
+    registration = _java_registration()
+
+    assert _registration_fingerprint(registration) == REGISTRATION_FINGERPRINT
+
+
+def _java_registration() -> dict[str, Any]:
+    root = Path(__file__).parents[1]
+    return next(
+        item
+        for item in load_capability_pack_registrations(root)
+        if item["registrationId"] == JAVA_REGISTRATION_ID
+    )
+
+
+def test_java_registration_uses_locator_free_managed_profile():
+    registration = _java_registration()
+    assert registration["validator"]["environmentContract"] == (
+        "MANAGED_TOOLCHAIN_PROFILE"
+    )
+    assert registration["validator"]["toolchainProfile"] == {
+        "profileId": PROFILE_ID,
+        "profileDigest": PROFILE_DIGEST,
+    }
+    assert "toolchain" not in registration["validator"]
+    assert b"ChatGPT.app" not in canonical_json_bytes(
+        _canonical_registry_entry(registration)
+    )
 
 
 def test_repository_registry_registers_fixed_java_engineering_standard():
@@ -554,18 +902,291 @@ def test_candidate_gate_uses_registered_host_home_offline_cache_contract(
     }.items():
         registration["validator"]["toolchain"][name] = {
             "absolutePath": str(path),
-            "sha256": _directory_identity_digest(path),
+            "sha256": directory_identity_digest(path),
         }
     registration["validator"]["sha256"] = "sha256:" + hashlib.sha256(
         validator.read_bytes()
     ).hexdigest()
     _write_registrations(root, [registration])
 
+    real_digest = capability_pack_registry._directory_identity_digest
+    digest_paths: list[Path] = []
+
+    def counted_digest(path: Path) -> str:
+        digest_paths.append(path)
+        return real_digest(path)
+
+    monkeypatch.setattr(
+        capability_pack_registry,
+        "_directory_identity_digest",
+        counted_digest,
+    )
+
     registry = build_capability_pack_registry(root, write=False)
 
     assert registry["entries"][0]["validator"]["environmentContract"] == (
         "REGISTERED_TOOLCHAIN_OFFLINE_CACHE"
     )
+    assert digest_paths == [
+        trusted_java_home,
+        trusted_maven_home,
+        trusted_home / ".m2/repository",
+    ] * 2
+
+
+def test_managed_profile_candidate_gate_uses_attested_resolution_and_absolute_bash(
+    tmp_path: Path,
+):
+    root, expected = _managed_profile_harness(tmp_path)
+
+    actual = get_registered_capability_pack(root, CAPABILITY_ID)
+
+    assert actual == expected
+
+
+def test_managed_profile_candidate_gate_uses_private_runtime_scratch(
+    tmp_path: Path,
+):
+    record = tmp_path / "gate-scratch.txt"
+    root, expected = _managed_profile_harness(tmp_path, scratch_record=record)
+
+    actual = get_registered_capability_pack(root, CAPABILITY_ID)
+
+    scratch = _assert_private_gate_scratch_cleaned(record)
+    verified = capability_pack_registry._verify_validator_toolchain(root, expected)
+    assert "TMPDIR" not in verified.environment
+    persisted = canonical_json_bytes(actual)
+    assert b"TMPDIR" not in persisted
+    assert str(scratch).encode("utf-8") not in persisted
+
+
+def test_managed_profile_candidate_gate_cleans_private_scratch_after_failure(
+    tmp_path: Path,
+):
+    record = tmp_path / "gate-scratch.txt"
+    root, _ = _managed_profile_harness(
+        tmp_path,
+        scratch_record=record,
+        gate_outcome="failure",
+    )
+
+    with pytest.raises(ValueError, match="capability pack candidate Gate failed"):
+        get_registered_capability_pack(root, CAPABILITY_ID)
+
+    _assert_private_gate_scratch_cleaned(record)
+
+
+def test_managed_profile_candidate_gate_cleans_private_scratch_after_timeout(
+    tmp_path: Path,
+):
+    record = tmp_path / "gate-scratch.txt"
+    root, _ = _managed_profile_harness(
+        tmp_path,
+        scratch_record=record,
+        gate_outcome="timeout",
+    )
+
+    with pytest.raises(ValueError, match="capability pack candidate Gate timed out"):
+        get_registered_capability_pack(root, CAPABILITY_ID)
+
+    _assert_private_gate_scratch_cleaned(record)
+
+
+@pytest.mark.parametrize("replacement", ["directory", "symlink"])
+def test_managed_profile_candidate_gate_preserves_scratch_path_replacement(
+    tmp_path: Path,
+    replacement: str,
+):
+    record = tmp_path / "gate-scratch.txt"
+    replacement_target = tmp_path / "replacement-target"
+    replacement_target.mkdir()
+    marker = replacement_target / "unrelated.txt"
+    marker.write_text("preserve", encoding="utf-8")
+    root, _ = _managed_profile_harness(
+        tmp_path,
+        scratch_record=record,
+        scratch_replacement=replacement,
+        scratch_replacement_target=replacement_target,
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="managed runtime scratch public identity changed",
+    ):
+        get_registered_capability_pack(root, CAPABILITY_ID)
+
+    scratch = Path(record.read_text(encoding="utf-8").splitlines()[0])
+    if replacement == "directory":
+        assert (scratch / "replacement.txt").read_text(encoding="utf-8") == (
+            "preserve"
+        )
+    else:
+        assert scratch.is_symlink()
+        assert scratch.readlink() == replacement_target
+    assert marker.read_text(encoding="utf-8") == "preserve"
+    assert not Path(f"{scratch}-owned").exists()
+
+
+@pytest.mark.parametrize("ancestor", ["runtime-parent", "managed-cache"])
+def test_managed_profile_candidate_gate_rejects_scratch_ancestor_replacement(
+    tmp_path: Path,
+    ancestor: str,
+):
+    record = tmp_path / "gate-scratch.txt"
+    root, _ = _managed_profile_harness(
+        tmp_path,
+        scratch_record=record,
+        scratch_ancestor_replacement=ancestor,
+    )
+
+    with capability_pack_registry.CapabilityVerificationSession(
+        root,
+        allowed_capability_ids={CAPABILITY_ID},
+    ) as session:
+        with pytest.raises(
+            ValueError,
+            match="managed runtime public chain identity changed",
+        ):
+            get_registered_capability_pack(
+                root,
+                CAPABILITY_ID,
+                verification_session=session,
+            )
+        assert session.stats.verified_pack_count == 0
+
+    scratch = Path(record.read_text(encoding="utf-8").splitlines()[0])
+    assert (scratch / "replacement.txt").read_text(encoding="utf-8") == "preserve"
+    if ancestor == "runtime-parent":
+        owned_scratch = Path(f"{scratch.parent}-owned") / scratch.name
+    else:
+        owned_scratch = (
+            Path(f"{scratch.parent.parent}-owned") / "runtime" / scratch.name
+        )
+    assert not owned_scratch.exists()
+
+
+@pytest.mark.skipif(platform.system() != "Darwin", reason="macOS ACL contract")
+def test_managed_profile_candidate_gate_neutralizes_moved_scratch_acl(
+    tmp_path: Path,
+):
+    record = tmp_path / "gate-scratch.txt"
+    moved = tmp_path / "moved-gate-scratch"
+    root, _ = _managed_profile_harness(
+        tmp_path,
+        scratch_record=record,
+        scratch_move_target=moved,
+        scratch_reinject_acl=True,
+    )
+
+    with capability_pack_registry.CapabilityVerificationSession(
+        root,
+        allowed_capability_ids={CAPABILITY_ID},
+    ) as session:
+        with pytest.raises(
+            ValueError,
+            match="managed runtime scratch cleanup ownership cannot be proven",
+        ):
+            get_registered_capability_pack(
+                root,
+                CAPABILITY_ID,
+                verification_session=session,
+            )
+        assert session.stats.verified_pack_count == 0
+
+    assert moved.is_dir()
+    assert list(moved.iterdir()) == []
+    assert stat.S_IMODE(moved.stat().st_mode) == 0o700
+    assert _macos_acl_entries(moved) == []
+
+
+@pytest.mark.skipif(platform.system() != "Darwin", reason="macOS ACL contract")
+def test_managed_runtime_scratch_neutralizes_inherited_acl_on_private_parent(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from evolution_harness import toolchain_provisioning
+
+    root, expected = _managed_profile_harness(tmp_path)
+    profile_id = expected["validator"]["toolchainProfile"]["profileId"]
+    runtime_parent = binding_path(root, profile_id).parent.parent / "runtime"
+    runtime_parent.mkdir()
+    runtime_parent.chmod(0o700)
+    subprocess.run(
+        [
+            "/bin/chmod",
+            "+a",
+            (
+                "everyone allow list,search,add_file,add_subdirectory,"
+                "delete_child,file_inherit,directory_inherit"
+            ),
+            str(runtime_parent),
+        ],
+        check=True,
+        capture_output=True,
+        env={"PATH": "/usr/bin:/bin", "LANG": "C", "LC_ALL": "C"},
+    )
+    assert _macos_acl_entries(runtime_parent)
+
+    real_mkdir = os.mkdir
+    scratch_acl_injected = False
+
+    def mkdir_with_inherited_acl(path, mode=0o777, *, dir_fd=None):
+        nonlocal scratch_acl_injected
+        result = real_mkdir(path, mode, dir_fd=dir_fd)
+        if str(path).startswith(".capability-pack-gate-"):
+            subprocess.run(
+                [
+                    "/bin/chmod",
+                    "+ai",
+                    "everyone allow readsecurity",
+                    str(runtime_parent / str(path)),
+                ],
+                check=True,
+                capture_output=True,
+                env={"PATH": "/usr/bin:/bin", "LANG": "C", "LC_ALL": "C"},
+            )
+            scratch_acl_injected = True
+        return result
+
+    monkeypatch.setattr(toolchain_provisioning.os, "mkdir", mkdir_with_inherited_acl)
+
+    with toolchain_provisioning.managed_runtime_scratch(root) as scratch:
+        assert scratch.parent == runtime_parent
+        assert stat.S_IMODE(scratch.stat().st_mode) == 0o700
+        assert stat.S_IMODE(runtime_parent.stat().st_mode) == 0o700
+        assert _macos_acl_entries(scratch) == []
+        assert _macos_acl_entries(runtime_parent) == []
+
+    assert scratch_acl_injected is True
+    assert not scratch.exists()
+
+
+def test_managed_profile_candidate_gate_rejects_binding_relocation_during_gate(
+    tmp_path: Path,
+):
+    root, _ = _managed_profile_harness(
+        tmp_path, mutate_binding_during_gate=True
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="toolchain identity changed during candidate Gate",
+    ):
+        get_registered_capability_pack(root, CAPABILITY_ID)
+
+
+def test_managed_profile_candidate_gate_rejects_profile_drift_during_gate(
+    tmp_path: Path,
+):
+    root, _ = _managed_profile_harness(
+        tmp_path, mutate_profile_during_gate=True
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="toolchain profile identity mismatch",
+    ):
+        get_registered_capability_pack(root, CAPABILITY_ID)
 
 
 @pytest.mark.parametrize(
@@ -623,7 +1244,7 @@ def test_registry_rejects_registered_toolchain_digest_drift(
         "mavenHome": maven_home,
         "mavenRepository": repository,
     }.items():
-        toolchain[name] = {"absolutePath": str(path), "sha256": _directory_identity_digest(path)}
+        toolchain[name] = {"absolutePath": str(path), "sha256": directory_identity_digest(path)}
     if drift in {"javac", "mvn"}:
         executable_paths[drift].chmod(0o755)
         executable_paths[drift].write_bytes(b"replaced executable")
@@ -686,6 +1307,26 @@ def test_candidate_gate_materializes_registered_parent_tree_closure(tmp_path: Pa
     assert registry["entries"][0]["validator"]["timeoutSeconds"] == 30
 
 
+def test_candidate_gate_preserves_registered_validator_signal_and_output_contract(
+    tmp_path: Path,
+):
+    completed = capability_pack_registry._run_candidate_gate(
+        [
+            "/bin/bash",
+            "-c",
+            "trap 'printf trapped; exit 41' TERM; "
+            "printf before; kill -TERM $$; printf after",
+        ],
+        cwd=tmp_path,
+        timeout=5,
+        environment={"PATH": "/usr/bin:/bin", "LANG": "C", "LC_ALL": "C"},
+    )
+
+    assert completed.returncode == 41
+    assert completed.stdout == b"beforetrapped"
+    assert completed.stderr == b""
+
+
 def test_candidate_gate_timeout_terminates_descendant_process_group(tmp_path: Path):
     source, _, _ = _pack_fixture(tmp_path)
     child_pid = tmp_path / "child.pid"
@@ -729,44 +1370,6 @@ def test_candidate_gate_timeout_terminates_descendant_process_group(tmp_path: Pa
     assert not late_side_effect.exists()
 
 
-def test_candidate_gate_timeout_kills_group_before_reaping_leader(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-):
-    from evolution_harness import capability_pack_registry
-
-    events: list[str] = []
-
-    class FakeProcess:
-        pid = 424242
-
-        def __init__(self, *args, **kwargs):
-            events.append("start")
-            self.calls = 0
-
-        def communicate(self, timeout=None):
-            self.calls += 1
-            if self.calls == 1:
-                events.append("timeout")
-                raise subprocess.TimeoutExpired("gate", timeout)
-            events.append("reap")
-            return b"", b""
-
-    monkeypatch.setattr(capability_pack_registry.subprocess, "Popen", FakeProcess)
-
-    def record_killpg(pid: int, signum: int):
-        assert pid == FakeProcess.pid
-        events.append("term" if signum == signal.SIGTERM else "kill")
-
-    monkeypatch.setattr(capability_pack_registry.os, "killpg", record_killpg)
-
-    with pytest.raises(ValueError, match="candidate Gate timed out"):
-        capability_pack_registry._run_candidate_gate(
-            ["gate"], cwd=tmp_path, timeout=1, environment={}
-        )
-
-    assert events == ["start", "timeout", "term", "kill", "reap"]
-
-
 @pytest.mark.parametrize("index_flag", ["--assume-unchanged", "--skip-worktree"])
 def test_registry_rejects_hidden_worktree_validator_drift(
     tmp_path: Path, index_flag: str
@@ -792,6 +1395,44 @@ def test_registry_rejects_duplicate_active_capability_id(tmp_path: Path):
 
     with pytest.raises(ValueError, match="duplicate active capability pack ID"):
         build_capability_pack_registry(root, write=False)
+
+
+def test_registry_preserves_two_inactive_identities_with_bounded_child_sessions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    root, _, _, _ = _harness_with_pack(tmp_path)
+    first = _registered_entry(root)
+    first["status"] = "INACTIVE"
+    second = deepcopy(first)
+    second["registrationId"] = "pack:web-high-fidelity-legacy"
+    _write_registrations(root, [second, first])
+    real_gate = capability_pack_registry._run_candidate_gate
+    gate_count = 0
+
+    def counted_gate(*args, **kwargs):
+        nonlocal gate_count
+        gate_count += 1
+        return real_gate(*args, **kwargs)
+
+    monkeypatch.setattr(capability_pack_registry, "_run_candidate_gate", counted_gate)
+
+    registry = build_capability_pack_registry(root, write=False)
+
+    expected_entries = sorted([first, second], key=lambda item: item["registrationId"])
+    canonical_entries = deepcopy(expected_entries)
+    for entry in canonical_entries:
+        entry["source"].pop("repositoryPath")
+    expected_revision = "content-sha256:" + hashlib.sha256(
+        json.dumps(
+            canonical_entries,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ).encode("utf-8")
+    ).hexdigest()
+    assert registry["entries"] == expected_entries
+    assert registry["sourceRevision"] == expected_revision
+    assert gate_count == 2
 
 
 def test_registry_rejects_wrong_commit_tree_pair(tmp_path: Path):
@@ -951,16 +1592,27 @@ def test_registry_rejects_untracked_active_content(tmp_path: Path):
         build_capability_pack_registry(root, write=False)
 
 
-def test_registry_rejects_failed_candidate_gate(tmp_path: Path):
+def test_registry_preserves_failed_candidate_gate_diagnostics(tmp_path: Path):
     root, source, _, _ = _harness_with_pack(tmp_path)
     validator = source / "scripts/verify-capability-pack"
-    validator.write_text("#!/usr/bin/env bash\nexit 23\n", encoding="utf-8")
+    validator.write_text(
+        "#!/usr/bin/env bash\n"
+        "printf 'distinct gate stdout\\n'\n"
+        "printf 'distinct gate stderr\\n' >&2\n"
+        "exit 23\n",
+        encoding="utf-8",
+    )
     validator.chmod(0o755)
     _commit(source, "mutate: failing gate")
     _refresh_source_identity(root, source, content_digest=True, validator_digest=True)
 
-    with pytest.raises(ValueError, match="capability pack candidate Gate failed"):
+    with pytest.raises(ValueError) as captured:
         build_capability_pack_registry(root, write=False)
+
+    assert str(captured.value) == "capability pack candidate Gate failed"
+    assert captured.value.returncode == 23
+    assert captured.value.stdout == b"distinct gate stdout\n"
+    assert captured.value.stderr == b"distinct gate stderr\n"
 
 
 def test_registry_rejects_source_root_symlink(tmp_path: Path):

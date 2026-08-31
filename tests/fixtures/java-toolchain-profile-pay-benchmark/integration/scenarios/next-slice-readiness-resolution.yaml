@@ -1,0 +1,29 @@
+schemaVersion: project-integration-scenario/v1
+id: benchmark-next-slice-readiness-resolution
+intent: implementation-readiness-review
+topic: next-development-slice-admission
+requestedOutput: next Slice admission guidance and exact planning constraints
+runtime: CODEX
+expected:
+  authorityGate: PASS
+  topicGuard: OPEN_OR_IN_PROGRESS
+  facts:
+    permission.development: DENY
+    permission.repository-landing: DENY
+    permission.wave0: DENY
+    slice.benchmark.current-gate: CLOSED
+    slice.benchmark.stage1-authorization: CONSUMED
+    slice.benchmark.stage3-authorization: CONSUMED
+    slice.benchmark.stage4-authorization: CONSUMED
+    slice.benchmark.stage5-authorization: CONSUMED
+    slice.benchmark.stage4-review: GO_P0_0_P1_0_P2_0_ULTRA_GATEKEEPER
+  selectedCapabilities:
+    - framework:agent-design:authority-analysis
+    - framework:agent-design:lifecycle-analysis
+    - principle:agent-design:project-truth-over-generic-guidance
+    - skill:agent-design:architecture-review
+    - framework:java:java-engineering-standard
+  excludedCapabilities:
+    - principle:agent-design:closure-requires-authority
+  conflictResolutionRules:
+    - PROJECT_TRUTH_WINS

@@ -1,0 +1,67 @@
+schemaVersion: capability-validator-toolchain-registry/v1
+artifacts:
+  - artifactId: artifact:ripgrep:15.2.0:darwin-arm64
+    kind: OFFICIAL_RELEASE_ARCHIVE
+    platform:
+      os: darwin
+      architecture: arm64
+    sourceUri: https://github.com/BurntSushi/ripgrep/releases/download/15.2.0/ripgrep-15.2.0-aarch64-apple-darwin.tar.gz
+    archiveFormat: TAR_GZ
+    archiveSha256: sha256:3750b2e93f37e0c692657da574d7019a101c0084da05a790c83fd335bad973e4
+    extractedRoot: ripgrep-15.2.0-aarch64-apple-darwin
+    extractedFiles:
+      rg: sha256:a326a1fb48074202e9ad41e4cd1e389eeea372c8c6f7d7e80da81176d5d9430e
+    provenancePolicy: OFFICIAL_GITHUB_RELEASE_ARCHIVE_SHA256
+profiles:
+  - schemaVersion: capability-validator-toolchain-profile/v1
+    profileId: toolchain-profile:java-engineering-standard:darwin-arm64:v1
+    environmentAdapter: JAVA_MAVEN_OFFLINE_V1
+    platform:
+      os: darwin
+      architecture: arm64
+    commands:
+      ruby:
+        artifactId: artifact:host-ruby:darwin-arm64
+        fileName: ruby
+        sha256: sha256:4694e9689687f3c2d30339c3d444a7c3f3eb39d68c7e1d9e37194ece9fe15512
+        bindingPolicy: HOST_ATTESTED
+      rg:
+        artifactId: artifact:ripgrep:15.2.0:darwin-arm64
+        artifactDigest: sha256:bfa2614eba25313624c604d16c6c727f3b243e5453b5b261321858f7eee75512
+        fileName: rg
+        sha256: sha256:a326a1fb48074202e9ad41e4cd1e389eeea372c8c6f7d7e80da81176d5d9430e
+        bindingPolicy: HARNESS_MANAGED_STORE
+      java:
+        artifactId: artifact:temurin-21:darwin-arm64
+        fileName: java
+        sha256: sha256:1069d726eae63d510d2983a2a4c7869f14db200605685c98117d9a27aaa5270f
+        bindingPolicy: HOST_ATTESTED
+      javac:
+        artifactId: artifact:temurin-21:darwin-arm64
+        fileName: javac
+        sha256: sha256:68411beb17069d4a26f54fee148c2540251f42368f991d80a8087dcfa4c90a39
+        bindingPolicy: HOST_ATTESTED
+      mvn:
+        artifactId: artifact:maven-3.9.16:java-pack-cache
+        fileName: mvn
+        sha256: sha256:f9381d0cb98abaaf9592dae421eddc497e84ed9bfb723b84c111d1350863c3a2
+        bindingPolicy: HARNESS_MANAGED_CACHE
+    directories:
+      javaHome:
+        artifactId: artifact:temurin-21:darwin-arm64
+        sha256: sha256:a30ae0a3178be8aa787ecdb850d150f529e811e9b712c3bfcdbdfc2fdf91fd90
+        bindingPolicy: HOST_ATTESTED
+      mavenHome:
+        artifactId: artifact:maven-3.9.16:java-pack-cache
+        sha256: sha256:5447e4224f32bb94d26420a62ee18a39ccef3b2dfe62c7739c36c313991c2286
+        bindingPolicy: HARNESS_MANAGED_CACHE
+      mavenRepository:
+        artifactId: artifact:java-pack-offline-repository:v1
+        sha256: sha256:5187065b1bb4bf7d0a139cc97b3fb19213ed3ee713a15d83b525760ed3d520fe
+        bindingPolicy: HARNESS_MANAGED_CACHE
+    relationships:
+      javaHomeCommands:
+        - java
+        - javac
+      mavenHomeCommand: mvn
+      mavenRepositoryLayout: DOT_M2_REPOSITORY

@@ -1,5 +1,5 @@
 {
-  "capabilityLockFingerprint": "sha256:72b8083dfd7f10f4dfad87dae4106c8f37d27cec5a27209ed9c653cf2ed35568",
+  "capabilityLockFingerprint": "sha256:90cf64c1425e75240e1225bea8e1d1f574420d06ee7bff9955e794ea6c20fb73",
   "closedTopics": [],
   "conflictSignals": [],
   "explain": {
@@ -14,6 +14,17 @@
         ],
         "sourceKind": "EXTERNAL_CAPABILITY_PACK",
         "sourceRegistrationId": "pack:java-engineering-standard",
+        "validatorIdentity": {
+          "environmentContract": "MANAGED_TOOLCHAIN_PROFILE",
+          "gitHistoryContract": "CANDIDATE_PARENT_TREE",
+          "relativePath": "scripts/verify-capability-pack",
+          "sha256": "sha256:5bd70fd85092be6424410a42c0f0a1330820cc3d7d36bc1ee0e948958e54ee01",
+          "timeoutSeconds": 600,
+          "toolchainProfile": {
+            "profileDigest": "sha256:c852142343ea97aef6d3a555e5500ecb633baf1a23d846d7bbe72a8bcf5e4490",
+            "profileId": "toolchain-profile:java-engineering-standard:darwin-arm64:v1"
+          }
+        },
         "version": "0.4.0"
       }
     ]
@@ -28,7 +39,7 @@
   "reopenSignal": null,
   "requestedOutput": "registration evidence",
   "requiredSelfReview": [],
-  "resolutionId": "resolution:f2c26c9a8e3007eb31bd4c22",
+  "resolutionId": "resolution:f2676153af4dc0d2280b5036",
   "runtime": "CHATGPT",
   "schemaVersion": "resolved-design-context/v1",
   "selectedCapabilities": [
@@ -41,6 +52,17 @@
       ],
       "sourceKind": "EXTERNAL_CAPABILITY_PACK",
       "sourceRegistrationId": "pack:java-engineering-standard",
+      "validatorIdentity": {
+        "environmentContract": "MANAGED_TOOLCHAIN_PROFILE",
+        "gitHistoryContract": "CANDIDATE_PARENT_TREE",
+        "relativePath": "scripts/verify-capability-pack",
+        "sha256": "sha256:5bd70fd85092be6424410a42c0f0a1330820cc3d7d36bc1ee0e948958e54ee01",
+        "timeoutSeconds": 600,
+        "toolchainProfile": {
+          "profileDigest": "sha256:c852142343ea97aef6d3a555e5500ecb633baf1a23d846d7bbe72a8bcf5e4490",
+          "profileId": "toolchain-profile:java-engineering-standard:darwin-arm64:v1"
+        }
+      },
       "version": "0.4.0"
     }
   ],

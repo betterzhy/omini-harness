@@ -1,0 +1,169 @@
+schemaVersion: project-authority-map/v1
+authorities:
+  - id: synthetic-benchmark-status
+    path: TEST_ONLY.md
+    format: MARKDOWN_KV
+    role: CANONICAL
+    required: true
+    owns:
+      - architecture.semantic-status
+      - project.current-stage
+      - permission.development
+      - permission.repository-landing
+      - permission.ddl
+      - permission.database-write
+      - permission.wave0
+      - permission.git-push
+      - permission.stage4-closure-projection
+      - permission.landing-preflight
+      - permission.local-landing
+      - slice.benchmark.status
+      - slice.benchmark.current-gate
+      - slice.benchmark.allowed-future-write
+      - slice.benchmark.stage1-authorization
+      - slice.benchmark.stage3-authorization
+      - slice.benchmark.stage4-authorization
+      - slice.benchmark.stage5-authorization
+      - slice.benchmark.stage4-review
+      - slice.benchmark.landing-preflight
+      - slice.benchmark.next-action
+      - slice.benchmark.next-gate
+    selectors:
+      architecture.semantic-status:
+        key: ArchitectureSemanticStatus
+        required: true
+        normalization:
+          rules:
+            - operator: EXACT
+              expected: SEALED
+              value: CLOSED
+          default: UNKNOWN
+      project.current-stage:
+        key: CurrentStage
+        required: true
+      permission.development:
+        key: DevelopmentExecutionAllowed
+        required: true
+        normalization: &execution_permission
+          rules:
+            - operator: PREFIX
+              expected: 'YES'
+              value: ALLOW
+            - operator: CONTAINS
+              expected: CONSUMED
+              value: CONSUMED
+            - operator: PREFIX
+              expected: 'NO'
+              value: DENY
+          default: UNKNOWN
+      permission.repository-landing:
+        key: RepositoryLandingAllowed
+        required: true
+        normalization: *execution_permission
+      permission.ddl:
+        key: ExecutableDdlAllowed
+        required: true
+        normalization: *execution_permission
+      permission.database-write:
+        key: FormalDatabaseWriteAllowed
+        required: true
+        normalization: *execution_permission
+      permission.wave0:
+        key: Wave0ExecutionAllowed
+        required: true
+        normalization: *execution_permission
+      permission.git-push:
+        key: GitPushAllowed
+        required: true
+        normalization: *execution_permission
+      permission.stage4-closure-projection:
+        key: Stage4ClosureProjectionAllowed
+        required: true
+        normalization: *execution_permission
+      permission.landing-preflight:
+        key: RepositoryLandingPreflightAllowed
+        required: true
+        normalization: *execution_permission
+      permission.local-landing:
+        key: RepositoryLandingLocalAuthorization
+        required: true
+        normalization: *execution_permission
+      slice.benchmark.status:
+        key: SliceStatus
+        required: true
+      slice.benchmark.current-gate:
+        key: SliceCurrentGate
+        required: true
+        normalization:
+          rules:
+            - operator: EXACT
+              expected: BENCHMARK_READ_ONLY_COMPLETE
+              value: CLOSED
+          default: UNKNOWN
+      slice.benchmark.allowed-future-write:
+        key: AllowedFutureWriteEnvelope
+        required: true
+      slice.benchmark.stage1-authorization:
+        key: Stage1Authorization
+        required: true
+        normalization: &consumption_state
+          rules:
+            - operator: CONTAINS
+              expected: CONSUMED
+              value: CONSUMED
+          default: NOT_CONSUMED
+      slice.benchmark.stage3-authorization:
+        key: Stage3Authorization
+        required: true
+        normalization: *consumption_state
+      slice.benchmark.stage4-authorization:
+        key: Stage4Authorization
+        required: true
+        normalization: *consumption_state
+      slice.benchmark.stage5-authorization:
+        key: Stage5Authorization
+        required: true
+        normalization: *consumption_state
+      slice.benchmark.stage4-review:
+        key: Stage4ReviewStatus
+        required: true
+      slice.benchmark.landing-preflight:
+        key: LandingPreflightStatus
+        required: true
+        normalization: *consumption_state
+      slice.benchmark.next-action:
+        key: NextRequiredAction
+        required: true
+      slice.benchmark.next-gate:
+        key: NextGate
+        required: true
+  - id: synthetic-benchmark-guidance
+    path: AGENTS.md
+    format: MARKDOWN_KV
+    role: GUIDANCE
+    required: true
+    owns: []
+    selectors: {}
+requiredFacts:
+  - architecture.semantic-status
+  - project.current-stage
+  - permission.development
+  - permission.repository-landing
+  - permission.ddl
+  - permission.database-write
+  - permission.wave0
+  - permission.git-push
+  - permission.stage4-closure-projection
+  - permission.landing-preflight
+  - permission.local-landing
+  - slice.benchmark.status
+  - slice.benchmark.current-gate
+  - slice.benchmark.allowed-future-write
+  - slice.benchmark.stage1-authorization
+  - slice.benchmark.stage3-authorization
+  - slice.benchmark.stage4-authorization
+  - slice.benchmark.stage5-authorization
+  - slice.benchmark.stage4-review
+  - slice.benchmark.landing-preflight
+  - slice.benchmark.next-action
+  - slice.benchmark.next-gate

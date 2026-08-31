@@ -1,0 +1,11 @@
+schemaVersion: project-integration/v1
+id: java-toolchain-profile-pay-benchmark
+projectId: java-toolchain-profile-pay-benchmark
+sourceAccess: READ_ONLY
+controlPlanePath: control-plane
+authorityMapPath: authority-map.yaml
+runtime: CODEX
+excludedPaths:
+  - .git/**
+topicStatusFacts:
+  benchmark-architecture: architecture.semantic-status

@@ -17,3 +17,11 @@ package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pytest.ini_options]
+addopts = "--strict-markers"
+markers = [
+  "fast: deterministic focused coverage with no live External Pack candidate Gate",
+  "integration: cross-module, Git, projection, or integration coverage",
+  "pack_e2e: serial integration coverage executing a real External Pack candidate Gate/toolchain",
+]

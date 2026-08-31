@@ -6,6 +6,7 @@ from typing import Any
 import yaml
 
 from .authority import build_authority_snapshot
+from .capability_pack_registry import CapabilityVerificationSession
 from .integration import load_integration, resolve_integration_context
 from .schema import SchemaStore
 
@@ -15,6 +16,8 @@ def run_integration_scenario(
     integration_root: Path,
     source_root: Path,
     scenario_path: Path,
+    *,
+    verification_session: CapabilityVerificationSession | None = None,
 ) -> dict[str, Any]:
     repository = Path(repository_root)
     integration = Path(integration_root).resolve()
@@ -46,6 +49,7 @@ def run_integration_scenario(
             runtime=scenario["runtime"],
             explicit_stage=scenario.get("explicitStage"),
             reopen_signal=scenario.get("reopenSignal"),
+            verification_session=verification_session,
         )
         if "topicGuard" in expected:
             check("topic-guard", resolved["topicGuard"], expected["topicGuard"])

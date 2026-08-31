@@ -9,6 +9,7 @@ import pytest
 import yaml
 
 from evolution_harness.schema import SchemaStore
+from evolution_harness.scenario import run_integration_scenario
 
 
 CAPABILITY_ID = "framework:java:java-engineering-standard"
@@ -24,6 +25,10 @@ AUTHORITY_SET_DIGEST = "sha256:ff784fe6b77325eaa793004853ada8e693f886ae434a0983d
 PAY_REPOSITORY = Path("/Users/yuzhuangzhuang/Projects/pay-nexus")
 PAY_SOURCE_COMMIT = "8252b746461ed9be40429739d66efea78151ee4d"
 PAY_SOURCE_TREE = "4c8ff242aa2fc436a9f0387a650a7f868d559c9a"
+EXPECTED_REGISTRATION_DRIFT = (
+    "external capability pack lock registration drift: "
+    "framework:java:java-engineering-standard"
+)
 
 
 def _yaml(path: Path) -> dict:
@@ -164,35 +169,86 @@ def test_pay_nexus_projection_contains_byte_identical_java_bundle():
     assert not any("temp-input" in item["path"] for item in manifest["generatedFiles"])
 
 
-def test_pay_nexus_scenarios_and_install_plan_remain_read_only(
-    tmp_path: Path, pay_source: Path
+@pytest.mark.integration
+@pytest.mark.pack_e2e
+def test_pay_nexus_real_integration_fails_closed_on_exact_registration_drift(
+    pay_source: Path,
 ):
-    from evolution_harness.install import install_projection
-    from evolution_harness.scenario import run_integration_scenario
+    from evolution_harness.capability_pack_registry import (
+        CapabilityVerificationSession,
+        get_registered_capability_pack,
+    )
+    from evolution_harness.project import _ExternalCapabilityLockRegistrationDrift
 
     root = Path(__file__).parents[1]
     integration = root / "integrations/pay-nexus-shadow"
     before = _git_state(pay_source)
-    results = [
-        run_integration_scenario(root, integration, pay_source, scenario)
-        for scenario in sorted((integration / "scenarios").glob("*.yaml"))
-    ]
-    assert len(results) == 6
-    failures = {
-        result["scenarioId"]: [check for check in result["checks"] if not check["pass"]]
-        for result in results
-        if result["gate"] != "PASS"
-    }
-    assert failures == {}
-    target = tmp_path / "dry-run-target"
-    target.mkdir()
-    plan = install_projection(
+    with CapabilityVerificationSession(
         root,
-        root / "generated/projections/codex/pay-nexus-shadow",
-        target,
-        source_root=pay_source,
-    )
-    assert plan["gate"] == "PASS"
-    assert plan["mode"] == "DRY_RUN"
-    assert len(plan["actions"]) == 46
-    assert before == _git_state(pay_source)
+        allowed_capability_ids={CAPABILITY_ID},
+    ) as session:
+        get_registered_capability_pack(
+            root,
+            CAPABILITY_ID,
+            verification_session=session,
+        )
+        before_scenario = session.stats
+        assert before_scenario.full_candidate_gate_count == 1
+        assert before_scenario.isolated_checkout_count == 1
+        assert before_scenario.toolchain_directory_digest_count == 6
+        assert before_scenario.verified_pack_count == 1
+        assert before_scenario.verified_lock_count == 0
+        assert before_scenario.pack_reuse_hit_count == 0
+        assert before_scenario.lock_reuse_hit_count == 0
+        assert before_scenario.source_recheck_count == 1
+        assert before_scenario.registration_recheck_count == 1
+        assert before_scenario.lock_witness_recheck_count == 0
+        assert before_scenario.active_use_lease_count == 0
+        checkout = next(iter(session._verified.values()))._checkout_root
+        assert checkout.exists()
+
+        with pytest.raises(
+            _ExternalCapabilityLockRegistrationDrift
+        ) as exc_info:
+            run_integration_scenario(
+                root,
+                integration,
+                pay_source,
+                integration / "scenarios/current-authority-denies-execution.yaml",
+                verification_session=session,
+            )
+        assert str(exc_info.value) == EXPECTED_REGISTRATION_DRIFT
+        after_scenario = session.stats
+        assert (
+            after_scenario.full_candidate_gate_count,
+            after_scenario.isolated_checkout_count,
+            after_scenario.toolchain_directory_digest_count,
+            after_scenario.verified_pack_count,
+        ) == (
+            before_scenario.full_candidate_gate_count,
+            before_scenario.isolated_checkout_count,
+            before_scenario.toolchain_directory_digest_count,
+            before_scenario.verified_pack_count,
+        )
+        assert after_scenario.verified_lock_count == (
+            before_scenario.verified_lock_count
+        )
+        assert after_scenario.pack_reuse_hit_count == (
+            before_scenario.pack_reuse_hit_count + 1
+        )
+        assert after_scenario.lock_reuse_hit_count == (
+            before_scenario.lock_reuse_hit_count
+        )
+        assert after_scenario.source_recheck_count == (
+            before_scenario.source_recheck_count + 1
+        )
+        assert after_scenario.registration_recheck_count == (
+            before_scenario.registration_recheck_count + 1
+        )
+        assert after_scenario.lock_witness_recheck_count == (
+            before_scenario.lock_witness_recheck_count
+        )
+        assert after_scenario.active_use_lease_count == 0
+        assert before == _git_state(pay_source)
+    assert session.stats.active_use_lease_count == 0
+    assert not checkout.exists()

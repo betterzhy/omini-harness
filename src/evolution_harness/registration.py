@@ -1,14 +1,19 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import yaml
 
 from .anchored_fs import AnchoredPathError, AnchoredRoot
+from .capability_pack_registry import CapabilityVerificationSession
+from .hashing import canonical_json_bytes, sha256_bytes
 from .integration import load_integration
 from .paths import PathBoundaryError, resolve_without_symlinks
-from .project import verify_capability_lock
+from .project import load_capability_lock, verify_capability_lock
 from .schema import SchemaStore, SchemaValidationError
 
 
@@ -20,7 +25,23 @@ class ProjectRegistrationError(ValueError):
     pass
 
 
-def load_project_registration(repository_root: Path, source_root: Path) -> dict[str, Any]:
+@dataclass(frozen=True, slots=True)
+class ProjectRegistrationBootstrap:
+    repository_root: Path
+    source_root: Path
+    registration_path: Path | None
+    integration_root: Path
+    control_plane_root: Path
+    registration_witness: str
+    integration_witness: str
+    capability_lock_witness: str
+    allowed_capability_ids: frozenset[str]
+
+
+def _load_project_registration_structure(
+    repository_root: Path,
+    source_root: Path,
+) -> tuple[ProjectRegistrationBootstrap, dict[str, Any]]:
     repository = Path(repository_root).resolve()
     source_input = Path(source_root)
     if source_input.is_symlink():
@@ -79,13 +100,40 @@ def load_project_registration(repository_root: Path, source_root: Path) -> dict[
         raise ProjectRegistrationError("integration source access mismatch")
 
     try:
-        lock, _ = verify_capability_lock(repository, integration["controlPlaneRoot"])
+        lock = load_capability_lock(repository, integration["controlPlaneRoot"])
     except Exception as exc:
         raise ProjectRegistrationError(f"registered capability lock is invalid: {exc}") from exc
     if lock["lockFingerprint"] != registration["capabilityLockFingerprint"]:
         raise ProjectRegistrationError("capability lock fingerprint mismatch")
 
-    return {
+    bootstrap = ProjectRegistrationBootstrap(
+        repository_root=repository,
+        source_root=source,
+        registration_path=registration_path,
+        integration_root=integration_root,
+        control_plane_root=integration["controlPlaneRoot"],
+        registration_witness="sha256:"
+        + sha256_bytes(canonical_json_bytes(registration)),
+        integration_witness="sha256:"
+        + sha256_bytes(
+            canonical_json_bytes(
+                {
+                    "config": integration["config"],
+                    "authorityMap": integration["authorityMap"],
+                    "integrationRoot": str(integration_root),
+                    "controlPlaneRoot": str(integration["controlPlaneRoot"]),
+                }
+            )
+        ),
+        capability_lock_witness="sha256:"
+        + sha256_bytes(canonical_json_bytes(lock)),
+        allowed_capability_ids=frozenset(
+            item["capabilityId"]
+            for item in lock["capabilities"]
+            if item.get("sourceKind") == "EXTERNAL_CAPABILITY_PACK"
+        ),
+    )
+    return bootstrap, {
         "registration": registration,
         "registrationPath": registration_path,
         "sourceRoot": source,
@@ -94,8 +142,120 @@ def load_project_registration(repository_root: Path, source_root: Path) -> dict[
     }
 
 
-def check_project_registration(repository_root: Path, source_root: Path) -> dict[str, str]:
-    loaded = load_project_registration(repository_root, source_root)
+def _bootstrap_registered_integration(
+    repository_root: Path,
+    source_root: Path,
+    explicit_integration: Path | None,
+) -> ProjectRegistrationBootstrap:
+    bootstrap, _ = _load_project_registration_structure(repository_root, source_root)
+    if (
+        explicit_integration is not None
+        and Path(explicit_integration).resolve() != bootstrap.integration_root
+    ):
+        raise ProjectRegistrationError(
+            "explicit integration disagrees with project registration"
+        )
+    return bootstrap
+
+
+def _require_unchanged_bootstrap(
+    initial: ProjectRegistrationBootstrap,
+    *observed: ProjectRegistrationBootstrap,
+    verification_session: CapabilityVerificationSession,
+) -> None:
+    if all(initial == item for item in observed):
+        return
+    error = ProjectRegistrationError(
+        "project registration structural witness changed during verification"
+    )
+    verification_session._poison(error)
+    raise error
+
+
+def _load_project_registration_verified(
+    repository_root: Path,
+    source_root: Path,
+    *,
+    verification_session: CapabilityVerificationSession,
+) -> tuple[dict[str, Any], ProjectRegistrationBootstrap]:
+    try:
+        live_bootstrap, loaded = _load_project_registration_structure(
+            repository_root,
+            source_root,
+        )
+        lock, _ = verify_capability_lock(
+            Path(repository_root).resolve(),
+            loaded["integration"]["controlPlaneRoot"],
+            verification_session=verification_session,
+        )
+    except ProjectRegistrationError as exc:
+        verification_session._poison(exc)
+        raise
+    except Exception as exc:
+        error = ProjectRegistrationError(
+            f"registered capability lock is invalid: {exc}"
+        )
+        verification_session._poison(error)
+        raise error from exc
+    if lock["lockFingerprint"] != loaded["registration"]["capabilityLockFingerprint"]:
+        error = ProjectRegistrationError("capability lock fingerprint mismatch")
+        verification_session._poison(error)
+        raise error
+    return loaded, live_bootstrap
+
+
+def load_project_registration(
+    repository_root: Path,
+    source_root: Path,
+    *,
+    verification_session: CapabilityVerificationSession | None = None,
+) -> dict[str, Any]:
+    if verification_session is not None:
+        loaded, _ = _load_project_registration_verified(
+            repository_root,
+            source_root,
+            verification_session=verification_session,
+        )
+        return loaded
+    bootstrap = _bootstrap_registered_integration(
+        repository_root,
+        source_root,
+        None,
+    )
+    with CapabilityVerificationSession(
+        bootstrap.repository_root,
+        allowed_capability_ids=bootstrap.allowed_capability_ids,
+    ) as private_session:
+        loaded, verified_bootstrap = _load_project_registration_verified(
+            bootstrap.repository_root,
+            bootstrap.source_root,
+            verification_session=private_session,
+        )
+        live_bootstrap = _bootstrap_registered_integration(
+            bootstrap.repository_root,
+            bootstrap.source_root,
+            None,
+        )
+        _require_unchanged_bootstrap(
+            bootstrap,
+            verified_bootstrap,
+            live_bootstrap,
+            verification_session=private_session,
+        )
+        return loaded
+
+
+def check_project_registration(
+    repository_root: Path,
+    source_root: Path,
+    *,
+    verification_session: CapabilityVerificationSession | None = None,
+) -> dict[str, str]:
+    loaded = load_project_registration(
+        repository_root,
+        source_root,
+        verification_session=verification_session,
+    )
     registration = loaded["registration"]
     return {
         "schemaVersion": "project-registration-check/v1",
@@ -122,11 +282,17 @@ def resolve_registered_integration(
     repository_root: Path,
     source_root: Path,
     explicit_integration: Path | None = None,
+    *,
+    verification_session: CapabilityVerificationSession | None = None,
 ) -> dict[str, Any]:
     repository = Path(repository_root).resolve()
     source = Path(source_root)
     if _project_registration_present(source):
-        loaded = load_project_registration(repository, source)
+        loaded = load_project_registration(
+            repository,
+            source,
+            verification_session=verification_session,
+        )
         if explicit_integration is not None and Path(explicit_integration).resolve() != loaded["integrationRoot"]:
             raise ProjectRegistrationError("explicit integration disagrees with project registration")
         return loaded
@@ -141,3 +307,50 @@ def resolve_registered_integration(
         "integrationRoot": integration_root,
         "integration": integration,
     }
+
+
+@contextmanager
+def registered_integration_operation(
+    repository_root: Path,
+    source_root: Path,
+    explicit_integration: Path | None = None,
+) -> Iterator[tuple[dict[str, Any], CapabilityVerificationSession | None]]:
+    repository = Path(repository_root).resolve()
+    source = Path(source_root)
+    if not _project_registration_present(source):
+        yield (
+            resolve_registered_integration(
+                repository,
+                source,
+                explicit_integration,
+            ),
+            None,
+        )
+        return
+
+    bootstrap = _bootstrap_registered_integration(
+        repository,
+        source,
+        explicit_integration,
+    )
+    with CapabilityVerificationSession(
+        bootstrap.repository_root,
+        allowed_capability_ids=bootstrap.allowed_capability_ids,
+    ) as verification_session:
+        loaded, verified_bootstrap = _load_project_registration_verified(
+            bootstrap.repository_root,
+            bootstrap.source_root,
+            verification_session=verification_session,
+        )
+        live_bootstrap = _bootstrap_registered_integration(
+            bootstrap.repository_root,
+            bootstrap.source_root,
+            explicit_integration,
+        )
+        _require_unchanged_bootstrap(
+            bootstrap,
+            verified_bootstrap,
+            live_bootstrap,
+            verification_session=verification_session,
+        )
+        yield loaded, verification_session

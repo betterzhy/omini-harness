@@ -10,6 +10,8 @@ from pathlib import Path
 import pytest
 import yaml
 
+from capability_pack_test_support import retain_web_registration_fixture
+
 
 def _write_yaml(path: Path, value: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -84,6 +86,70 @@ def _fixture(tmp_path: Path) -> tuple[Path, Path, Path]:
     return root, integration, source
 
 
+def _external_pack_fixture(
+    tmp_path: Path,
+) -> tuple[Path, Path, Path, tuple[Path, Path]]:
+    from evolution_harness.project import build_capability_lock
+
+    root, integration, source = _fixture(tmp_path)
+    retain_web_registration_fixture(root)
+    registry_path = root / "core/registries/capability-packs.yaml"
+    registrations = yaml.safe_load(registry_path.read_text(encoding="utf-8"))
+    pack = tmp_path / "external-pack"
+    subprocess.run(
+        [
+            "git",
+            "clone",
+            "-q",
+            "--no-hardlinks",
+            registrations[0]["source"]["repositoryPath"],
+            str(pack),
+        ],
+        check=True,
+        capture_output=True,
+    )
+    registrations[0]["source"]["repositoryPath"] = str(pack)
+    registry_path.write_text(
+        yaml.safe_dump(registrations, sort_keys=False), encoding="utf-8"
+    )
+    schema_path = root / "core/schemas/capability-pack-registration.schema.json"
+    schema = json.loads(schema_path.read_text(encoding="utf-8"))
+    schema["properties"]["source"]["properties"]["repositoryPath"]["const"] = str(
+        pack
+    )
+    schema_path.write_text(json.dumps(schema, indent=2) + "\n", encoding="utf-8")
+    control = integration / "control-plane"
+    binding_path = control / ".agent-evolution/capabilities.yaml"
+    binding = yaml.safe_load(binding_path.read_text(encoding="utf-8"))
+    binding["capabilities"].append(
+        "workflow:web-high-fidelity:reference-driven-visual-fidelity"
+    )
+    binding_path.write_text(yaml.safe_dump(binding, sort_keys=False), encoding="utf-8")
+    build_capability_lock(root, control, write=True)
+
+    scenarios: list[Path] = []
+    for suffix in ("first", "second"):
+        scenario_path = integration / f"scenarios/session-{suffix}.yaml"
+        _write_yaml(
+            scenario_path,
+            {
+                "schemaVersion": "project-integration-scenario/v1",
+                "id": f"session-{suffix}",
+                "intent": "visual-reference-review",
+                "topic": "web-fidelity",
+                "requestedOutput": "review findings",
+                "runtime": "CODEX",
+                "expected": {
+                    "authorityGate": "PASS",
+                    "topicGuard": "OPEN_OR_IN_PROGRESS",
+                    "facts": {"permission.execute": "DENY"},
+                },
+            },
+        )
+        scenarios.append(scenario_path)
+    return root, integration, source, (scenarios[0], scenarios[1])
+
+
 def _resolve(root: Path, integration: Path, source: Path):
     from evolution_harness.integration import resolve_integration_context
 
@@ -105,6 +171,168 @@ def test_integration_resolution_binds_authority_snapshot(tmp_path: Path):
     assert resolved["authorityGate"] == "PASS"
     assert resolved["authorityFacts"]["permission.execute"]["normalizedValue"] == "DENY"
     assert resolved["project"] == "sample-shadow"
+
+
+def test_scenarios_reuse_one_external_pack_verification_session_without_output_drift(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from evolution_harness import capability_pack_registry
+    from evolution_harness.capability_pack_registry import CapabilityVerificationSession
+    from evolution_harness.generated import deterministic_json_bytes
+    from evolution_harness.scenario import run_integration_scenario
+
+    root, integration, source, scenario_paths = _external_pack_fixture(tmp_path)
+    expected = [
+        run_integration_scenario(root, integration, source, scenario_path)
+        for scenario_path in scenario_paths
+    ]
+    real_gate = capability_pack_registry._run_candidate_gate
+    gate_count = 0
+
+    def counted_gate(*args, **kwargs):
+        nonlocal gate_count
+        gate_count += 1
+        return real_gate(*args, **kwargs)
+
+    monkeypatch.setattr(capability_pack_registry, "_run_candidate_gate", counted_gate)
+    with CapabilityVerificationSession(
+        root,
+        allowed_capability_ids={
+            "workflow:web-high-fidelity:reference-driven-visual-fidelity"
+        },
+    ) as session:
+        actual = [
+            run_integration_scenario(
+                root,
+                integration,
+                source,
+                scenario_path,
+                verification_session=session,
+            )
+            for scenario_path in scenario_paths
+        ]
+        stats = session.stats
+
+    assert [deterministic_json_bytes(item) for item in actual] == [
+        deterministic_json_bytes(item) for item in expected
+    ]
+    assert all(item["gate"] == "PASS" for item in actual)
+    assert stats.full_candidate_gate_count == 1
+    assert gate_count == 1
+
+
+def test_integration_projection_forwards_external_verification_session_across_build_and_freshness(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from evolution_harness import capability_pack_registry
+    from evolution_harness.capability_pack_registry import CapabilityVerificationSession
+    from evolution_harness.integration import (
+        build_integration_projection,
+        check_integration_projection,
+    )
+
+    root, integration, source, _ = _external_pack_fixture(tmp_path)
+    request = {
+        "intent": "visual-reference-review",
+        "topic": "web-fidelity",
+        "requested_output": "review findings",
+        "runtime": "CODEX",
+    }
+    real_gate = capability_pack_registry._run_candidate_gate
+    gate_count = 0
+
+    def counted_gate(*args, **kwargs):
+        nonlocal gate_count
+        gate_count += 1
+        return real_gate(*args, **kwargs)
+
+    monkeypatch.setattr(capability_pack_registry, "_run_candidate_gate", counted_gate)
+    with CapabilityVerificationSession(
+        root,
+        allowed_capability_ids={
+            "workflow:web-high-fidelity:reference-driven-visual-fidelity"
+        },
+    ) as session:
+        manifest = build_integration_projection(
+            root,
+            integration,
+            source,
+            **request,
+            verification_session=session,
+        )
+        freshness = check_integration_projection(
+            root,
+            integration,
+            source,
+            **request,
+            verification_session=session,
+        )
+        stats = session.stats
+
+    assert manifest["capabilityLockFingerprint"].startswith("sha256:")
+    assert freshness.fresh
+    assert stats.full_candidate_gate_count == 1
+    assert stats.isolated_checkout_count == 1
+    assert gate_count == 1
+
+
+@pytest.mark.parametrize("check", [False, True], ids=("build", "check"))
+def test_projection_cli_owns_one_external_pack_verification_session_without_output_drift(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    check: bool,
+):
+    from evolution_harness import capability_pack_registry, cli
+    root, integration, source, _ = _external_pack_fixture(tmp_path)
+    control = integration / "control-plane"
+    argv = [
+        "--repository-root",
+        str(root),
+        "projection",
+        "build",
+        "--project",
+        str(control),
+        "--intent",
+        "visual-reference-review",
+        "--topic",
+        "web-fidelity",
+        "--output",
+        "review findings",
+        "--runtime",
+        "CODEX",
+        *(["--check"] if check else []),
+        "--format",
+        "json",
+    ]
+    if check:
+        build_argv = [value for value in argv if value != "--check"]
+        assert cli.main(build_argv) == 0
+        capsys.readouterr()
+    expected_code = cli.main(argv)
+    expected_output = capsys.readouterr()
+
+    real_gate = capability_pack_registry._run_candidate_gate
+    gate_count = 0
+
+    def counted_gate(*args, **kwargs):
+        nonlocal gate_count
+        gate_count += 1
+        return real_gate(*args, **kwargs)
+
+    monkeypatch.setattr(capability_pack_registry, "_run_candidate_gate", counted_gate)
+    actual_code = cli.main(argv)
+    actual_output = capsys.readouterr()
+
+    assert (actual_code, actual_output.out, actual_output.err) == (
+        expected_code,
+        expected_output.out,
+        expected_output.err,
+    )
+    assert actual_code == 0
+    assert gate_count == 1
 
 
 def test_integration_intent_alias_selects_locked_capability_and_preserves_request_intent(

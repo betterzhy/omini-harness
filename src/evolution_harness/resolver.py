@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
 import yaml
 
+from .capability_pack_registry import CapabilityVerificationSession
 from .hashing import canonical_json_bytes, file_sha256, sha256_bytes
 from .project import load_profile, load_project_binding, load_project_state, verify_capability_lock
 from .registry import build_design_registry
@@ -86,12 +88,17 @@ def resolve_design_context(
     explicit_stage: str | None = None,
     reopen_signal: str | None = None,
     authority_snapshot: dict[str, Any] | None = None,
+    verification_session: CapabilityVerificationSession | None = None,
 ) -> dict[str, Any]:
     root = Path(repository_root)
     project = Path(project_root)
     state = load_project_state(root, project)
     binding = load_project_binding(root, project)
-    lock, locked_entries = verify_capability_lock(root, project)
+    lock, locked_entries = verify_capability_lock(
+        root,
+        project,
+        verification_session=verification_session,
+    )
     locked_items = {item["capabilityId"]: item for item in lock["capabilities"]}
     state_hash = file_sha256(project / ".agent-evolution/design-state.yaml")
     binding_hash = file_sha256(project / ".agent-evolution/capabilities.yaml")
@@ -202,6 +209,9 @@ def resolve_design_context(
                 "contentHash": entry["resolvedContentDigest"].removeprefix("sha256:"),
                 "sourceKind": "EXTERNAL_CAPABILITY_PACK",
                 "sourceRegistrationId": entry["registrationId"],
+                "validatorIdentity": deepcopy(
+                    locked_items[capability_id]["validatorIdentity"]
+                ),
                 "selectedBecause": sorted(locked_items[capability_id]["resolvedBecause"]),
             }
         else:

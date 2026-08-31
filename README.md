@@ -213,7 +213,9 @@ Protected actions remain denied even when a request claims permission: formal da
 
 ```bash
 python -m pip install -e '.[test]'
-./harness validate --check-generated --format json
+./harness validate --scope core --check-generated --format json
+./harness validate --scope adoption --check-generated --format json
+./harness validate --scope all --check-generated --format json
 ./harness registry build --check --format json
 ./harness catalog build --check --format json
 ./harness project lock --project examples/project-fixture --check --format json
@@ -222,6 +224,14 @@ python -m pip install -e '.[test]'
 ./eng doctor --ci --json
 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q
 ```
+
+The `core` scope is the routine Harness candidate Gate: it validates only
+Harness-owned, project-independent structure and generated artifacts. The
+`adoption` scope reports project and integration consumption status, while `all`
+is the compatibility and release-wide aggregate. Adoption failures remain
+fail-closed in both `adoption` and `all`; a green `core` result does not assert
+that any project adoption is current or valid. Omitting `--scope` is equivalent
+to `--scope all`.
 
 ## Bootstrap cutoff
 

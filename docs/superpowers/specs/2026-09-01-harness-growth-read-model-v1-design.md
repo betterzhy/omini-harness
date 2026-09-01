@@ -181,7 +181,12 @@ All new machine contracts use strict JSON Schema Draft 2020-12, `additionalPrope
 HG2 must first freeze shared strict primitives instead of letting each Schema invent its own null, time, evidence, or counting semantics:
 
 - `AssetRevisionReference` binds `kind`, ID, Schema version, canonical source path, immutable Git Revision or ledger identity, canonical content digest, and domain-version availability. Existing `experience/v1` and `candidate/v1` records have no domain-version field, so their domain version is `NOT_AVAILABLE` with reason `SCHEMA_HAS_NO_DOMAIN_VERSION`; source identity plus content digest provides their exact snapshot and concurrency identity without changing either v1 payload.
+- `CandidateBundleReference` binds the complete pre-Promotion Candidate bundle, not only `candidate.yaml`. Its closed file set is exactly `candidate.yaml`, `proposed/asset.yaml`, and `proposed/content.md`; a missing, extra, non-regular, or symlinked member is invalid. It carries Candidate ID/Schema, canonical bundle root, immutable Git Revision or durable journal snapshot identity, the three fixed relative paths and `candidateRawDigest`, `proposedAssetRawDigest`, `proposedContentRawDigest`, canonical Candidate-object digest, canonical proposed-asset digest, normalized proposed-content digest, proposed Capability ID/version, `proposedCapabilityContentHash`, and `canonicalCandidateBundleDigest`.
+- `CandidateProposedCapabilityReference` contains one byte-identical `candidateReference: CandidateBundleReference`, constant relative path `proposed/asset.yaml`, raw and parsed-asset digests, proposed Capability ID/version, constant `contentFile: content.md`, and `proposedCapabilityContentHash`. Every value and digest must equal the enclosing Candidate bundle. V1 has no other member branch: this reference cannot name Candidate metadata, proposed content by itself, a live path, or a same-ID asset from another bundle.
 - `CommandReference` binds command Schema version, command ID, IdempotencyKey, PayloadHash, canonical command digest, and durable journal identity. It never treats a human-readable command name as execution evidence.
+- `ExecutionJournalEntryReference` binds execution-journal Schema, trial-scoped journal ID and generation, positive entry sequence, closed event type, prior-entry digest availability, canonical entry digest, canonical prefix digest, writer identity, and authoritative `recordedAt`. Sequence 1 requires `previousEntryDigest: NOT_AVAILABLE/FIRST_ENTRY`; each later entry requires PRESENT with the exact prior entry digest. `entryDigest` is `sha256:` of canonical entry bytes excluding `entryDigest` and `prefixDigest`; the first `prefixDigest` hashes `{journalId, generation, entryDigest}`, and each later value hashes `{previousPrefixDigest, entryDigest}`. It is valid only after the complete journal prefix verifies under owner-only permissions, no-replace append semantics, one writer lock, continuous sequence, prior-digest chaining, and compare-and-swap. Sequence, not a caller timestamp, establishes causality; two entries from different journal identities or generations are never ordered against each other.
+- `ExecutionInputManifestReference` binds Schema version, execution-input ID, trial-scoped journal ID/generation, content-addressed owner-only snapshot identity, raw manifest digest, canonical manifest digest, and `canonicalExecutionInputDigest`. It intentionally excludes acceptance/start/completion references so `COMMAND_ACCEPTED` can bind it without a digest cycle. A manifest is eligible only when exactly one valid same-journal `COMMAND_ACCEPTED` entry references it.
+- `ExecutionInputArtifactReference` binds a closed artifact role, frozen snapshot/blob identity, bounded logical locator, media/normalization rule, byte size, raw digest, normalized digest, canonical digest availability, and executable flag. It refers to bytes already captured before command acceptance; it never authorizes the runner to reopen a live source path.
 - `LedgerEntryReference` binds ledger Schema version, canonical source path, immutable repository Revision or ledger identity, the `(capabilityId, version)` entry key, canonical entry digest, and enclosing ledger digest. The entry key must resolve exactly once.
 - `AuthorityDecisionReference` binds decision kind and ID, actor, action, decided-at time, exact authority source Revision and digest, decision digest, and signature or explicit signature availability. A label such as `APPROVE` without this identity is not a reference.
 - `ExpectationOwnerAnchor` binds only the logical owner kind, ID, and version. It never contains owner content digest, record revision, Git Revision, ledger identity, or another `AssetRevisionReference`.
@@ -194,6 +199,31 @@ HG2 must first freeze shared strict primitives instead of letting each Schema in
 - Every timestamp is normalized RFC 3339 UTC. Every identity, enum, decimal, array bound, and free-text length is schema-bounded.
 
 An unavailable value is never encoded as an empty string, zero, false, an epoch timestamp, or a fabricated identity.
+
+Candidate bundle hashing reuses existing algorithms and is not implementation-defined:
+
+```text
+normalizedContent = proposed/content.md with CRLF normalized to LF
+proposedCapabilityContentHash = capability_content_hash(parsed proposed/asset.yaml, normalizedContent)
+canonicalCandidateBundleDigest = sha256(canonical_json_bytes({
+  candidate: parsed candidate.yaml,
+  proposedAsset: parsed proposed/asset.yaml,
+  proposedContent: normalizedContent,
+  proposedCapabilityContentHash
+}))
+```
+
+All Candidate bundle files are UTF-8, single-document inputs. Candidate and proposed-asset YAML reject duplicate keys, non-string mapping keys, aliases, anchors, and merge keys before Schema validation. Raw-file and canonical-object digests use `sha256:<64 lowercase hex>`; `proposedCapabilityContentHash` retains the existing bare 64-lowercase-hex format produced by `capability_content_hash`. YAML mapping order and formatting therefore do not change canonical object digests, while raw-file digests still preserve exact source bytes. For v1, `proposedAsset.contentFile` must equal exactly `content.md`; absolute paths, separators, `.`/`..`, alternate names, and symlinks are invalid. This deliberately matches the existing Candidate storage contract and the closed third member `proposed/content.md`.
+
+Candidate bundle admission is one bounded snapshot operation, not a hash-then-reread convention:
+
+1. Anchor a directory descriptor beneath the trusted Candidate root, acquire the bundle admission lock, reject symlink/path escapes, and enumerate exactly the three allowed members.
+2. Open all three members once with no-follow/read-only semantics, require regular files, record device/inode/size/high-resolution mtime, read bytes from those same descriptors, then re-check file metadata, directory entries, and path-to-inode identity before accepting the snapshot.
+3. Parse, validate, and derive every raw/canonical digest and proposed Capability content hash only from the captured bytes. Any pre/post disagreement returns `CANDIDATE_BUNDLE_CHANGED` before an authoritative write.
+4. Atomically persist the `CandidateBundleReference` plus either those frozen bytes or content-addressed immutable blob identities in the Promotion journal before staging Capability, ledger, or binding data.
+5. Stage exclusively from the frozen journal snapshot, never by reopening live Candidate paths. Re-read staged bytes and require the same asset/content canonical values and proposed content hash before publication. The later Candidate status update uses compare-and-swap against the admitted `candidateRawDigest`.
+
+A path change after journal admission therefore cannot alter promoted bytes. Interruption or disagreement leaves only recoverable staging state, publishes no terminal Receipt, and cannot expose a Release. A later `promotionStatus` update creates a different Candidate snapshot and never changes the admitted reference. Candidate ID, target Capability, proposed asset ID/version, contentFile contract, and computed content hash must be internally consistent before any Experiment, binding, Receipt, or Release may consume the bundle.
 
 #### 7.1.1 Existing `bootstrap-baseline/v1` read profile
 
@@ -291,7 +321,7 @@ createdAt
 stateEnteredAt
 ```
 
-`targetCapability` binds capability ID, proposed or released version, projection version where applicable, Runtime, and model sensitivity. `scope` names eligible projects or canary classes without copying project truth. Every expectation reference binds exact ID, version, and digest. Experiment `evalRequirements[]` is a nonempty array whose entries contain an exact `evalDefinitionReference: AssetRevisionReference`; entries are unique by Eval ID and definition digest. The array freezes the exact Eval Definition bytes when the Experiment becomes `AUTHORIZED`, not merely logical Eval IDs. Every terminal Trial must account for this exact reference set without substitution. Existing Candidate/Eval records remain on their unchanged ID-based path and are not rewritten.
+`candidateReference` has type `CandidateBundleReference`. `targetCapability` binds capability ID, proposed version, `proposedCapabilityContentHash`, projection version where applicable, Runtime, and model sensitivity, and must exactly equal that bundle's proposed Capability identity/hash. `scope` names eligible projects or canary classes without copying project truth. Every expectation reference binds exact ID, version, and digest. Experiment `evalRequirements[]` is a nonempty array whose entries contain an exact `evalDefinitionReference: AssetRevisionReference`; entries are unique by Eval ID and definition digest. The array freezes the exact Eval Definition bytes when the Experiment becomes `AUTHORIZED`, not merely logical Eval IDs. Every terminal Trial must account for this exact reference set without substitution. Existing Candidate/Eval records remain on their unchanged ID-based path and are not rewritten.
 
 `authorityDecision` is a discriminated object with `PENDING | APPROVE | REJECT`. `APPROVE` and `REJECT` require actor, decision time, authority reference, reason, and decision digest; `PENDING` forbids fabricated decision fields. `DRAFT` and `AWAITING_AUTHORITY` require `PENDING`; `AUTHORIZED`, `RUNNING`, `EVIDENCE_READY`, `PASSED`, `FAILED`, and `INCONCLUSIVE` require `APPROVE`; `REJECTED` requires `REJECT`; `CANCELLED` retains the decision state in force when cancellation occurred. Authorization is not inferred from status text.
 
@@ -341,7 +371,7 @@ evidence[]
 
 `recordRevision` and `previousRecordDigest` use the same first-record/later-record `Availability<Digest>` rule as Experiment. `state` is `AUTHORIZED | RUNNING | EVIDENCE_READY | TERMINAL`. `outcome` has type `Availability<PASS | FAIL | INCONCLUSIVE | CANCELLED>` and `closedAt` has type `Availability<Timestamp>`. HG2 encodes their relationship as a closed `oneOf`: `AUTHORIZED`, `RUNNING`, and `EVIDENCE_READY` require both fields to be `NOT_AVAILABLE`; `TERMINAL` requires both fields to be `PRESENT`. Pre-evidence states may have an empty receipt array. State transitions create append-only revisions and are compare-and-swap protected. `experimentReference`, `candidateReference`, and the `PROPOSED_CAPABILITY` target must match the enclosing Experiment exactly. The exact referenced Experiment revision must carry an `APPROVE` authority decision before the first Trial revision; the Trial inherits that authority and never stores a second mutable approval verdict. The cohort identity is frozen before `RUNNING`; changing Revision, lock, Runtime, model, projection, or toolchain creates another Trial Attempt.
 
-`evalCoverage` is a closed ledger over the Experiment's frozen exact Eval Definition reference set: it records the required count, exactly matched count, missing references, duplicate references, unexpected references, reused-result references, and `COMPLETE | PARTIAL | INVALID`. A receipt counts only when its `evalDefinitionReference` exactly equals one frozen entry, including source Revision and content digest; matching only Eval ID is insufficient. `protectedCriterionResults[]` accounts for every frozen Regression, Safety, and Recovery criterion by exact criterion reference and records `PASS | FAIL | UNKNOWN` with evidence. Neither object is a caller-supplied verdict; both are deterministically derived from validated Trial receipts and criterion evidence.
+`evalCoverage` is a closed ledger over the Experiment's frozen exact Eval Definition reference set: it records the required count, exactly matched count, missing references, duplicate references, unexpected references, reused-result references, and `COMPLETE | PARTIAL | INVALID`. A receipt counts only after the complete identity and cohort validation in Section 7.3.2 and when its `evalDefinitionReference` exactly equals one frozen entry, including source Revision and content digest; matching only Eval ID is insufficient. A receipt with any Experiment, Trial, Candidate, target, cohort, command, or Eval identity mismatch makes coverage `INVALID` rather than missing or partial. `protectedCriterionResults[]` accounts for every frozen Regression, Safety, and Recovery criterion by exact criterion reference and records `PASS | FAIL | UNKNOWN` with evidence. Neither object is a caller-supplied verdict; both are deterministically derived from validated Trial receipts and criterion evidence.
 
 `cancellationDecision` has type `Availability<CancellationDecision>`. Its `PRESENT` branch requires action `CANCEL_TRIAL`, actor, decision time, authority reference, bounded reason, and decision digest; the `NOT_AVAILABLE` branch forbids those fields. It must be `NOT_AVAILABLE` for every nonterminal revision and for terminal PASS, FAIL, or INCONCLUSIVE. It is `PRESENT` if and only if terminal outcome is CANCELLED. A cancellation transition is rejected when already-durable Trial evidence establishes FAIL; compare-and-swap prevents a second terminal outcome.
 
@@ -349,36 +379,91 @@ evidence[]
 
 1. `FAIL` when any required Eval Result is `FAIL` or any protected Regression, Safety, or Recovery criterion is `FAIL`. This takes precedence over a later cancellation request. Early termination is allowed, but missing coverage remains explicit and the Trial can never be reported as PASS.
 2. `CANCELLED` only when an explicit authorized cancellation transition exists and no FAIL evidence exists. It preserves all accumulated receipts and coverage and cannot satisfy Experiment PASS.
-3. `PASS` if and only if `evalCoverage` is `COMPLETE`, every required Eval has exactly one unique execution receipt bound to this Trial and the same `cohortKey`, every referenced exact Eval Result is `PASS`, no unexpected or reused result exists, and every protected criterion is accounted for as `PASS`.
+3. `PASS` if and only if `evalCoverage` is `COMPLETE`, every required Eval has exactly one unique execution receipt bound to this Trial and the same `cohortKey`, each Receipt has its complete valid frozen-input and ordered-journal chain through final Trial admission, every referenced exact Eval Result is `PASS`, no unexpected or reused result exists, and every protected criterion is accounted for as `PASS`.
 4. `INCONCLUSIVE` when no FAIL exists but any required receipt or criterion is missing or unavailable, any required Eval Result is `INCONCLUSIVE`, or any protected criterion is `UNKNOWN`.
 
 No stored `outcome` overrides this derivation: disagreement is an invalid Trial record and makes the projection Gate `NO_GO`. An Experiment can become `PASSED` only from a terminal Trial that satisfies the complete PASS rule above.
 
-#### 7.3.2 `growth-eval-execution-receipt/v1`
+#### 7.3.2 Controlled Eval execution evidence
 
-The existing `eval-result/v1` remains valid and unchanged. This new append-only receipt proves that exact Eval Result bytes were produced for a particular Trial rather than later attached to it.
+The existing strict `eval-result/v1` remains valid and unchanged. It contains Eval ID, Capability ID/version, projection version, Runtime, model, execution time, result, and evidence, but no Candidate bundle, content hash, nonce, runner input, or command-acceptance identity. Its bytes alone therefore prove only `LEGACY_ID_VERSION_ONLY` provenance. Experiment coverage requires the following companion contracts produced by a controlled runner; a user-authored or later backfilled Receipt is invalid.
 
-Required fields:
+##### `growth-eval-execution-input/v1`
+
+This immutable, content-addressed manifest freezes what the runner will consume before launch. Required fields are:
+
+```text
+schemaVersion
+executionInputId
+executionCommandReference
+preEvidenceTrialReference
+experimentReference
+candidateReference
+targetCapabilityReference
+evalDefinitionReference
+runtimeProjectionInput
+executionCohortIdentity
+cohortKey
+executionNonce
+reservedEvalResultId
+reservedExecutionReceiptId
+runnerIdentity
+inputArtifactReferences[]
+canonicalExecutionInputDigest
+```
+
+`executionCommandReference` is a `CommandReference`; `preEvidenceTrialReference`, `experimentReference`, and `evalDefinitionReference` are `AssetRevisionReference` values; every `inputArtifactReferences[]` item is an `ExecutionInputArtifactReference`; `candidateReference` is a `CandidateBundleReference`; and `targetCapabilityReference` is a `CandidateProposedCapabilityReference`. `runtimeProjectionInput` is a closed `Availability<RuntimeProjectionExecutionInput>`: its PRESENT value has exactly `manifestReference`, `manifestRawDigest`, `sourceResolutionId`, `capabilityLockFingerprint`, `projectStateHash`, `projectBindingHash`, `generatedFilesDigest`, `projectedPayloadReferences[]`, and `targetTuple`; projected payload items are `ExecutionInputArtifactReference` values and the target Capability ID/version/content hash must appear exactly once. The NOT_AVAILABLE branch is allowed only with reason `EVAL_DOES_NOT_USE_RUNTIME_PROJECTION` and cannot satisfy a projection-sensitive Eval. `runnerIdentity` binds runner ID/version, executable or image digest, argv/config digest, validator/toolchain digest, Runtime identity, and model configuration digest. `executionNonce` has at least 128 bits of entropy and is unique within the trial-scoped journal. The two reserved IDs are deterministic from the Trial, Eval, and nonce; `COMMAND_ACCEPTED` fails if either output identity already exists and reserves both for no-replace creation by this run. `canonicalExecutionInputDigest` covers every preceding field and all exact opened input digests; no live pathname is an execution input.
+
+##### `growth-eval-execution-journal/v1`
+
+Each Trial Attempt has one owner-only, append-only execution journal. Its strict entry Schema uses `TRIAL_PREPARED | COMMAND_ACCEPTED | EXECUTION_STARTED | EXECUTION_COMPLETED | TRIAL_EVIDENCE_ACCEPTED` as a discriminated union. Every entry carries its `ExecutionJournalEntryReference` fields and a closed event-specific payload. `TRIAL_PREPARED` binds the exact immutable `AUTHORIZED | RUNNING` pre-evidence Trial revision and must be sequence 1. `COMMAND_ACCEPTED` binds one exact command, execution-input manifest, nonce, and idempotency key. `EXECUTION_STARTED` binds that acceptance and input plus runner launch identity. `EXECUTION_COMPLETED` binds the same acceptance/start/input, one exact `growth-eval-execution-receipt/v1`, and its exact `eval-result/v1` output. `TRIAL_EVIDENCE_ACCEPTED` binds the later immutable consuming Trial revision and the complete sorted Receipt set carried by that revision.
+
+The journal writer, not the caller, records `recordedAt`; values are nondecreasing, but only continuous sequence and digest chaining prove order. The existing Coordinator pattern is reused: one writer lock, expected-version compare-and-swap, immutable historical prefix, atomic durable replacement, post-write reread, and idempotency conflict when one key is reused with another canonical command or input digest. The canonical execution-command digest excludes acceptance/start/completion references, output, and the consuming Trial revision; the acceptance event binds that already-computable digest, so no command/receipt cycle exists. Each command has exactly one acceptance, at most one start, and at most one terminal completion. A different generation, missing prefix, sequence gap, changed prior digest, replayed nonce/result, duplicate terminal event, or timestamp intended to contradict sequence is invalid.
+
+##### `growth-eval-execution-receipt/v1`
+
+The controlled runner creates this immutable completion record from the already admitted input and captured output. Required fields are:
 
 ```text
 schemaVersion
 executionReceiptId
 executionCommandReference
+trialPreparationEntryReference
+commandAcceptanceEntryReference
+executionStartEntryReference
+executionInputReference
 executionNonce
-trialAttemptReference
+preEvidenceTrialReference
 experimentReference
 candidateReference
 evalDefinitionReference
 evalResultReference
+evalResultRawDigest
 targetCapabilityReference
 executionCohortIdentity
 cohortKey
+runnerIdentity
+capturedOutputDigest
 startedAt
 completedAt
 evidence[]
 ```
 
-The trial-scoped execution command must exist before `startedAt` and bind the nonce, Experiment, Trial, Candidate, exact Eval Definition reference, target Capability, and cohort. The receipt's `evalDefinitionReference` must exactly equal one entry frozen in the authorized Experiment; Eval ID equality alone is insufficient. The exact `eval-result/v1` reference binds canonical bytes and must match Eval ID, Capability ID/version, projection version, Runtime, model, result, and execution interval. One Eval Result digest may satisfy at most one Trial receipt. Existing manual or fixture results without this receipt remain usable by the existing Candidate/Eval Promotion path but cannot establish Experiment PASS.
+The three entry references are `ExecutionJournalEntryReference` values constrained respectively to `TRIAL_PREPARED`, `COMMAND_ACCEPTED`, and `EXECUTION_STARTED`; `executionInputReference` is an `ExecutionInputManifestReference`; `preEvidenceTrialReference`, `experimentReference`, `evalDefinitionReference`, and `evalResultReference` are `AssetRevisionReference` values; `executionCommandReference` is a `CommandReference`; `candidateReference` is a `CandidateBundleReference`; and `targetCapabilityReference` is a `CandidateProposedCapabilityReference`. `executionCohortIdentity`, `runnerIdentity`, and `executionNonce` must byte-equal the admitted input, and `cohortKey` must recompute exactly. The Receipt does not reference its later `EXECUTION_COMPLETED` journal entry or the later consuming Trial revision, preventing a digest cycle.
+
+The command, admitted input, referenced pre-evidence Trial, later consuming Trial revisions, and authorized Experiment must agree field-for-field on Experiment ID/version/reference, Trial Attempt ID, Candidate bundle, proposed target, exact Eval Definition, execution cohort, runner, nonce, and reserved output identities. The Receipt ID and Eval Result ID must equal the two reserved IDs. `targetCapabilityReference` must bind the exact admitted `proposed/asset.yaml` member and repeat the Candidate bundle's Capability ID, proposed version, and `proposedCapabilityContentHash`; released or same-ID/different-content targets are invalid. The runner must append and fsync `COMMAND_ACCEPTED`, then append and fsync `EXECUTION_STARTED`, before invoking the evaluator, and must execute only from the frozen input artifacts rather than reopening live Candidate or projection paths.
+
+After execution, the runner materializes the unchanged `eval-result/v1` bytes at the reserved identity using no-replace publication; its fields must match the frozen Eval ID, Capability ID/version, projection version, Runtime, model, execution interval, and observed result supported by the captured output. It then creates the Receipt at its reserved identity with the same no-replace rule. `evalResultRawDigest` uses `sha256:<64 lowercase hex>` and binds those exact serialized bytes; `evalResultReference` binds their parsed canonical object. The Eval Result is not required or allowed to contain a content hash. Exact content provenance instead comes from the pre-run input manifest, its target member reference and content hash, the trusted runner identity, `capturedOutputDigest`, the exact Eval Result raw/canonical digest, and the ordered journal events. The runner persists and rereads both result and Receipt before appending `EXECUTION_COMPLETED`; only afterward may a compare-and-swap create the consuming Trial revision, followed by `TRIAL_EVIDENCE_ACCEPTED`. The required sequence is therefore:
+
+```text
+TRIAL_PREPARED
+< COMMAND_ACCEPTED
+< EXECUTION_STARTED
+< EXECUTION_COMPLETED
+< TRIAL_EVIDENCE_ACCEPTED
+```
+
+The final admission event's Trial reference must contain exactly the completed Receipt references claimed by that Trial. A Receipt counts toward Trial coverage only when this whole same-journal chain validates. Any disagreement invalidates the Receipt and every Trial revision that cites it, sets coverage to `INVALID`, prevents Trial/Experiment PASS, and makes the projection Gate `NO_GO`. One Eval Result digest may satisfy at most one Trial Receipt, and one Receipt may be admitted by at most one Trial Attempt. Existing manual or fixture `eval-result/v1` records without this controlled evidence chain remain usable only by the existing Candidate/Eval Promotion path; they cannot establish Experiment PASS or exact execution provenance.
 
 #### 7.3.3 `promotion-lineage-binding/v1`
 
@@ -391,6 +476,8 @@ schemaVersion
 bindingId
 bindingKind
 candidateReference
+canonicalCandidateBundleDigest
+proposedCapabilityContentHash
 experimentReference
 qualifyingTrialAttemptReference
 trialAttemptReferences[]
@@ -404,11 +491,11 @@ coverage
 evidence[]
 ```
 
-`bindingKind` is `EXPERIMENT_BACKED | CANDIDATE_EVAL_BACKED`. `candidateReference` and `capabilityReference` have type `AssetRevisionReference`. `experimentReference` and `qualifyingTrialAttemptReference` have type `Availability<AssetRevisionReference>` with closed `PRESENT` and `NOT_AVAILABLE` `oneOf` branches. `trialAttemptReferences[]`, `evalExecutionReceiptReferences[]`, and `legacyEvalResultReferences[]` contain exact `AssetRevisionReference` values and reject duplicate `(kind, ID, contentDigest)` keys or two digests for the same record revision. `promotionCommandReference` has type `CommandReference`; `ledgerEntryReference` has type `LedgerEntryReference`. Before Promotion, the command binds a canonical lineage-intent object and its digest. The lineage binding must reproduce that exact intent field-for-field and references the command, canonical Capability, and ledger entry. The terminal Promotion Receipt is the final commit marker: it binds the same intent digest, exact binding digest, canonical Capability content hash, and ledger-entry digest. The binding never references the terminal Receipt, so the hash graph and publication order are acyclic.
+`bindingKind` is `EXPERIMENT_BACKED | CANDIDATE_EVAL_BACKED`. `candidateReference` has type `CandidateBundleReference`; `canonicalCandidateBundleDigest` and `proposedCapabilityContentHash` must byte-equal the values inside that reference. `capabilityReference` has type `AssetRevisionReference`. `experimentReference` and `qualifyingTrialAttemptReference` have type `Availability<AssetRevisionReference>` with closed `PRESENT` and `NOT_AVAILABLE` `oneOf` branches. `trialAttemptReferences[]`, `evalExecutionReceiptReferences[]`, and `legacyEvalResultReferences[]` contain exact `AssetRevisionReference` values and reject duplicate `(kind, ID, contentDigest)` keys or two digests for the same record revision. `promotionCommandReference` has type `CommandReference`; `ledgerEntryReference` has type `LedgerEntryReference`. Before Promotion, the command binds a canonical lineage-intent object and its digest, including the complete Candidate bundle digest and proposed Capability content hash. The lineage binding must reproduce that exact intent field-for-field and references the command, canonical Capability, and ledger entry. The terminal Promotion Receipt is the final commit marker: it binds the same intent digest, exact binding digest, canonical Capability content hash, and ledger-entry digest. The binding never references the terminal Receipt, so the hash graph and publication order are acyclic.
 
 The future Promotion operation uses one durable journaled transaction boundary. It stages canonical Capability bytes, the unique ledger entry, and lineage binding, then publishes the terminal Receipt/transaction marker last. It emits `SUCCEEDED` only after all are durable and mutually valid. Interruption before that point yields `UNKNOWN_OUTCOME` or `RECOVERY_REQUIRED`; the projection rejects partial artifacts, and recovery never guesses completion or deletes prior evidence.
 
-For `EXPERIMENT_BACKED`, exactly one terminal PASSED Experiment and one PRESENT qualifying PASSED Trial are required. Every required Eval must have a unique matching PASS Eval Execution Receipt for that same Trial and cohort; other Trial references are historical context only and cannot fill its coverage. `legacyEvalResultReferences[]` is empty. For `CANDIDATE_EVAL_BACKED`, `experimentReference` and `qualifyingTrialAttemptReference` are `NOT_AVAILABLE`, Trial and execution-receipt arrays are empty with explicit not-applicable coverage, while exact PASS legacy Eval Result references satisfy the existing Candidate requirements. In both cases Candidate proposed Capability, Eval targets, canonical Capability, ledger tuple, and Receipt must agree on Capability ID/version/content hash. Any mismatch, duplicate ledger tuple, reused trial result, missing Promotion Receipt, or ambiguous reference makes the binding invalid. The binding's canonical digest is carried by its `AssetRevisionReference`, not embedded recursively in the record.
+For `EXPERIMENT_BACKED`, exactly one terminal PASSED Experiment and one PRESENT qualifying PASSED Trial are required. Every required Eval must have a unique matching PASS Eval Execution Receipt for that same Trial and cohort, and every Receipt must validate through its frozen input plus the same trial-scoped preparation/acceptance/start/completion/final-admission journal chain; other Trial references are historical context only and cannot fill its coverage. `legacyEvalResultReferences[]` is empty. For `CANDIDATE_EVAL_BACKED`, `experimentReference` and `qualifyingTrialAttemptReference` are `NOT_AVAILABLE`, Trial and execution-receipt arrays are empty with explicit not-applicable coverage, while exact PASS legacy Eval Result references satisfy the existing Candidate requirements. Legacy Eval Results bind only Capability ID/version, so their PASS is accepted only together with the exact admitted Candidate bundle; it never independently proves content identity. In both cases the bundle's proposed Capability ID/version/computed content hash, Eval targets, canonical Capability asset/content hash, ledger tuple/hash, and Receipt must agree exactly. Any mismatch, incomplete bundle, incomplete or invalid execution chain, duplicate ledger tuple, reused trial result, missing Promotion Receipt, or ambiguous reference makes the binding invalid. The binding's canonical digest is carried by its `AssetRevisionReference`, not embedded recursively in the record.
 
 Current `candidate/v1`, `eval-result/v1`, and historical `promotion-ledger/v1` entries are never rewritten. Only a Promotion entry frozen into the approved legacy cutover contract below may remain a ledger-backed Release with partial lineage; a post-cutover entry missing its required binding or Receipt is invalid. HG3 must add the trial-scoped execution and Promotion receipt path before any new Experiment-backed claim is possible.
 
@@ -424,6 +511,8 @@ promotionCommandReference
 idempotencyKey
 authorityDecisionReference
 candidateReference
+canonicalCandidateBundleDigest
+proposedCapabilityContentHash
 capabilityReference
 promotionPath
 lineageIntentDigest
@@ -434,7 +523,7 @@ committedAt
 evidence[]
 ```
 
-`schemaVersion` is `promotion-receipt/v1`; `commitState` is exactly `COMMITTED`. `promotionCommandReference` is a `CommandReference`; Candidate, Capability, and lineage-binding references are exact `AssetRevisionReference` values; `authorityDecisionReference` is an `AuthorityDecisionReference`; the ledger reference is a `LedgerEntryReference`. `promotionPath` is `EXPERIMENT_BACKED | CANDIDATE_EVAL_BACKED` and must equal the referenced binding kind. The Receipt repeats the command's `idempotencyKey` and lineage-intent digest and binds the exact binding digest, Capability ID/version/content hash and asset digest, ledger tuple and entry digest, transaction ID, authoritative decision, commit time, and bounded evidence references. Its canonical digest excludes no referenced source bytes and excludes only its own outer `AssetRevisionReference`, which is created after the Receipt bytes exist.
+`schemaVersion` is `promotion-receipt/v1`; `commitState` is exactly `COMMITTED`. `promotionCommandReference` is a `CommandReference`; `candidateReference` is a `CandidateBundleReference`; the repeated `canonicalCandidateBundleDigest` and `proposedCapabilityContentHash` must byte-equal that reference and the lineage binding. Capability and lineage-binding references are exact `AssetRevisionReference` values; `authorityDecisionReference` is an `AuthorityDecisionReference`; the ledger reference is a `LedgerEntryReference`. `promotionPath` is `EXPERIMENT_BACKED | CANDIDATE_EVAL_BACKED` and must equal the referenced binding kind. The Receipt repeats the command's `idempotencyKey`, Candidate bundle digest, proposed Capability content hash, and lineage-intent digest and binds the exact binding digest, canonical Capability ID/version/content hash and asset digest, ledger tuple and entry digest, transaction ID, authoritative decision, commit time, and bounded evidence references. Its canonical digest excludes no referenced source bytes and excludes only its own outer `AssetRevisionReference`, which is created after the Receipt bytes exist.
 
 The journal enforces uniqueness by both `(promotionCommandReference.commandId, idempotencyKey)` and the `(capabilityId, capabilityVersion)` ledger tuple. Exact replay of the same key and PayloadHash returns the same Receipt bytes. The same key with another payload is `IDEMPOTENCY_CONFLICT`; a second successful Receipt for either unique key is invalid. Capability, ledger entry, and lineage binding are staged and durably validated first; this Receipt is published last. Only then may the operation return `SUCCEEDED`.
 
@@ -505,13 +594,13 @@ BOOTSTRAP_AUTHORIZED
 
 `releaseId` is a stable encoding of `sha256(canonical_json_bytes({capabilityId, capabilityVersion, contentHash, ledgerEntryDigest}))`. The canonical asset and exactly one ledger entry must agree on Capability ID/version/content hash; otherwise no Release is emitted and the projection Gate is `NO_GO`.
 
-`capabilityReference` and every source Candidate, Experiment, Trial, Eval Result, and Expectation array element have type `AssetRevisionReference`; each array rejects duplicate identity/digest keys. `ledgerEntryReference` has type `LedgerEntryReference`. `lineageBindingReference`, `promotionReceiptReference`, `bootstrapBaselineReference`, `bootstrapContentBindingReference`, and `legacyPromotionCutoverReference` each have type `Availability<AssetRevisionReference>` with closed `PRESENT` and `NOT_AVAILABLE` `oneOf` branches. `EXPERIMENT_BACKED` requires PRESENT lineage and Receipt references and NOT_AVAILABLE bootstrap/content-binding/cutover references, with a valid binding plus terminal Receipt whose bound lineage intent consumed a PASSED Experiment and its exact same-Trial Eval receipts. `CANDIDATE_EVAL_BACKED` has the same reference availability but consumes a valid non-Experiment binding and terminal Receipt. A PASSED Experiment, lineage binding, or Promotion Receipt without the canonical asset and existing ledger entry never creates a Release.
+`capabilityReference` and every source Experiment, Trial, Eval Result, and Expectation array element have type `AssetRevisionReference`; every source Candidate element has type `CandidateBundleReference`; each array rejects duplicate identity/digest keys. `ledgerEntryReference` has type `LedgerEntryReference`. `lineageBindingReference`, `promotionReceiptReference`, `bootstrapBaselineReference`, `bootstrapContentBindingReference`, and `legacyPromotionCutoverReference` each have type `Availability<AssetRevisionReference>` with closed `PRESENT` and `NOT_AVAILABLE` `oneOf` branches. `EXPERIMENT_BACKED` requires PRESENT lineage and Receipt references and NOT_AVAILABLE bootstrap/content-binding/cutover references, with a valid binding plus terminal Receipt whose bound lineage intent consumed a PASSED Experiment and its exact same-Trial Eval receipts. `CANDIDATE_EVAL_BACKED` has the same reference availability but consumes a valid non-Experiment binding and terminal Receipt. A PASSED Experiment, lineage binding, or Promotion Receipt without the canonical asset and existing ledger entry never creates a Release.
 
 `BOOTSTRAP_AUTHORIZED` is selected only when all of the following exact sources agree: the ledger entry has `authorization: BOOTSTRAP_AUTHORIZED` and `authorityDecision: CLOSED_BASELINE_BOOTSTRAP`; its tuple and content hash match the canonical Capability; the tuple appears exactly once in `authorizedSeeds[]` of the immutable baseline referenced by PRESENT `bootstrapBaselineReference`; the content binding's own `bootstrapBaselineReference` is byte-identical to that Release reference across kind, ID, source Revision, and digest; and the exact Capability/ledger/content hash tuple appears exactly once in the immutable companion referenced by PRESENT `bootstrapContentBindingReference`. Its lineage, Promotion Receipt, and legacy-cutover references are `NOT_AVAILABLE` with path-specific reasons. A claimed seed absent from either source, a cross-baseline splice, a duplicate, a changed Capability/ledger pair, or any disagreement is invalid, emits no Release, and makes the projection Gate `NO_GO`.
 
 Promotion-path selection is mutually exclusive and ordered: a validated bootstrap tuple selects `BOOTSTRAP_AUTHORIZED`; a `PROMOTED` ledger entry with one valid Experiment binding and Receipt selects `EXPERIMENT_BACKED`; a `PROMOTED` entry with one valid Candidate/Eval binding and Receipt selects `CANDIDATE_EVAL_BACKED`; a `PROMOTED` entry whose exact digest is PRESENT exactly once in the approved legacy cutover selects `HISTORICAL_PROMOTION_PARTIAL`. That historical path requires PRESENT `legacyPromotionCutoverReference` and NOT_AVAILABLE lineage, Receipt, baseline, and bootstrap-content references. An unlisted entry missing a valid binding/Receipt is invalid rather than historical. Multiple matching bindings, contradictory authorization markers, or any other authorization value are projection errors, never tie-broken guesses.
 
-`lineageCoverage` is a typed object with `COMPLETE | PARTIAL | NOT_APPLICABLE | UNKNOWN`, explicit edge coverage, missing kinds, and reason. Empty Experiment/Trial references are valid for non-Experiment paths only; historical references that cannot be reconstructed remain partial rather than guessed. Any Candidate source edge that is `LEGACY_ID_ONLY`, `AMBIGUOUS`, or `MISSING` keeps the affected Source -> Experience -> Candidate or Candidate -> Eval-Definition edge `PARTIAL` or `UNKNOWN`; even a valid modern Promotion Receipt cannot relabel it exact. This degraded provenance does not revoke the existing Candidate/Eval Promotion path, but Workbench must display it. For all current v1 source contracts, `compatibility` is `NOT_AVAILABLE` with reason `V1_SOURCE_HAS_NO_COMPATIBILITY_CONTRACT` and `rollback` is `NOT_AVAILABLE` with reason `V1_SOURCE_HAS_NO_ROLLBACK_CONTRACT`; no path may infer either from prose, version distance, or source filenames. A future explicit source contract requires a new projection rule version.
+`lineageCoverage` is a typed object with `COMPLETE | PARTIAL | NOT_APPLICABLE | UNKNOWN`, explicit edge coverage, missing kinds, and reason. Empty Experiment/Trial references are valid for non-Experiment paths only; historical references that cannot be reconstructed remain partial rather than guessed. Any Candidate source edge that is `LEGACY_ID_ONLY`, `AMBIGUOUS`, or `MISSING` keeps the affected Source -> Experience -> Candidate or Candidate -> Eval-Definition edge `PARTIAL` or `UNKNOWN`; even a valid modern Promotion Receipt cannot relabel it exact. A bare `eval-result/v1` edge is `LEGACY_ID_VERSION_ONLY` for content provenance because that Schema has no Candidate bundle or content hash. An Experiment-backed compound edge may instead be `EXACT_VIA_EXECUTION_CHAIN` only when the exact input manifest, same-journal acceptance/start/completion/final-admission sequence, controlled-runner Receipt, and output bytes all validate; this state describes the companion chain and never pretends that `eval-result/v1` contains a content hash. Candidate/Eval-backed results without that chain remain partial even though the exact admitted Candidate bundle prevents substitution at Promotion. These degraded edges do not revoke the existing Candidate/Eval Promotion path, but Workbench must display them. For all current v1 source contracts, `compatibility` is `NOT_AVAILABLE` with reason `V1_SOURCE_HAS_NO_COMPATIBILITY_CONTRACT` and `rollback` is `NOT_AVAILABLE` with reason `V1_SOURCE_HAS_NO_ROLLBACK_CONTRACT`; no path may infer either from prose, version distance, or source filenames. A future explicit source contract requires a new projection rule version.
 
 A historical ledger `sourceReference` such as `candidate://...` may be shown as opaque ledger evidence, but it is not promoted to an `AssetRevisionReference` unless the exact historical bytes, Revision, and digest are independently available. The current file with the same Candidate ID is never assumed to be the historical snapshot.
 
@@ -519,8 +608,8 @@ Path-specific Release derivation is closed:
 
 | Promotion path | Candidate / Experiment / Trial / Eval references | Release expectation references | `releasedAt` |
 | --- | --- | --- | --- |
-| `EXPERIMENT_BACKED` | Candidate and Experiment are the binding's exact PRESENT references; Trial references are the binding's sorted exact Trial array including the qualifying Trial; Eval Results are the sorted unique results reached from that binding's execution receipts | All and only valid frozen Expectations whose `ownerAnchor` exactly equals this `releaseId`; Experiment-owned Expectations are not silently copied | exact `ledgerEntry.authorizedAt`, which must be no later than Receipt `committedAt` |
-| `CANDIDATE_EVAL_BACKED` | Candidate is the binding's exact reference; Experiment/Trial arrays are empty; Eval Results equal the binding's sorted exact legacy-result array | same owner-anchor rule | exact `ledgerEntry.authorizedAt`, no later than Receipt `committedAt` |
+| `EXPERIMENT_BACKED` | Candidate is the binding's exact admitted `CandidateBundleReference` and its proposed content hash equals the canonical Capability; Experiment is its exact PRESENT reference; Trial references are the binding's sorted exact Trial array including the qualifying Trial; Eval Results are the sorted unique results reached from that binding's execution receipts | All and only valid frozen Expectations whose `ownerAnchor` exactly equals this `releaseId`; Experiment-owned Expectations are not silently copied | exact `ledgerEntry.authorizedAt`, which must be no later than Receipt `committedAt` |
+| `CANDIDATE_EVAL_BACKED` | Candidate is the binding's exact admitted bundle and its proposed content hash equals the canonical Capability; Experiment/Trial arrays are empty; Eval Results equal the binding's sorted exact legacy-result array and remain `LEGACY_ID_VERSION_ONLY` for content provenance | same owner-anchor rule | exact `ledgerEntry.authorizedAt`, no later than Receipt `committedAt` |
 | `HISTORICAL_PROMOTION_PARTIAL` | all four arrays are empty; opaque source text and current files never fill historical lineage | same owner-anchor rule; absence is an empty known set only after the profile has completely scanned Release-owned Expectations | exact `ledgerEntry.authorizedAt` |
 | `BOOTSTRAP_AUTHORIZED` | all four arrays are empty | same owner-anchor rule | exact `ledgerEntry.authorizedAt`, which must be at or before the baseline cutoff |
 
@@ -744,6 +833,8 @@ EVAL_RESULT
 GROWTH_EXPECTATION
 GROWTH_EXPERIMENT
 TRIAL_ATTEMPT
+EVAL_EXECUTION_INPUT
+EVAL_EXECUTION_JOURNAL
 EVAL_EXECUTION_RECEIPT
 PROMOTION_LINEAGE_BINDING
 PROMOTION_RECEIPT
@@ -779,6 +870,8 @@ expectations[]
 candidates[]
 experiments[]
 trialAttempts[]
+evalExecutionInputs[]
+evalExecutionJournals[]
 evalExecutionReceipts[]
 promotionLineageBindings[]
 promotionReceipts[]
@@ -798,11 +891,11 @@ gate
 
 `asOf` is a caller-supplied, normalized UTC cutoff; no wall-clock generation timestamp is embedded in projection bytes. Build execution time belongs in a non-authoritative command receipt. `builderProfileReference` must resolve to exactly one valid profile whose `projectionSchemaVersion` matches. `watermark` is `sha256:` of the existing `canonical_json_bytes` representation of `{schemaVersion, asOf, toolchainIdentity, builderProfileReference, orderedSourceIdentityManifest}`. The manifest binds every configured source kind whether readable or not, its root/provider identity, availability, Schema set, Revision or ledger identity, content digest availability, and selected-record digests. The watermark is computed before and independently of the projection object, so it is not circular.
 
-The projection carries safe, typed read records rather than dereferenced evidence bodies. Assessment Receipt records expose exact receipt reference, project/task/attempt identity, risk/trigger/verdict/disposition, assessed time, bounded summary/impact distillation, visibility, and Evidence References. Experience records expose exact reference, source project, capture time, stage, bounded signal/impact distillation, triage state/decision, hints, visibility, and Evidence References. Eval Definition records expose exact reference, Eval ID, target Capability, model sensitivity, transfer scope, bounded scenario distillation, and criterion counts. Eval Result records expose exact reference, Eval/Capability/version/projection/Runtime/model identities, execution time, result, and Evidence References. Promotion Receipt, Capability, ledger, baseline, bootstrap-content-binding, and cutover read records expose their exact typed references plus the fields required by Release derivation. Visibility filtering may redact bounded distillation but never identity, state, digest, coverage, or redaction reason.
+The projection carries safe, typed read records rather than dereferenced evidence bodies. Assessment Receipt records expose exact receipt reference, project/task/attempt identity, risk/trigger/verdict/disposition, assessed time, bounded summary/impact distillation, visibility, and Evidence References. Experience records expose exact reference, source project, capture time, stage, bounded signal/impact distillation, triage state/decision, hints, visibility, and Evidence References. Eval Definition records expose exact reference, Eval ID, target Capability, model sensitivity, transfer scope, bounded scenario distillation, and criterion counts. Eval Result records expose exact reference, Eval/Capability/version/projection/Runtime/model identities, execution time, result, and Evidence References. Eval execution input and journal records expose exact references, runner/input/cohort identities, validated event types and sequences, chain validity, and the resulting `LEGACY_ID_VERSION_ONLY | EXACT_VIA_EXECUTION_CHAIN` provenance state; they never expose captured input or output bodies. Promotion Receipt, Capability, ledger, baseline, bootstrap-content-binding, and cutover read records expose their exact typed references plus the fields required by Release derivation. Visibility filtering may redact bounded distillation but never identity, state, digest, coverage, or redaction reason.
 
-Existing `candidate/v1` source Experience and Eval requirement fields are logical IDs only. A Candidate read record therefore represents each as a closed edge `{logicalId, bindingState, reference, reason}`. `bindingState` is `EXACT_AT_CREATION | LEGACY_ID_ONLY | AMBIGUOUS | MISSING`; `reference` is `Availability<AssetRevisionReference>`. Only a separate immutable creation snapshot or Receipt that actually bound the original bytes may produce `EXACT_AT_CREATION`. The current v1 Candidate alone always produces `LEGACY_ID_ONLY` with `NOT_AVAILABLE: LEGACY_SCHEMA_HAS_ID_ONLY`; a same-ID record currently present in `experiences[]` or `evalDefinitions[]` may be displayed as a non-authoritative match but is never upgraded to the Candidate's historical source. Multiple same-ID digests are `AMBIGUOUS`; absence is `MISSING`. Both remain visible and reduce lineage coverage, but they do not rewrite the existing Candidate/Eval Promotion authority.
+Every Candidate read record carries a validated `CandidateBundleReference` and the bundle's proposed Capability ID/version/content hash. A Release-linked Candidate uses the exact pre-Promotion bundle frozen in its binding/Receipt, never a later live `promotionStatus` snapshot. Existing `candidate/v1` source Experience and Eval requirement fields are logical IDs only, so the read record represents each as a closed edge `{logicalId, bindingState, reference, reason}`. `bindingState` is `EXACT_AT_CREATION | LEGACY_ID_ONLY | AMBIGUOUS | MISSING`; `reference` is `Availability<AssetRevisionReference>`. Only a separate immutable creation snapshot or Receipt that actually bound the original bytes may produce `EXACT_AT_CREATION`. The current v1 Candidate alone always produces `LEGACY_ID_ONLY` with `NOT_AVAILABLE: LEGACY_SCHEMA_HAS_ID_ONLY`; a same-ID record currently present in `experiences[]` or `evalDefinitions[]` may be displayed as a non-authoritative match but is never upgraded to the Candidate's historical source. Multiple same-ID digests are `AMBIGUOUS`; absence is `MISSING`. Both remain visible and reduce lineage coverage, but they do not rewrite the existing Candidate/Eval Promotion authority.
 
-`asOf` inclusion is fixed by source kind. Event-time sources are included only when their authoritative time is at or before `asOf`: GAP `assessment.assessedAt`; Experience `capturedAt`; Eval Result `executedAt`; Expectation freeze time; Experiment and Trial `stateEnteredAt`; Eval Execution Receipt `completedAt`; Promotion Lineage Binding through its unique referencing Receipt `committedAt`; Promotion Receipt `committedAt`; ledger entry `authorizedAt`; legacy cutover `activatedAt`; Adoption Observation and Effect `observedAt`. A modern Release requires both its ledger time and terminal Receipt time at or before `asOf`; the earlier staged ledger never exposes a Release by itself. Later record revisions are excluded rather than used to rewrite earlier state.
+`asOf` inclusion is fixed by source kind. Event-time sources are included only when their authoritative time is at or before `asOf`: GAP `assessment.assessedAt`; Experience `capturedAt`; Eval Result `executedAt`; Expectation freeze time; Experiment and Trial `stateEnteredAt`; Eval execution input through its unique `COMMAND_ACCEPTED` journal `recordedAt`; execution journal entries through writer-owned `recordedAt`; Eval Execution Receipt through its unique `EXECUTION_COMPLETED` journal `recordedAt`; Promotion Lineage Binding through its unique referencing Receipt `committedAt`; Promotion Receipt `committedAt`; ledger entry `authorizedAt`; legacy cutover `activatedAt`; Adoption Observation and Effect `observedAt`. A Receipt or Trial at the cutoff is valid only when every required earlier journal entry is also included and its required final admission is included; a cut through a chain remains visible as incomplete evidence and cannot establish PASS. A modern Release requires both its ledger time and terminal Receipt time at or before `asOf`; the earlier staged ledger never exposes a Release by itself. Later record revisions are excluded rather than used to rewrite earlier state.
 
 Candidate, Eval Definition, canonical Capability, bootstrap baseline, bootstrap content binding, and Project definitions without an authoritative event time use `SNAPSHOT_AT_SOURCE_REVISION`: the exact builder input Revision and digest are included and labeled as snapshot facts, not claimed to have existed at an earlier wall-clock time. An `asOf` earlier than a source's known event boundary, an unknowable required cutoff, or a source that cannot prove whether a record is after the cutoff is excluded with explicit coverage and produces `SOURCE_CUTOFF_INVALID` or `REQUIRED_SOURCE_UNKNOWN` as applicable. After-cutoff records do not appear in arrays, selected-record digests, or record counts; their source provider/root identity remains in the manifest so absence cannot masquerade as an empty provider.
 
@@ -813,9 +906,11 @@ Canonical output uses the repository's existing `canonical_json_bytes` algorithm
 - Eval Definitions: `(evalId, reference.contentDigest)`;
 - Eval Results: `(evalResultId, reference.contentDigest)`;
 - expectations: `(expectationId, version)`;
-- candidates: `(candidateId, canonicalCandidateBundleDigest)`;
+- candidates: `(candidateId, canonicalCandidateBundleDigest, sourceRevision, candidateRawDigest, proposedAssetRawDigest, proposedContentRawDigest)`;
 - experiments: `(experimentId, version, recordRevision)`;
 - Trial Attempts: `(experimentId, experimentVersion, trialAttemptId, recordRevision)`;
+- Eval execution inputs: `(trialAttemptId, evalId, executionInputId)`;
+- Eval execution journals: `(trialAttemptId, journalId, generation)` with entries ordered by positive sequence;
 - Eval Execution Receipts: `(trialAttemptId, evalId, executionReceiptId)`;
 - Promotion Lineage Bindings: `(capabilityId, capabilityVersion, bindingId)`;
 - Promotion Receipts: `(capabilityId, capabilityVersion, promotionReceiptId)`;
@@ -866,7 +961,8 @@ sourceKinds[] {
 records {
   assessmentReceipts, experiences, evalDefinitions, evalResults,
   expectations, candidates, experiments, trialAttempts,
-  evalExecutionReceipts, promotionLineageBindings, promotionReceipts,
+  evalExecutionInputs, evalExecutionJournals, evalExecutionReceipts,
+  promotionLineageBindings, promotionReceipts,
   capabilities, promotionLedgerEntries, bootstrapBaselines,
   bootstrapContentBindings, legacyPromotionCutovers, releases,
   projects, adoptionObservations, effects, projectReleaseViews
@@ -969,7 +1065,10 @@ Candidate
 -> AUTHORIZED
 -> RUNNING
 -> Trial Attempt
+-> freeze exact Eval execution input
+-> durable command acceptance and start
 -> trial-scoped Eval Execution Receipts
+-> durable Trial evidence admission
 -> EVIDENCE_READY
 -> PASSED | FAILED | INCONCLUSIVE
 -> if PASSED, eligible to support existing human Promotion
@@ -1112,7 +1211,7 @@ Payload
 The precondition is a command-specific discriminated union:
 
 - `CREATE_CANDIDATE` requires at least one exact Experience ID, Schema version, canonical content digest, and source Revision whose current `triageStatus` is `TRIAGED` and `triageDecision` is `CROSS_PROJECT_CANDIDATE`, plus a deterministic Candidate creation key that must not already exist. A GAP Receipt cannot be the direct creation subject.
-- `CREATE_EXPERIMENT` requires an exact Candidate ID, Schema version, canonical Candidate-bundle digest, current authority decision, and promotion state, plus a deterministic Experiment creation key that must not already exist.
+- `CREATE_EXPERIMENT` requires an exact `CandidateBundleReference`, including Candidate ID/Schema, canonical bundle digest, proposed Capability ID/version/content hash, current authority decision, and promotion state, plus a deterministic Experiment creation key that must not already exist.
 - Any future mutation command must bind the exact subject version, record revision, and digest it expects to replace. It cannot reuse the create precondition.
 
 HG6 enables only `CREATE_CANDIDATE` and `CREATE_EXPERIMENT`. Revise, Rerun, Revalidate, Narrow Scope, Supersede, Promotion, Release, Adoption, Runtime mutation, and Retirement remain proposal-only until each has a separate command Contract and execution authorization.
@@ -1139,6 +1238,10 @@ UNKNOWN_OUTCOME
 | Missing project evidence | Mark the affected axes `PARTIAL` or `UNKNOWN` |
 | Declared/configured/loaded/invoked divergence | Show each axis and `DIVERGED`; route a deduplicated `Needs You` item |
 | Unbound or reused Eval Result | Preserve it as legacy evidence; never count it toward Experiment PASS |
+| Missing, reordered, cross-generation, or contradictory Eval execution chain | Preserve diagnosable records, set Trial coverage `INVALID`, block Trial/Experiment PASS, and set projection Gate `NO_GO` |
+| Controlled runner reopens live input or lacks exact projection/payload capture | Reject completion as unverifiable; a same-ID/version Eval Result remains `LEGACY_ID_VERSION_ONLY` |
+| Candidate bundle changes during admission | Return `CANDIDATE_BUNDLE_CHANGED` before any authoritative write; retain only recoverable staging diagnostics and require a fresh admission attempt |
+| Candidate bundle path, member, YAML, or digest-format violation | Reject the bundle before Experiment or Promotion authority; do not normalize an unsafe path, duplicate key, alias, malformed digest, or non-`content.md` content file into acceptance |
 | Promotion lineage or ledger/canonical mismatch | Do not emit an Experiment-backed Release; set projection Gate `NO_GO` for identity/digest contradiction |
 | Missing or contradictory terminal Promotion Receipt | Do not emit a modern Release; query by Command ID/IdempotencyKey and fail closed on uncertain outcome |
 | Post-cutover Promotion lacks binding/Receipt | Do not downgrade to historical partial; emit no Release and set Gate `NO_GO` |
@@ -1174,12 +1277,12 @@ Every stable implementation candidate must prove:
 
 1. strict Schema validation, `additionalProperties: false`, bounded payloads, and explicit compatibility behavior;
 2. byte-identical Growth Projection for identical source bytes, `asOf`, schema set, and toolchain identity, including stable array ordering and watermark derivation;
-3. coverage-aware lineage from Source -> Receipt -> Experience -> Candidate -> optional Experiment/Trial/Eval Execution Receipt -> human Promotion Receipt/ledger -> derived Release -> same-cohort Adoption -> Effect, with every allowed promotion path and every missing link explicit;
+3. coverage-aware lineage from Source -> Receipt -> Experience -> Candidate -> optional Experiment/Trial -> frozen Eval input -> ordered acceptance/start/completion/final-admission journal -> Eval Execution Receipt -> human Promotion Receipt/ledger -> derived Release -> same-cohort Adoption -> Effect, with every allowed promotion path and every missing link explicit;
 4. every lifecycle inequality in Section 8;
 5. correct missing, Partial, Stale, Diverged, Failed, Inconclusive, canonical Retired, multi-cohort, same-cohort conflict, and provider-unavailable behavior;
 6. explicit numerator, denominator, unknown count, and coverage for every cross-project aggregate;
 7. zero source-project, Harness-worktree, or external writes for scan, projection build/check, Adapter reads, and Workbench queries; any separately invoked Workbench-local cache refresh writes only its declared cache root and proves the source worktrees unchanged;
-8. fail-closed behavior for path, permission, symlink, malformed record, conflicting identity, concurrency, and version conflict attacks;
+8. fail-closed behavior for path, permission, symlink, malformed record, conflicting identity, concurrency, version conflict, journal truncation/reordering/generation splice, timestamp backfill, nonce replay, and live-input substitution attacks;
 9. preserved failure, counterexample, and regression evidence after later PASS results;
 10. compatibility with existing feedback, Experience, Candidate, Eval, Promotion, registration, lock, integration, projection, and adoption contracts;
 11. focused tests plus one fresh repository-required complete Gate on the stable tree;
@@ -1187,7 +1290,7 @@ Every stable implementation candidate must prove:
 
 Any P0 or P1 finding is NO-GO. A new tree requires affected gates and a fresh fixed-candidate review.
 
-Required negative fixtures include: a PASS Eval from another Candidate/Experiment; duplicate, unexpected, or reused Trial receipts with otherwise PASS results; the same Eval Result digest reused by two Trials; the same Eval Result ID with different bytes; a v1 Candidate logical Experience/Eval ID matched to later or multiple bytes and incorrectly presented as exact; a Promotion Receipt that does not bind the lineage intent; a Promotion Lineage Binding whose unique Receipt is after `asOf`; a post-cutover Promotion missing its binding or terminal Receipt; a changed or duplicate legacy cutover; duplicate ledger tuples; ledger content hash different from canonical Capability; canonical Capability and bootstrap ledger changed together away from the frozen content binding; a required source kind omitted or silently downgraded by another builder profile; after-cutoff evidence included in arrays/counts; canonical `INVALID` incorrectly mapped to `RETIRED`; an unversioned v1 supersedes relation presented as exact; equal-time same-cohort conflicts; and four adoption/effect facts taken from different Revision/Runtime/model/projection cohorts. Each must fail closed or produce the explicitly degraded state, never complete lineage or verified effectiveness.
+Required negative fixtures include: a PASS Eval from another Candidate/Experiment; an Eval Execution Receipt whose Experiment, Trial, Candidate bundle, proposed target/content hash, command, or cohort differs from its referenced Trial or authorized Experiment; a bare `eval-result/v1` with the same ID/version but no controlled input/runner chain presented as exact; an independent Eval Result that predates Trial preparation or command acceptance but is later attached using backfilled timestamps; a preexisting or mismatched reserved Eval Result/Receipt identity at command acceptance; a missing, reordered, truncated, cross-generation, or prior-digest-mismatched execution journal; command acceptance, start, completion, or final Trial admission omitted or duplicated; a reused nonce, result digest, idempotency key with changed input, or one Receipt admitted by two Trials; a runner that reopens changed live Candidate/projection paths after input admission; a projection manifest or generated payload with the right version but the wrong target content hash; duplicate, unexpected, or reused Trial receipts with otherwise PASS results; the same Eval Result digest reused by two Trials; the same Eval Result ID with different bytes; an unchanged `candidate.yaml` paired with replaced `proposed/asset.yaml` or `proposed/content.md`; a Candidate member replaced, truncated, or path-to-inode swapped between descriptor admission checks, which must return `CANDIDATE_BUNDLE_CHANGED` and publish no authoritative record; a proposed asset whose `contentFile` is absolute, contains separators, is `.`/`..`, names anything except `content.md`, or resolves through a symlink; Candidate YAML with duplicate keys, aliases, anchors, merge keys, multiple documents, or non-string mapping keys; a malformed or mixed bare/`sha256:` digest field; two raw Candidate bundles with the same canonical digest but different Revision/file digests presented in nondeterministic order; a Candidate bundle whose computed proposed content hash differs from canonical/ledger/Receipt; staging that attempts to reopen the live bundle instead of consuming the frozen journal snapshot; a v1 Candidate logical Experience/Eval ID matched to later or multiple bytes and incorrectly presented as exact; a Promotion Receipt that does not bind the lineage intent; a Promotion Lineage Binding whose unique Receipt is after `asOf`; a post-cutover Promotion missing its binding or terminal Receipt; a changed or duplicate legacy cutover; duplicate ledger tuples; ledger content hash different from canonical Capability; canonical Capability and bootstrap ledger changed together away from the frozen content binding; a required source kind omitted or silently downgraded by another builder profile; after-cutoff evidence included in arrays/counts; canonical `INVALID` incorrectly mapped to `RETIRED`; an unversioned v1 supersedes relation presented as exact; equal-time same-cohort conflicts; and four adoption/effect facts taken from different Revision/Runtime/model/projection cohorts. Each must fail closed or produce the explicitly degraded state, never complete lineage or verified effectiveness.
 
 ## 15. Delivery Sequence
 
@@ -1207,7 +1310,7 @@ The work is intentionally decomposed so each phase produces a separately reviewa
 
 ### HG2 — Growth Lifecycle Contracts
 
-- Freeze the shared typed primitives, existing Bootstrap Baseline read profile, Bootstrap Content Binding, immutable Expectation, Experiment revision/transition table, Trial Attempt, Eval Execution Receipt, Promotion Lineage Binding, terminal Promotion Receipt, Legacy Promotion Cutover, Release Projection, Project, Adoption Observation, Observed Effect, project-release view, Builder Profile, and Growth Projection Schemas.
+- Freeze the shared typed primitives, existing Bootstrap Baseline read profile, Bootstrap Content Binding, immutable Expectation, Experiment revision/transition table, Trial Attempt, Eval execution input/journal/Receipt family, Promotion Lineage Binding, terminal Promotion Receipt, Legacy Promotion Cutover, Release Projection, Project, Adoption Observation, Observed Effect, project-release view, Builder Profile, and Growth Projection Schemas.
 - Materialize the one-time Bootstrap Content Binding from one fixed source Revision under an explicit authority decision; never refresh it from later matching Capability/ledger bytes.
 - Add compatibility, state-transition, promotion-path, receipt/journal, cutover, source-coverage, as-of, cohort-isolation, determinism, and invariant tests.
 - No Workbench changes and no controlled write commands.
@@ -1215,7 +1318,7 @@ The work is intentionally decomposed so each phase produces a separately reviewa
 ### HG3 — Harness Growth Runtime
 
 - Add explicit human triage/import.
-- Persist Experiment, Trial Attempt, and trial-scoped Eval Execution Receipt records while preserving the existing unbound Eval path.
+- Persist Experiment and Trial revisions; add the controlled Eval runner that freezes exact input, durably journals preparation/acceptance/start/completion/final admission, and emits trial-scoped Eval Execution Receipts while preserving the existing unbound Eval path as legacy-only evidence.
 - Under an explicit fixed-candidate authority decision, freeze the one-time Legacy Promotion Cutover before enabling the new Promotion path; post-cutover missing lineage never degrades to historical partial.
 - Extend the existing direct Harness Promotion command so an Experiment-backed path consumes a frozen lineage intent, stages and validates the canonical Capability, ledger entry, and lineage binding in one durable journaled transaction, then publishes the terminal Promotion Receipt last. This does not expose Promotion through Workbench.
 - Compose canonical Release lineage, context-isolated cross-project observations, effects, and deterministic read-only projection.
@@ -1249,7 +1352,7 @@ HG4 cannot close until the pilot contains:
 
 - 10–20 real GAP Receipts from at least two projects;
 - at least one real `SIGNAL` that proceeds through Experience, Candidate, and Experiment;
-- persisted PASS, FAIL, or INCONCLUSIVE Eval Result evidence plus its Trial-scoped execution receipt when used by an Experiment;
+- persisted PASS, FAIL, or INCONCLUSIVE Eval Result evidence plus its exact frozen execution input, complete ordered journal chain, controlled-runner Receipt, and final Trial admission when used by an Experiment;
 - at least one valid Promotion Lineage Binding and terminal Promotion Receipt for the Experiment-backed case;
 - at least one Release with explicit Adoption or `NOT_ADOPTED` observations across at least two projects;
 - at least one Observed Effect with frozen baseline, target, observation window, sample, attribution, and evidence;
@@ -1281,7 +1384,7 @@ Stop and request renewed Authority if:
 The read-only refresh on 2026-09-01 observed:
 
 - Harness `main@85e303f066287e556843c41b16cbf739c7069a67`, tree `fe9559831944ff53654c503d7aeec55979891aed`;
-- existing Experience, Candidate, Eval definition, manual Eval Result recording, human Promotion, canonical capability, promotion ledger, and revalidation-check code;
+- existing Experience, Candidate, Eval definition, manual Eval Result recording, human Promotion, canonical capability, promotion ledger, and revalidation-check code, but no controlled Eval runner or input/acceptance/completion journal;
 - three seed Experiences, two seed Candidates, seven Eval definitions, and no persisted `design/evals/results` records;
 - both seed Candidates at `DRAFT` with `authorityDecision: PENDING`;
 - no complete Experiment, growth Release projection, cross-project Adoption Observation, Observed Effect, or `growth-projection/v1` implementation;
@@ -1300,6 +1403,8 @@ This specification aligns with:
 - `design/schemas/candidate.schema.json`;
 - `design/schemas/eval.schema.json`;
 - `design/schemas/eval-result.schema.json`;
+- `src/evolution_harness/evals.py`;
+- `src/evolution_harness/controlled_coordinator.py` and `src/evolution_harness/coordinator_state.py` as the journal/CAS pattern, not as an already implemented Growth journal;
 - `core/schemas/common-capability.schema.json`;
 - `core/schemas/relationships.schema.json`;
 - `core/governance/bootstrap-baseline.yaml`;

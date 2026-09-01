@@ -422,6 +422,10 @@ The recommended CLI accepts stdin to avoid creating a source-project outbox file
 
 It also accepts an explicit request file for testing and controlled automation. A request file is input only and is never modified.
 
+Phase 1 Growth commands require `--format json`; missing or invalid arguments
+use the exact `GROWTH_ARGUMENT_INVALID` `harness-cli/v1` boundary frozen by the
+Schema Authority.
+
 ## Read-only scan flow
 
 ```text

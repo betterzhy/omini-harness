@@ -202,7 +202,7 @@ specific.
 
 - [ ] **Step 1: Implement strict protocol Schemas using the existing HG1 plan Task 1**
 
-Run its failing schema tests before creating the four Schema files. Require Draft 2020-12, `additionalProperties: false`, bounded fields, closed conditional branches, both uniform Git object formats, explicit `ACCIDENTAL` handling, and the exact request/Receipt/result/report shapes in the Schema Authority.
+Run its failing schema tests before creating the four Schema files. Require Draft 2020-12, `additionalProperties: false`, bounded fields, closed conditional branches, both uniform Git object formats, explicit `ACCIDENTAL` handling, compatibility with canonical colon-qualified Capability IDs, and the exact request/Receipt/result/report shapes in the Schema Authority.
 
 - [ ] **Step 2: Implement pure normalization and identity using the existing HG1 plan Task 2**
 
@@ -238,6 +238,10 @@ harness growth scan --as-of RFC3339 --format json
 ```
 
 Only `STATE_ROOT_UNAVAILABLE` and `INBOX_LOCKED` can return a validated `DEFERRED` result. No action imports an Experience or creates Candidate/Eval/Promotion state.
+
+Growth is JSON-only in v1. Parser failures use the exact
+`GROWTH_ARGUMENT_INVALID` `harness-cli/v1` envelope and never write state or
+claim an assessment capture Gate.
 
 - [ ] **Step 6: Document only implemented HG1 behavior using the existing HG1 plan Task 6**
 

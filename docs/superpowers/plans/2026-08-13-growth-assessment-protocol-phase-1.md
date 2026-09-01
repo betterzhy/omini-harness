@@ -114,6 +114,7 @@ class GrowthInbox:
 
 ```text
 ASSESSMENT_SCHEMA_INVALID
+GROWTH_ARGUMENT_INVALID
 ASSESSMENT_KEY_CONFLICT
 ASSESSMENT_ID_MISMATCH
 REQUEST_DIGEST_MISMATCH
@@ -155,6 +156,8 @@ harness growth scan
 ```
 
 All three use the existing `harness-cli/v1` envelope. `assess` returns `ok=true` only for `RECORDED` or exact `DUPLICATE`. `receipt --check` returns `ok=true` only when a schema-valid receipt recomputes to the requested ID. `scan` returns `ok=false` when any unsafe or corrupt record makes its gate `FAIL`; it still reports only safe metadata already validated before emission.
+
+`--format json` is required and is the only Phase 1 Growth format. Parser failures emit one JSON-only `harness-cli/v1` envelope with `GROWTH_ARGUMENT_INVALID`, the most specific recognized Growth command, exit 1, no state writes, and no argparse usage text on stderr. Because no assessment exists yet, parser failure carries no `growthCaptureGate`.
 
 If normalized source validation succeeds but the state root is unavailable or the non-blocking Inbox lock is busy, `assess` returns `ok=false` with a schema-valid `growth-capture-result/v1` payload:
 
@@ -214,6 +217,7 @@ Add neutral factories for a valid R1 `SIGNAL` and R2 `NO_SIGNAL` request. Write 
 - unknown receipt/report fields and invalid status/disposition combinations.
 - invalid capture-result combinations, including `PASS` without a receipt, `DEFERRED` with a receipt, missing key/ID/digest, or a non-retryable reason presented as deferred.
 - explicit acceptance of `ACCIDENTAL` only in the `NO_SIGNAL` branch and rejection of every mixed positive/negative reason set.
+- one existing canonical Capability ID such as `skill:agent-design:architecture-review` is accepted in `capabilityHints`, while a colon-free pseudo-Capability ID is rejected;
 
 Run:
 
@@ -270,7 +274,7 @@ git commit -m "feat: define growth assessment protocol contracts"
 Tests must prove:
 
 - normalization validates before hashing;
-- CRLF and LF normalize identically in bounded text fields;
+- CRLF, CR, and LF normalize identically only in `summary`, `impact`, and evidence `distillation`; identifiers, references, revisions, digests, enums, and timestamps reject CR/LF;
 - set-valued arrays normalize lexicographically;
 - evidence ordering is canonical by `(kind, reference, revision, digest)`;
 - ordered task identity fields are unchanged;
@@ -583,6 +587,7 @@ Use isolated Harness, source, request, and state fixtures. Snapshot the complete
 Tests must prove:
 
 - `growth assess --request -` accepts one JSON or YAML document from stdin;
+- missing, unknown, or invalid Growth arguments and every non-JSON format return the exact `GROWTH_ARGUMENT_INVALID` JSON envelope with zero writes;
 - an explicit request file behaves identically and remains unchanged;
 - a valid registered R1 `SIGNAL` returns `RECORDED` and a valid receipt;
 - a valid registered R2 `NO_SIGNAL` returns `RECORDED`;

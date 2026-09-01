@@ -218,6 +218,8 @@ class AnchoredRoot:
                 staging_name = f".staged-{uuid.uuid4().hex}.part"
                 descriptor = -1
                 staging_removed = False
+                linked = False
+                visibility_committed = False
                 try:
                     descriptor = os.open(
                         staging_name,
@@ -231,7 +233,12 @@ class AnchoredRoot:
                         raise AnchoredPathError("anchored staging file is unsafe")
                     view = memoryview(data)
                     while view:
-                        written = os.write(descriptor, view)
+                        try:
+                            written = os.write(descriptor, view)
+                        except OSError as exc:
+                            if exc.errno == errno.EINTR:
+                                continue
+                            raise
                         if written <= 0:
                             raise AnchoredPathError("anchored staged write made no progress")
                         view = view[written:]
@@ -245,7 +252,9 @@ class AnchoredRoot:
                         dst_dir_fd=destination_directory,
                         follow_symlinks=False,
                     )
+                    linked = True
                     os.fsync(destination_directory)
+                    visibility_committed = True
                     if not self._same_inode(descriptor, staging, staging_name):
                         raise AnchoredPathError("anchored staging inode changed after publication")
                     os.unlink(staging_name, dir_fd=staging)
@@ -257,7 +266,12 @@ class AnchoredRoot:
                     raise AnchoredPathError(f"anchored no-replace publication failed: {destination}") from exc
                 finally:
                     if descriptor >= 0:
-                        if not staging_removed and self._same_inode(descriptor, staging, staging_name):
+                        may_cleanup = not linked or visibility_committed
+                        if (
+                            not staging_removed
+                            and may_cleanup
+                            and self._same_inode(descriptor, staging, staging_name)
+                        ):
                             try:
                                 os.unlink(staging_name, dir_fd=staging)
                                 os.fsync(staging)

@@ -84,7 +84,7 @@ def _is_within(path: Path, root: Path) -> bool:
         return False
 
 
-def _git_command(root: Path, *arguments: str) -> bytes | None:
+def _git_command(root: Path, *arguments: str) -> bytes:
     try:
         completed = subprocess.run(
             ["git", "-C", os.fspath(root), *arguments],
@@ -93,19 +93,32 @@ def _git_command(root: Path, *arguments: str) -> bytes | None:
             check=False,
             timeout=10,
         )
-    except (OSError, subprocess.TimeoutExpired):
-        return None
-    return completed.stdout if completed.returncode == 0 else None
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise _state_error("STATE_ROOT_UNSAFE", "Git worktree discovery is unavailable") from exc
+    if completed.returncode != 0:
+        raise _state_error("STATE_ROOT_UNSAFE", "Git worktree discovery did not complete")
+    return completed.stdout
 
 
 def _git_worktree_roots(root: Path) -> set[Path]:
     output = _git_command(root, "worktree", "list", "--porcelain", "-z")
-    if output is None:
-        return set()
+    if not output.endswith(b"\0\0"):
+        raise _state_error("STATE_ROOT_UNSAFE", "Git worktree discovery returned malformed output")
     worktrees: set[Path] = set()
-    for field in output.split(b"\0"):
-        if field.startswith(b"worktree "):
-            worktrees.add(Path(os.path.realpath(os.fsdecode(field[len(b"worktree ") :]))))
+    for record in output[:-2].split(b"\0\0"):
+        fields = record.split(b"\0")
+        if not fields or not fields[0].startswith(b"worktree "):
+            raise _state_error("STATE_ROOT_UNSAFE", "Git worktree discovery returned malformed output")
+        raw_path = fields[0][len(b"worktree ") :]
+        try:
+            path = Path(os.fsdecode(raw_path))
+        except (TypeError, ValueError) as exc:
+            raise _state_error("STATE_ROOT_UNSAFE", "Git worktree path is invalid") from exc
+        if not raw_path or not path.is_absolute():
+            raise _state_error("STATE_ROOT_UNSAFE", "Git worktree path is invalid")
+        worktrees.add(Path(os.path.realpath(path)))
+    if not worktrees:
+        raise _state_error("STATE_ROOT_UNSAFE", "Git worktree discovery returned no worktrees")
     return worktrees
 
 
@@ -122,11 +135,24 @@ def _nearest_existing(path: Path) -> Path:
 
 
 def _containing_worktree(path: Path) -> Path | None:
-    output = _git_command(_nearest_existing(path), "rev-parse", "--show-toplevel")
-    if output is None:
-        return None
-    rendered = os.fsdecode(output).strip()
-    return Path(os.path.realpath(rendered)) if rendered else None
+    current = _nearest_existing(path)
+    if not stat.S_ISDIR(os.lstat(current).st_mode):
+        current = current.parent
+    while True:
+        marker = current / ".git"
+        try:
+            entry = os.lstat(marker)
+        except FileNotFoundError:
+            pass
+        else:
+            if stat.S_ISLNK(entry.st_mode) or not (
+                stat.S_ISDIR(entry.st_mode) or stat.S_ISREG(entry.st_mode)
+            ):
+                raise _state_error("STATE_ROOT_UNSAFE", "containing Git worktree marker is unsafe")
+            return Path(os.path.realpath(current))
+        if current == current.parent:
+            return None
+        current = current.parent
 
 
 def _validate_containment(state: Path, protected_roots: tuple[Path, ...]) -> None:
@@ -137,7 +163,9 @@ def _validate_containment(state: Path, protected_roots: tuple[Path, ...]) -> Non
         except OSError as exc:
             raise _state_error("STATE_ROOT_UNSAFE", "protected repository root is unavailable") from exc
         protected.add(physical)
-        protected.update(_git_worktree_roots(physical))
+        worktree = _containing_worktree(physical)
+        if worktree is not None:
+            protected.update(_git_worktree_roots(worktree))
     containing = _containing_worktree(state)
     if containing is not None:
         protected.add(containing)
@@ -271,6 +299,7 @@ class GrowthInbox:
         self._state_root = state_root
         self._root_descriptor = root_descriptor
         self._filesystem = filesystem
+        self._publication_uncertain = False
 
     def _close(self) -> None:
         filesystem = getattr(self, "_filesystem", None)
@@ -461,6 +490,8 @@ class GrowthInbox:
 
     def record(self, request: dict[str, Any]) -> dict[str, Any]:
         normalized = normalize_growth_assessment_request(self._repository_root, request)
+        if self._publication_uncertain:
+            raise _state_error("STATE_ROOT_UNSAFE", "a prior receipt publication is not durability-confirmed")
         expected = build_growth_receipt(normalized)
         expected_bytes = canonical_json_bytes(expected) + b"\n"
         if len(expected_bytes) > _RECEIPT_LIMIT:
@@ -478,6 +509,7 @@ class GrowthInbox:
             try:
                 self._filesystem.publish_bytes_no_replace("staging", f"inbox/{name}", expected_bytes, mode=0o600)
             except AnchoredPathError as exc:
+                self._publication_uncertain = True
                 raise _state_error("STATE_ROOT_UNSAFE", "receipt publication failed safely") from exc
             return copy.deepcopy(expected)
 
@@ -543,19 +575,29 @@ class GrowthInbox:
             "disposition": "HUMAN_TRIAGE_REQUIRED" if signal else "NO_ACTION",
         }
 
+    def _bounded_inbox_names(self) -> list[str]:
+        inbox = self._directory("inbox")
+        names: list[str] = []
+        try:
+            try:
+                with os.scandir(inbox) as entries:
+                    for entry in entries:
+                        if len(names) == _SCAN_LIMIT:
+                            raise _state_error("SCAN_LIMIT_EXCEEDED", "Inbox entry limit exceeded")
+                        names.append(entry.name)
+            except GrowthAssessmentError:
+                raise
+            except OSError as exc:
+                raise _state_error("STATE_ROOT_UNSAFE", "Inbox enumeration failed") from exc
+            return names
+        finally:
+            os.close(inbox)
+
     def scan(self, *, as_of: str) -> dict[str, Any]:
         normalized_as_of = _utc_rfc3339(as_of)
         observed_at = parse_rfc3339(normalized_as_of)
         with self._lock(exclusive=False):
-            inbox = self._directory("inbox")
-            try:
-                names = os.listdir(inbox)
-            except OSError as exc:
-                raise _state_error("STATE_ROOT_UNSAFE", "Inbox enumeration failed") from exc
-            finally:
-                os.close(inbox)
-            if len(names) > _SCAN_LIMIT:
-                raise _state_error("SCAN_LIMIT_EXCEEDED", "Inbox entry limit exceeded")
+            names = self._bounded_inbox_names()
             records: list[dict[str, Any]] = []
             signal = 0
             no_signal = 0

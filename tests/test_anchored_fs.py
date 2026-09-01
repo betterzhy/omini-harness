@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import json
 import os
 import stat
@@ -156,6 +157,102 @@ def test_publish_bytes_no_replace_rejects_cross_device_directories(tmp_path: Pat
             filesystem.publish_bytes_no_replace("staging", "inbox/receipt.json", b"forbidden\n")
 
     assert list((root / "inbox").iterdir()) == []
+
+
+def test_destination_fsync_failure_preserves_complete_final_and_staging_recovery_link(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from evolution_harness import anchored_fs
+
+    root = tmp_path / "root"
+    staging = root / "staging"
+    inbox = root / "inbox"
+    staging.mkdir(parents=True)
+    inbox.mkdir()
+    payload = b"complete-but-durability-unconfirmed\n"
+    real_fsync = anchored_fs.os.fsync
+    inbox_inode = inbox.stat().st_ino
+
+    def fail_destination_fsync(descriptor: int) -> None:
+        current = os.fstat(descriptor)
+        if stat.S_ISDIR(current.st_mode) and current.st_ino == inbox_inode:
+            raise OSError("injected destination directory fsync failure")
+        real_fsync(descriptor)
+
+    monkeypatch.setattr(anchored_fs.os, "fsync", fail_destination_fsync)
+
+    with anchored_fs.AnchoredRoot(root) as filesystem:
+        with pytest.raises(anchored_fs.AnchoredPathError):
+            filesystem.publish_bytes_no_replace("staging", "inbox/receipt.json", payload)
+
+    final = inbox / "receipt.json"
+    staged = list(staging.iterdir())
+    assert final.read_bytes() == payload
+    assert len(staged) == 1
+    assert staged[0].read_bytes() == payload
+    assert (staged[0].stat().st_dev, staged[0].stat().st_ino) == (
+        final.stat().st_dev,
+        final.stat().st_ino,
+    )
+
+
+def test_publish_retries_multiple_positive_short_writes_until_complete(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from evolution_harness import anchored_fs
+
+    root = tmp_path / "root"
+    (root / "staging").mkdir(parents=True)
+    (root / "inbox").mkdir()
+    payload = b"short-write-payload" * 32
+    real_write = anchored_fs.os.write
+    write_sizes: list[int] = []
+
+    def short_write(descriptor: int, data) -> int:
+        limit = min(len(data), 7)
+        written = real_write(descriptor, data[:limit])
+        write_sizes.append(written)
+        return written
+
+    monkeypatch.setattr(anchored_fs.os, "write", short_write)
+
+    with anchored_fs.AnchoredRoot(root) as filesystem:
+        filesystem.publish_bytes_no_replace("staging", "inbox/receipt.json", payload)
+
+    assert (root / "inbox" / "receipt.json").read_bytes() == payload
+    assert len(write_sizes) > 2
+    assert all(0 < size <= 7 for size in write_sizes)
+    assert list((root / "staging").iterdir()) == []
+
+
+def test_publish_retries_multiple_eintr_interruptions_then_completes_without_partial_final(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from evolution_harness import anchored_fs
+
+    root = tmp_path / "root"
+    (root / "staging").mkdir(parents=True)
+    (root / "inbox").mkdir()
+    payload = b"complete-after-eintr\n"
+    real_write = anchored_fs.os.write
+    attempts = 0
+
+    def interrupted_write(descriptor: int, data) -> int:
+        nonlocal attempts
+        attempts += 1
+        if attempts <= 2:
+            assert not (root / "inbox" / "receipt.json").exists()
+            raise InterruptedError(errno.EINTR, "injected interruption")
+        return real_write(descriptor, data)
+
+    monkeypatch.setattr(anchored_fs.os, "write", interrupted_write)
+
+    with anchored_fs.AnchoredRoot(root) as filesystem:
+        filesystem.publish_bytes_no_replace("staging", "inbox/receipt.json", payload)
+
+    assert attempts == 3
+    assert (root / "inbox" / "receipt.json").read_bytes() == payload
+    assert list((root / "staging").iterdir()) == []
 
 
 def test_two_real_process_publishers_preserve_exactly_one_complete_winner(tmp_path: Path):

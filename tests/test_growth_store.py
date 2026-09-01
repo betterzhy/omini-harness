@@ -202,6 +202,34 @@ def test_state_root_inside_linked_or_unrelated_git_worktree_is_rejected(tmp_path
     assert not (unrelated / "missing").exists()
 
 
+@pytest.mark.parametrize("failure", ["oserror", "timeout", "nonzero", "malformed"])
+def test_indeterminate_git_worktree_probe_fails_closed_before_state_creation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str
+):
+    from evolution_harness import growth_store
+
+    state = tmp_path / "state"
+
+    def failed_probe(arguments, **kwargs):
+        if failure == "oserror":
+            raise OSError("git executable unavailable")
+        if failure == "timeout":
+            raise subprocess.TimeoutExpired(arguments, 10)
+        if failure == "nonzero":
+            return subprocess.CompletedProcess(arguments, 128, stdout=b"")
+        return subprocess.CompletedProcess(arguments, 0, stdout=b"malformed-worktree-output\0")
+
+    monkeypatch.setattr(growth_store.subprocess, "run", failed_probe)
+
+    with pytest.raises(GrowthAssessmentError) as captured:
+        growth_store.GrowthInbox.open_for_record(
+            _repository_root(), _repository_root(), state
+        )
+
+    assert captured.value.code == "STATE_ROOT_UNSAFE"
+    assert not state.exists()
+
+
 def test_lexical_alias_and_symlink_ancestor_cannot_bypass_containment(tmp_path: Path):
     from evolution_harness.growth_store import GrowthInbox
 
@@ -311,6 +339,36 @@ def test_record_persists_recorded_once_and_projects_duplicate_without_writes(tmp
     assert len(list((state / "inbox").iterdir())) == 1
 
 
+def test_failed_inbox_fsync_does_not_project_a_later_duplicate_as_pass(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from evolution_harness import anchored_fs
+
+    state = tmp_path / "state"
+    store = _open_for_record(state)
+    request = _request()
+    real_fsync = anchored_fs.os.fsync
+    inbox_inode = (state / "inbox").stat().st_ino
+
+    def fail_destination_fsync(descriptor: int) -> None:
+        current = os.fstat(descriptor)
+        if stat.S_ISDIR(current.st_mode) and current.st_ino == inbox_inode:
+            raise OSError("injected destination directory fsync failure")
+        real_fsync(descriptor)
+
+    monkeypatch.setattr(anchored_fs.os, "fsync", fail_destination_fsync)
+
+    with pytest.raises(GrowthAssessmentError) as first:
+        store.record(request)
+    assert first.value.code == "STATE_ROOT_UNSAFE"
+    assert next((state / "inbox").iterdir()).read_bytes().endswith(b"\n")
+    assert len(list((state / "staging").iterdir())) == 1
+
+    with pytest.raises(GrowthAssessmentError) as retry:
+        store.record(request)
+    assert retry.value.code == "STATE_ROOT_UNSAFE"
+
+
 def test_conflicting_or_corrupt_existing_key_is_never_overwritten_or_repaired(tmp_path: Path):
     state = tmp_path / "state"
     store = _open_for_record(state)
@@ -390,20 +448,65 @@ def test_scan_reports_safe_metadata_for_all_direct_entries_and_never_writes(tmp_
     assert all(set(record) == {"entryNameDigest", "errorCode", "disposition"} for record in invalid)
 
 
-def test_scan_rejects_observation_before_valid_receipt_and_entry_limit(tmp_path: Path):
-    state = tmp_path / "state"
-    store = _open_for_record(state)
+def test_scan_rejects_observation_before_valid_receipt(tmp_path: Path):
+    store = _open_for_record(tmp_path / "timestamp-state")
     store.record(_request())
     with pytest.raises(GrowthAssessmentError) as timestamp:
         store.scan(as_of="2026-09-02T07:59:59Z")
     assert timestamp.value.code == "TIMESTAMP_INVALID"
 
+
+def test_scan_accepts_10000_entries_and_stops_incrementally_at_10001(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from evolution_harness import growth_store
+
+    state = tmp_path / "limit-state"
+    store = _open_for_record(state)
     inbox = state / "inbox"
     for index in range(10000):
         (inbox / f"unsafe-{index:05d}").touch()
+
+    report = store.scan(as_of="2026-09-02T09:00:00Z")
+    assert report["counts"]["totalEntries"] == 10000
+    assert report["counts"]["invalidRecords"] == 10000
+    assert report["gate"] == "FAIL"
+
+    (inbox / "unsafe-10000").touch()
+    real_scandir = growth_store.os.scandir
+    observed = {"pulled": 0, "closed": False}
+
+    class ObservedScandir:
+        def __init__(self, descriptor: int):
+            self._entries = real_scandir(descriptor)
+
+        def __enter__(self):
+            self._entries.__enter__()
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            observed["closed"] = True
+            return self._entries.__exit__(exc_type, exc, traceback)
+
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            entry = next(self._entries)
+            observed["pulled"] += 1
+            if observed["pulled"] > 10001:
+                raise AssertionError("scan read beyond the first over-limit entry")
+            return entry
+
+    def reject_listdir(*args, **kwargs):
+        raise AssertionError("scan must not materialize the entire directory with os.listdir")
+
+    monkeypatch.setattr(growth_store.os, "scandir", ObservedScandir)
+    monkeypatch.setattr(growth_store.os, "listdir", reject_listdir)
     with pytest.raises(GrowthAssessmentError) as limit:
         store.scan(as_of="2026-09-02T09:00:00Z")
     assert limit.value.code == "SCAN_LIMIT_EXCEEDED"
+    assert observed == {"pulled": 10001, "closed": True}
 
 
 def test_open_read_only_creates_nothing_when_state_is_absent(tmp_path: Path):

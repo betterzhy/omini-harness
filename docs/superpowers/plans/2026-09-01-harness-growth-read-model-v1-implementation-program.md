@@ -29,6 +29,7 @@
 - Treat an unbound `eval-result/v1` as `LEGACY_ID_VERSION_ONLY`; it can never establish Experiment PASS.
 - Store no raw conversation, prompt, response, terminal log, secret, credential, or project file body in Growth records or Workbench caches.
 - Pure scan, projection build/check, Adapter read, and Workbench query operations make zero writes to source projects, Harness Git worktrees, and external Runtime state.
+- HG5 may add one separately invoked, receipt-bound Workbench-local cache refresh only after Project Helm Authority names its owner and storage. It writes neither Harness nor a target project, and it is never hidden inside the pure read/query Port.
 - Workbench can create only a local `GrowthImprovementProposal` until HG6. It never creates a formal Candidate or Experiment locally.
 - HG6 enables only `CREATE_CANDIDATE` and `CREATE_EXPERIMENT`. Promotion, Release, Adoption, Runtime mutation, Supersession, Retirement, Revise, Rerun, and Revalidate remain disabled.
 - Do not combine files from two phases in one Candidate or review.
@@ -37,7 +38,7 @@
 
 | Phase | Detailed plan authority | Current readiness | Entry condition |
 | --- | --- | --- | --- |
-| HG1 GAP Phase 1 | `docs/superpowers/plans/2026-08-13-growth-assessment-protocol-phase-1.md` | `READY_FOR_EXECUTION_CHOICE` after Task 1 below | Approved Spec plus refreshed clean Harness base |
+| HG1 GAP Phase 1 | `docs/superpowers/plans/2026-08-13-growth-assessment-protocol-phase-1.md` | `READY_FOR_EXECUTION_CHOICE` after Task 1 below | This program's fixed-plan GO plus a user-selected clean Harness landing that contains the approved Spec and program bytes |
 | HG2 Lifecycle Contracts | Reserved: `docs/superpowers/plans/2026-09-01-harness-growth-hg2-lifecycle-contracts.md` | `PLAN_REQUIRED` | HG1 fixed Candidate GO and landed local baseline selected by user |
 | HG3 Growth Runtime | Reserved: `docs/superpowers/plans/2026-09-01-harness-growth-hg3-runtime.md` | `PLAN_REQUIRED_AFTER_HG2` | HG2 Schema names, validators, and read interfaces fixed and reviewed |
 | HG4 Real-project Pilot | Reserved: `docs/superpowers/plans/2026-09-01-harness-growth-hg4-real-project-pilot.md` | `PROJECT_AUTHORITY_REQUIRED` | HG3 GO plus explicit authorization for at least two named projects |
@@ -64,19 +65,20 @@ This program plan is intentionally not a substitute for the five reserved phase 
 
 - [ ] **Step 1: Create an isolated execution worktree only after the user selects an execution mode**
 
-Use `superpowers:using-git-worktrees`. Read the repository worktree convention before creating or moving a worktree. Start from the exact local baseline authorized by the user; do not infer that the current documentation branch is the implementation base.
+Use `superpowers:using-git-worktrees`. Read the repository worktree convention before creating or moving a worktree. Start from the exact local baseline authorized by the user; do not infer that the current documentation branch is the implementation base. The selected base must already contain the approved Spec and this reviewed program plan, either at their fixed commits or in a separately approved local landing descendant, so documentation bytes cannot leak into the HG1 implementation range.
 
 - [ ] **Step 2: Capture the execution-base identity and worktree state**
 
 ```bash
 git status --short --branch
-git rev-parse HEAD
-git rev-parse 'HEAD^{tree}'
+export HGRM_HG1_PHASE_BASE="$(git rev-parse HEAD)"
+git rev-parse "$HGRM_HG1_PHASE_BASE"
+git rev-parse "${HGRM_HG1_PHASE_BASE}^{tree}"
 git worktree list --porcelain
 git ls-files --others --exclude-standard
 ```
 
-Expected: the selected implementation worktree has no unexplained tracked or untracked changes. Any unrelated file is preserved and the task stops before editing.
+Expected: the selected implementation worktree has no unexplained tracked or untracked changes. Record the exact 40-hex `HGRM_HG1_PHASE_BASE` and its tree in the reconciliation receipt; every later shell restores that exact value and fails if it is missing. Any unrelated file is preserved and the task stops before editing.
 
 - [ ] **Step 3: Prove HG1 is not already partially implemented**
 
@@ -104,6 +106,7 @@ src/evolution_harness/anchored_fs.py
 src/evolution_harness/cli.py
 tests/test_growth_assessment.py
 tests/test_growth_source.py
+tests/test_anchored_fs.py
 tests/test_growth_store.py
 tests/test_growth_cli.py
 README.md
@@ -178,8 +181,8 @@ If the repository has changed these dependencies, stop and revise the HG1 plan r
 **Files:**
 
 - Implement exactly the HG1 WriteSet frozen in Task 1.
-- Test through `tests/test_growth_assessment.py`, `tests/test_growth_source.py`, `tests/test_growth_store.py`, and `tests/test_growth_cli.py`.
-- Follow every RED/GREEN/commit step in `docs/superpowers/plans/2026-08-13-growth-assessment-protocol-phase-1.md` Tasks 1–7.
+- Test through `tests/test_growth_assessment.py`, `tests/test_growth_source.py`, `tests/test_anchored_fs.py`, `tests/test_growth_store.py`, and `tests/test_growth_cli.py`.
+- Follow every RED/GREEN and logical commit boundary in `docs/superpowers/plans/2026-08-13-growth-assessment-protocol-phase-1.md` Tasks 1–7. The current shared commit-message convention overrides that historical plan's English message examples.
 
 **Interfaces:**
 
@@ -238,12 +241,15 @@ The pilot uses disposable registered fixtures and proves exact replay, conflicti
 - [ ] **Step 8: Confirm the implementation diff never crossed the WriteSet**
 
 ```bash
+: "${HGRM_HG1_PHASE_BASE:?restore the exact Phase Base from the reconciliation receipt}"
+git cat-file -e "${HGRM_HG1_PHASE_BASE}^{commit}"
 git status --short
 git diff --check
-git diff --name-status
+git diff --check "${HGRM_HG1_PHASE_BASE}..HEAD"
+git diff --name-status "${HGRM_HG1_PHASE_BASE}..HEAD"
 ```
 
-Expected: only the Task 1 WriteSet appears. Operational Inbox files and target-project artifacts are absent.
+Expected: the cumulative Phase Base-to-HEAD diff, including already committed task slices, equals the Task 1 WriteSet exactly. Operational Inbox files and target-project artifacts are absent. An uncommitted-only diff is not accepted as cumulative WriteSet evidence.
 
 ---
 
@@ -265,6 +271,7 @@ PYTHONPATH="$PWD/src" PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
   /Users/yuzhuangzhuang/Projects/omini-harness/.venv/bin/python -m pytest -q \
     tests/test_growth_assessment.py \
     tests/test_growth_source.py \
+    tests/test_anchored_fs.py \
     tests/test_growth_store.py \
     tests/test_growth_cli.py
 ```
@@ -307,13 +314,16 @@ PATH="/Users/yuzhuangzhuang/Projects/omini-harness/.venv/bin:$PATH" \
 
 Expected: every command exits 0; structural and generated checks report PASS; `semanticGate` remains a separate reported fact.
 
-- [ ] **Step 3: Commit only the approved HG1 files**
+- [ ] **Step 3: Verify cumulative task commits and commit only an approved remainder**
 
-Read the shared commit-message convention first. Stage explicit paths, never `git add .`.
+Read the shared commit-message convention first. The existing HG1 plan creates logical task commits, so the phase Candidate may have multiple commits after the recorded Phase Base. Inspect the complete Phase Base-to-Candidate range; never use only `git diff HEAD^` or an uncommitted diff as the phase WriteSet. If an approved remainder exists after the old plan's task commits, stage explicit paths only; never `git add .`.
 
 ```bash
+: "${HGRM_HG1_PHASE_BASE:?restore the exact Phase Base from the reconciliation receipt}"
 git status --short
 git diff --check
+git diff --check "${HGRM_HG1_PHASE_BASE}..HEAD"
+git diff --name-status "${HGRM_HG1_PHASE_BASE}..HEAD"
 git add core/schemas/growth-assessment-request.schema.json \
   core/schemas/growth-assessment-receipt.schema.json \
   core/schemas/growth-capture-result.schema.json \
@@ -325,11 +335,17 @@ git add core/schemas/growth-assessment-request.schema.json \
   src/evolution_harness/cli.py \
   tests/test_growth_assessment.py \
   tests/test_growth_source.py \
+  tests/test_anchored_fs.py \
   tests/test_growth_store.py \
   tests/test_growth_cli.py \
   README.md
-git commit -m "feat(growth): 增加评估收据 Inbox"
+git diff --cached --check
+git diff --cached --quiet || git commit -m "feat(growth): 增加评估收据 Inbox"
+git diff --check "${HGRM_HG1_PHASE_BASE}..HEAD"
+git diff --name-status "${HGRM_HG1_PHASE_BASE}..HEAD"
 ```
+
+Expected: the final cumulative path set equals the frozen WriteSet exactly and the worktree is clean. No extra final commit is created when every approved byte is already present in the logical task commits.
 
 - [ ] **Step 4: Freeze and verify identity**
 
@@ -337,14 +353,17 @@ git commit -m "feat(growth): 增加评估收据 Inbox"
 git rev-parse HEAD
 git rev-parse HEAD^
 git rev-parse 'HEAD^{tree}'
+: "${HGRM_HG1_PHASE_BASE:?restore the exact Phase Base from the reconciliation receipt}"
+git rev-parse "$HGRM_HG1_PHASE_BASE"
+git rev-parse "${HGRM_HG1_PHASE_BASE}^{tree}"
 git status --short
 ```
 
-Expected: exact Candidate, direct Parent, Tree, and a clean worktree.
+Expected: exact Candidate, direct Parent, Candidate Tree, Phase Base, Phase Base Tree, and a clean worktree.
 
 - [ ] **Step 5: Request a fresh independent review**
 
-The `deep_reviewer` receives the fixed identities, approved Spec, existing HG1 plan, reconciled WriteSet, all Gate receipts, and adversarial pilot output. Require explicit review of path containment, owner-only state, no-replace publication, multiprocess races, idempotency conflict, deferred behavior, privacy bounds, zero source/Harness writes, and absence of automatic learning.
+The `deep_reviewer` receives the fixed Candidate/Parent/Tree plus Phase Base/Phase Base Tree, approved Spec, existing HG1 plan, reconciled WriteSet, all Gate receipts, and adversarial pilot output. It reviews the complete `Phase Base..Candidate` range and every task commit, not only `Parent..Candidate`. Require explicit review of path containment, owner-only state, no-replace publication, multiprocess races, idempotency conflict, deferred behavior, privacy bounds, zero source/Harness writes, and absence of automatic learning.
 
 - [ ] **Step 6: Stop for the HG1 landing decision**
 
@@ -505,7 +524,7 @@ Run unresolved-marker, type/interface, Spec coverage, WriteSet, and independent 
 **Interfaces:**
 
 - Consumes: reviewed HG2 Schemas, canonicalization functions, source readers, and projection builder.
-- Produces: explicit receipt triage/import, append-only Experiment/Trial revisions, controlled Eval runner, Promotion Plan/journal/CAS/transition/Receipt transaction, Release/Adoption/Effect persistence, and read-only projection CLI.
+- Produces: explicit receipt triage/import, append-only Experiment/Trial revisions, controlled Eval runner, Promotion Plan/journal/CAS/transition/Receipt transaction, persisted Project/Adoption Observation/Observed Effect facts, purely derived Release projections, a read-only projection CLI, and closed service-side command/receipt contracts for Candidate and Experiment creation that remain disconnected from Workbench until HG6.
 
 - [ ] **Step 1: Re-read the actual HG2 public interfaces and generated Schemas**
 
@@ -542,7 +561,15 @@ Every recovery generation repeats the same immutable Plan, links the immediately
 
 The HG3 plan must stop before writing the one-time cutover until the user approves its exact source Revision, ledger digest, entry list, activation time, and Authority Decision.
 
-- [ ] **Step 5: Review and approve the HG3 plan before implementation**
+- [ ] **Step 5: Freeze the two service-side creation command contracts**
+
+The HG3 plan must define closed, versioned Harness Schemas and durable service behavior for `CREATE_CANDIDATE` and `CREATE_EXPERIMENT`: command ID, IdempotencyKey, requested actor/time, PayloadHash, command-specific exact precondition and payload, append-only acceptance/terminal Receipt, conflict behavior, and receipt lookup after Unknown Outcome. The service-side submission also carries an immutable APPROVE binding whose decision/reference digest binds the actor, command kind, subject, precondition digest, and PayloadHash; the Harness validates that binding again before command acceptance and binds it into the Receipt. Candidate creation binds the exact current triaged Experience references required by Spec 11; Experiment creation binds the exact current Candidate bundle, Authority decision, Promotion state, and deterministic creation key. Missing, rejected, expired, or mismatched approval is rejected before a command journal entry. Same key plus different payload is conflict; an unresolved or absent lookup never permits blind replay. The fixed HG3 Candidate must include an official local submit/receipt-lookup entry over this service and prove the same Schemas and receipts end to end; its exact CLI, local HTTP, or file-exchange transport is selected in the detailed plan under the Web local-host boundary. HG3 creates no Project Helm Adapter and does not activate that transport for Workbench; tests use only owner-controlled fixtures, and no operational command runs without separate authority.
+
+- [ ] **Step 6: Keep Release derived and source facts owner-bound**
+
+No HG3 API persists, edits, or accepts a `growth-release-projection/v1` object as input. Release is recomputed only from the exact canonical Capability, ledger, baseline/cutover, Candidate/Experiment lineage, Promotion Plan/journal/transition, and terminal Receipt rules. Project definitions, Adoption Observations, and Observed Effects remain immutable source facts owned by their declared providers and are admitted only through reviewed reference-based contracts.
+
+- [ ] **Step 7: Review and approve the HG3 plan before implementation**
 
 Require an R2 fixed-plan candidate and independent review. HG2 completion does not authorize Runtime writes.
 
@@ -589,12 +616,16 @@ HG4 does not authorize Project Helm code, project registration, Hook/scheduler i
 - Reserved Project Helm phase-plan path: `docs/superpowers/plans/2026-09-01-harness-growth-hg5-workbench-read-projection.md`
 - Proposed Authority Modify: `docs/visual/authority-map.md`
 - Proposed Authority Modify: `docs/design-baseline/v0.1.4-web-first/15-Knowledge-Management-Workspace-Design-v0.1.md`
+- Proposed Authority Modify: `docs/design-baseline/v0.1.4-web-first/16-Knowledge-Workspace-Page-State-Matrix-v0.1.csv`
 - Proposed Authority Modify: `docs/design-baseline/v0.1.4-web-first/17-Knowledge-Workbench-Harness-Ownership-Matrix-v0.1.csv`
 - Conditional Authority Modify, only if the HG5 Authority review proves it owns the changed claim: `docs/design-baseline/v0.1.4-web-first/02-Implementation-Roadmap-v0.1.4.md`
 - Conditional Authority Modify, only if the existing delivery Gate cannot express the new evidence class: `docs/design-baseline/v0.1.4-web-first/25-Unified-Web-Delivery-Gate-Addendum-v0.1.md`
 - Proposed Create: `src/features/harness/ports/HarnessEvolutionReadPort.ts`
+- Proposed Create: `src/features/harness/ports/HarnessEvolutionCachePort.ts`
 - Proposed Create: `src/features/harness/models/growthProjectionV1.ts`
+- Proposed Create: `src/features/harness/models/growthProjectionCacheV1.ts`
 - Proposed Create: `src/features/harness/adapters/GrowthProjectionV1Adapter.ts`
+- Proposed Create: `src/features/harness/adapters/GrowthProjectionCacheAdapter.ts`
 - Proposed Create: `src/features/harness/fixtures/growthProjectionV1.ts`
 - Proposed Create: `src/features/harness/components/HarnessEvolutionPage.tsx`
 - Proposed Create: `src/features/harness/components/HarnessEvolutionPage.module.css`
@@ -616,7 +647,9 @@ HG4 does not authorize Project Helm code, project registration, Hook/scheduler i
 - Proposed Modify: `stories/features/search/SearchResultRow.stories.tsx`
 - Proposed Modify: `stories/features/search/WorkbenchSearchPalette.stories.tsx`
 - Proposed Test: `tests/contracts/harness-evolution-read-port.test.ts`
+- Proposed Test: `tests/contracts/harness-evolution-cache-port.test.ts`
 - Proposed Test: `tests/contracts/growth-projection-v1-adapter.test.ts`
+- Proposed Test: `tests/contracts/growth-projection-cache-adapter.test.ts`
 - Proposed Test: `tests/contracts/harness-evolution-page.test.tsx`
 - Proposed Test: `tests/contracts/harness-needs-you-projection.test.tsx`
 - Conditional Test Modify, only if the component catalog contract owns the new exported components: `tests/contracts/w3-component-catalog.test.ts`
@@ -626,11 +659,11 @@ HG4 does not authorize Project Helm code, project registration, Hook/scheduler i
 **Interfaces:**
 
 - Consumes: a validated `growth-projection/v1` and the reviewed HG4 provider/freshness evidence.
-- Produces: read-only Harness Evolution, Evaluation Ledger, search, and Needs You projections with explicit degraded states.
+- Produces: read-only Harness Evolution, Evaluation Ledger, search, and Needs You projections with explicit degraded states, plus a separately invoked Workbench-local validated-snapshot cache refresh with its own receipt.
 
 - [ ] **Step 1: Migrate and review Project Helm Authority before code**
 
-The current conceptual `HarnessEvolutionPort` mixes read and write methods. The HG5 Authority change must split or version the read capability so a read Adapter cannot imply commands exist.
+The current conceptual `HarnessEvolutionPort` mixes read and write methods. The HG5 Authority change must split or version the read capability so a read Adapter cannot imply commands exist. Update the Harness Evolution rows in `16-Knowledge-Workspace-Page-State-Matrix-v0.1.csv`: request/revise/rerun/adoption operations remain local proposals or unavailable in HG5, and no row may imply an enabled formal Harness command. Authority must also name the Workbench-local cache owner, storage mechanism, retention/freshness rule, and the exact pure-read versus explicit-refresh boundary.
 
 - [ ] **Step 2: Freeze the read Port**
 
@@ -643,12 +676,30 @@ export interface GrowthProjectionSnapshotIdentity {
   watermark: string;
 }
 
-export interface GrowthProjectionRetrievalFailure {
-  kind: 'TRANSPORT' | 'VERSION' | 'VALIDATION' | 'IDENTITY' | 'CACHE';
-  transportState: 'READY' | 'UNAVAILABLE' | 'UNKNOWN';
+export interface GrowthProjectionFailureDetails {
   code: string;
   message: string;
 }
+
+export type GrowthProjectionFailedReadContext =
+  | Readonly<{
+      transportState: 'UNAVAILABLE';
+      failure: GrowthProjectionFailureDetails & {
+        kind: 'TRANSPORT_UNAVAILABLE';
+      };
+    }>
+  | Readonly<{
+      transportState: 'UNKNOWN';
+      failure: GrowthProjectionFailureDetails & {
+        kind: 'TRANSPORT_UNKNOWN';
+      };
+    }>
+  | Readonly<{
+      transportState: 'READY';
+      failure: GrowthProjectionFailureDetails & {
+        kind: 'VERSION' | 'VALIDATION' | 'IDENTITY' | 'CACHE';
+      };
+    }>;
 
 export type GrowthProjectionReadResult =
   | Readonly<{
@@ -663,10 +714,8 @@ export type GrowthProjectionReadResult =
     }>
   | Readonly<{
       readState: 'LAST_VALIDATED_STALE';
-      retrieval: Readonly<{
-        transportState: 'READY' | 'UNAVAILABLE' | 'UNKNOWN';
-        cacheState: 'STALE';
-      }>;
+      retrieval: GrowthProjectionFailedReadContext &
+        Readonly<{ cacheState: 'STALE' }>;
       retainedSnapshot: Readonly<{
         snapshotIdentity: GrowthProjectionSnapshotIdentity;
         cacheFreshness: Readonly<{
@@ -676,17 +725,28 @@ export type GrowthProjectionReadResult =
         }>;
         projection: Readonly<GrowthProjectionV1>;
       }>;
-      failure: GrowthProjectionRetrievalFailure;
     }>
   | Readonly<{
-      readState: 'UNAVAILABLE' | 'UNKNOWN';
+      readState: 'UNAVAILABLE';
       retrieval: Readonly<{
-        transportState: 'READY' | 'UNAVAILABLE' | 'UNKNOWN';
+        transportState: 'UNAVAILABLE';
         cacheState: 'EMPTY';
+        failure: GrowthProjectionFailureDetails & {
+          kind: 'TRANSPORT_UNAVAILABLE';
+        };
       }>;
       snapshotIdentity?: never;
       retainedSnapshot?: never;
-      failure: GrowthProjectionRetrievalFailure;
+    }>
+  | Readonly<{
+      readState: 'UNKNOWN';
+      retrieval: Exclude<
+        GrowthProjectionFailedReadContext,
+        Readonly<{ transportState: 'UNAVAILABLE' }>
+      > &
+        Readonly<{ cacheState: 'EMPTY' }>;
+      snapshotIdentity?: never;
+      retainedSnapshot?: never;
     }>;
 
 export interface HarnessEvolutionReadPort {
@@ -700,15 +760,101 @@ export interface HarnessEvolutionReadPort {
 
 `GrowthProjectionV1` is the complete validated Schema model, not a UI summary shape. Its own provider state remains `READY | PARTIAL | STALE | UNAVAILABLE | UNKNOWN` together with the exact watermark, Gate, coverage, closed counts ledger, and typed references. The orthogonal `retrieval.transportState` and `retrieval.cacheState` report Adapter transport/cache truth. A retained snapshot keeps its original provider state and identity plus separate local cache freshness; a failed latest read cannot rewrite that projection state, fabricate an empty projection, or discard validation failure.
 
-- [ ] **Step 3: Keep command capability disabled**
+- [ ] **Step 3: Freeze the separate local cache Port**
 
-HG5 exposes `CAPABILITY_NOT_ENABLED`. Retry actions may refresh a read/cache only; they cannot submit a Harness command or mutate a target project.
+```typescript
+import type { GrowthProjectionV1 } from '../models/growthProjectionV1';
+import type {
+  GrowthProjectionSnapshotIdentity,
+} from './HarnessEvolutionReadPort';
 
-- [ ] **Step 4: Extend UI semantics without inferred success**
+export interface ValidatedGrowthProjectionSnapshot {
+  snapshotIdentity: GrowthProjectionSnapshotIdentity;
+  validationReceiptReference: Readonly<{
+    kind: 'GROWTH_PROJECTION_VALIDATION_RECEIPT';
+    id: string;
+    contentDigest: string;
+  }>;
+  projection: Readonly<GrowthProjectionV1>;
+}
+
+export interface ValidatedGrowthProjectionCacheEntry
+  extends ValidatedGrowthProjectionSnapshot {
+  cacheRevision: string;
+  storedAt: string;
+}
+
+export interface GrowthProjectionCacheReceiptReference {
+  kind: 'GROWTH_PROJECTION_CACHE_REFRESH_RECEIPT';
+  refreshId: string;
+  cacheRevision: string;
+  contentDigest: string;
+}
+
+export type GrowthProjectionCacheReadResult =
+  | Readonly<{
+      state: 'FOUND';
+      entry: Readonly<ValidatedGrowthProjectionCacheEntry>;
+    }>
+  | Readonly<{ state: 'EMPTY' }>
+  | Readonly<{ state: 'INVALID'; reasonCode: string }>
+  | Readonly<{ state: 'UNAVAILABLE'; reasonCode: string }>
+  | Readonly<{ state: 'UNKNOWN'; reasonCode: string }>;
+
+export type GrowthProjectionCacheRefreshResult =
+  | Readonly<{
+      state: 'STORED';
+      cacheRevision: string;
+      receiptReference: GrowthProjectionCacheReceiptReference;
+    }>
+  | Readonly<{ state: 'REJECTED'; reasonCode: string }>
+  | Readonly<{ state: 'CONFLICT'; currentCacheRevision: string }>
+  | Readonly<{
+      state: 'UNKNOWN_OUTCOME';
+      refreshId: string;
+      idempotencyKey: string;
+    }>;
+
+export type GrowthProjectionCacheReceiptLookup =
+  | Readonly<{
+      state: 'FOUND';
+      receiptReference: GrowthProjectionCacheReceiptReference;
+    }>
+  | Readonly<{ state: 'NOT_FOUND' }>
+  | Readonly<{ state: 'LOOKUP_UNAVAILABLE'; reasonCode: string }>
+  | Readonly<{ state: 'LOOKUP_UNKNOWN'; reasonCode: string }>;
+
+export interface HarnessEvolutionCachePort {
+  readonly capability: 'CACHE_NOT_ENABLED' | 'VALIDATED_SNAPSHOT_CACHE_V1';
+
+  readLastValidated(): Promise<GrowthProjectionCacheReadResult>;
+
+  refreshValidated(input: {
+    refreshId: string;
+    idempotencyKey: string;
+    payloadHash: string;
+    expectedCacheRevision?: string;
+    snapshot: Readonly<ValidatedGrowthProjectionSnapshot>;
+  }): Promise<GrowthProjectionCacheRefreshResult>;
+
+  findRefreshReceipt(input: {
+    refreshId: string;
+    idempotencyKey: string;
+  }): Promise<GrowthProjectionCacheReceiptLookup>;
+}
+```
+
+`getGrowthProjection`, `readLastValidated`, and `findRefreshReceipt` are pure reads. `refreshValidated` is the only HG5 write: it revalidates the complete projection, recomputes Schema/as-of/watermark and PayloadHash equality, verifies the validation Receipt reference, and accepts no caller-supplied cache Revision or storage time. Under one owner-controlled CAS lock, the Adapter generates `cacheRevision` and authoritative `storedAt`, atomically stores and durably rereads the entry, then returns a queryable local receipt. IdempotencyKey reuse with a different recomputed PayloadHash is conflict. `UNKNOWN_OUTCOME` retains both lookup keys; `NOT_FOUND`, `LOOKUP_UNAVAILABLE`, and `LOOKUP_UNKNOWN` all keep the refresh unresolved and forbid another refresh until a found authoritative Receipt or conflict resolves it. When capability is `CACHE_NOT_ENABLED`, refresh returns `REJECTED/CACHE_NOT_ENABLED` and creates no record. If Project Helm cannot prove the selected browser/local-host storage's atomicity, isolation, retention, and recovery semantics, capability remains disabled and the UI shows no fabricated last-known state.
+
+- [ ] **Step 4: Keep command capability disabled**
+
+HG5 exposes `CAPABILITY_NOT_ENABLED`. A retry may perform a pure provider/cache read or explicitly invoke the bounded cache refresh above after validation; it cannot submit a Harness command or mutate Harness, Runtime, or a target project.
+
+- [ ] **Step 5: Extend UI semantics without inferred success**
 
 Add the missing `declared` axis to the Harness lifecycle presentation. Add explicit `UNKNOWN` provider handling. A Release never implies configured, loaded, invoked, or effective. Search results carry typed reference/watermark identity instead of a display version alone.
 
-- [ ] **Step 5: Require contract, build, Storybook, Playwright, and visual evidence**
+- [ ] **Step 6: Require contract, build, Storybook, Playwright, and visual evidence**
 
 ```bash
 pnpm test:contracts
@@ -721,9 +867,9 @@ pnpm exec playwright test
 git diff --check
 ```
 
-The HG5 plan must define exact fixtures for each validated projection provider state; transport unavailable/unknown with and without a retained snapshot; unsupported version, invalid Schema, identity mismatch, corrupt cache, and changed watermark; plus command-disabled behavior. Tests must prove retained snapshots keep their original provider state while local cache freshness becomes stale. It must obtain Project Helm's required fixed-candidate review before claiming closure.
+The HG5 plan must define exact fixtures for each validated projection provider state; transport unavailable/unknown with and without a retained snapshot; unsupported version, invalid Schema, identity mismatch, corrupt cache, changed watermark, forged validation Receipt or PayloadHash, caller attempts to supply/forge cache Revision or storage time, cache CAS conflict/interruption/unknown outcome and every unresolved lookup result, and cache-disabled behavior; plus command-disabled behavior. Tests must prove retained snapshots keep their original provider state while local cache freshness becomes stale, every pure read has zero writes, and explicit refresh writes only the single authorized cache record and receipt. It must obtain Project Helm's required fixed-candidate review before claiming closure.
 
-- [ ] **Step 6: Stop with read capability only**
+- [ ] **Step 7: Stop with read capability only**
 
 No local formal Candidate, Experiment, Promotion, Adoption, Runtime mutation, or optimistic command success exists in HG5.
 
@@ -834,7 +980,7 @@ export interface HarnessEvolutionCommandPort {
 }
 ```
 
-`harnessGrowthCommandsV1.ts` is generated or manually frozen from the reviewed HG3 command Schemas before HG6 implementation; it is never an open `Record<string, unknown>` escape hatch. Both envelope branches carry exactly `commandId`, `idempotencyKey`, `commandKind`, `requestedBy`, `requestedAt`, `payloadHash`, one command-specific closed precondition, and one command-specific closed payload. The local proposal binding is orthogonal to the formal Harness envelope: the Adapter validates its immutable APPROVE decision digest, subject/precondition digest, command kind, actor, and payload hash before sending only the formal command. A changed or mismatched binding is rejected locally.
+`harnessGrowthCommandsV1.ts` is generated or manually frozen from the reviewed HG3 command Schemas before HG6 implementation; it is never an open `Record<string, unknown>` escape hatch. Both formal envelope branches carry exactly `commandId`, `idempotencyKey`, `commandKind`, `requestedBy`, `requestedAt`, `payloadHash`, one command-specific closed precondition, and one command-specific closed payload. The enclosing service submission additionally carries the immutable local APPROVE binding. The Adapter validates its decision digest, subject/precondition digest, command kind, actor, and payload hash before sending the complete submission; the Harness repeats the same validation before acceptance and binds the approval digest into its Receipt. A changed or mismatched binding is rejected locally and server-side.
 
 - [ ] **Step 2: Keep the proposal local until approval**
 
@@ -850,7 +996,7 @@ Workbench can create or refresh a deduplicated `GrowthImprovementProposal`; it c
 
 - [ ] **Step 5: Prove every excluded command stays unavailable**
 
-Tests must reject Revise, Rerun, Revalidate, Narrow Scope, Promotion, Release, Adoption, Runtime mutation, Supersession, Retirement, arbitrary command strings, and a Candidate/Experiment submit without a fresh exact approval binding. They also reject expired, mismatched-command, changed-subject, changed-precondition, changed-payload, and changed-actor bindings. When capability is `CAPABILITY_NOT_ENABLED`, `submit` returns `REJECTED/CAPABILITY_NOT_ENABLED` without creating a command; read refresh and receipt lookup remain read-only.
+Tests must reject Revise, Rerun, Revalidate, Narrow Scope, Promotion, Release, Adoption, Runtime mutation, Supersession, Retirement, arbitrary command strings, and a Candidate/Experiment submit without a fresh exact approval binding. They also reject expired, mismatched-command, changed-subject, changed-precondition, changed-payload, changed-actor, and server-rejected approval bindings, and require the successful Harness Receipt to repeat the exact approval digest. When capability is `CAPABILITY_NOT_ENABLED`, `submit` returns `REJECTED/CAPABILITY_NOT_ENABLED` without creating a command; read refresh and receipt lookup remain read-only.
 
 - [ ] **Step 6: Run the complete Project Helm Gate and independent review**
 
@@ -916,7 +1062,7 @@ The complete growth goal is met only when all authorized phases have their own f
 | 8 Lifecycle rules | Tasks 4–5 | Append-only revisions, closed transitions, Plan/journal/CAS/Receipt order |
 | 9 Expectation evaluation | Tasks 4 and 6 | Frozen expectations, typed outcomes, no single Growth Score |
 | 10 Cross-project questions | Tasks 4, 6, 7 | Projection and Workbench retain project, revision, Runtime, model, digest, time, coverage, and cohort |
-| 11 Human authority and commands | Task 8 | Only Candidate/Experiment creation; receipt lookup for unknown outcomes |
+| 11 Human authority and commands | Tasks 5 and 8 | HG3 owns the two closed Harness command/receipt services; HG6 exposes only their approved Workbench Adapter branches |
 | 12 Failure and degraded behavior | Tasks 2–8 | Negative fixtures and provider/UI states fail closed without inferred zeros or success |
 | 13 Privacy, security, storage | Global Constraints; Tasks 1, 2, 4, 6, 7 | Owner-only external state, one approved immutable bootstrap binding, bounded references, zero source writes, no raw bodies |
 | 14 Verification Gates | Task 3 and phase-specific closure steps | RED/GREEN, complete Gate, fixed identity, independent review |

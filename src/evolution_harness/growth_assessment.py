@@ -18,8 +18,23 @@ _CAPTURE_SCHEMA = "core/schemas/growth-capture-result.schema.json"
 _RFC3339_PATTERN = re.compile(
     r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$"
 )
+_RFC3339_PARTS_PATTERN = re.compile(
+    r"^(?P<second>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(?P<fraction>\d+))?(?P<offset>Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$"
+)
 _PROSE_FIELDS = frozenset({"summary", "impact", "distillation"})
 _CONTROL_PATTERN = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+_RECEIPT_FIELDS = frozenset(
+    {
+        "schemaVersion",
+        "policyVersion",
+        "assessmentKey",
+        "assessmentId",
+        "requestDigest",
+        "status",
+        "growthCaptureGate",
+        "assessment",
+    }
+)
 
 
 class GrowthAssessmentError(ValueError):
@@ -28,24 +43,33 @@ class GrowthAssessmentError(ValueError):
         super().__init__(message)
 
 
-def parse_rfc3339(value: str) -> datetime:
-    """Parse an explicit RFC 3339 instant and return its UTC datetime."""
+def _parse_rfc3339_parts(value: str) -> tuple[datetime, str]:
     if not isinstance(value, str) or _RFC3339_PATTERN.fullmatch(value) is None:
         raise GrowthAssessmentError("TIMESTAMP_INVALID", f"invalid RFC 3339 timestamp: {value}")
+    match = _RFC3339_PARTS_PATTERN.fullmatch(value)
+    assert match is not None
     try:
-        parsed = datetime.fromisoformat(value[:-1] + "+00:00" if value.endswith("Z") else value)
+        offset = "+00:00" if match["offset"] == "Z" else match["offset"]
+        parsed = datetime.fromisoformat(match["second"] + offset)
     except (TypeError, ValueError) as exc:
         raise GrowthAssessmentError("TIMESTAMP_INVALID", f"invalid RFC 3339 timestamp: {value}") from exc
     if parsed.utcoffset() is None:
         raise GrowthAssessmentError("TIMESTAMP_INVALID", f"timestamp must include an offset: {value}")
-    return parsed.astimezone(timezone.utc)
+    return parsed.astimezone(timezone.utc), (match["fraction"] or "").rstrip("0")
+
+
+def parse_rfc3339(value: str) -> datetime:
+    """Parse an explicit RFC 3339 instant and return its UTC datetime."""
+    parsed, fraction = _parse_rfc3339_parts(value)
+    if not fraction:
+        return parsed
+    return parsed.replace(microsecond=int((fraction[:6] + "000000")[:6]))
 
 
 def _utc_rfc3339(value: str) -> str:
-    parsed = parse_rfc3339(value)
-    if parsed.microsecond == 0:
-        return parsed.strftime("%Y-%m-%dT%H:%M:%SZ")
-    return parsed.isoformat(timespec="microseconds").replace("+00:00", "Z").rstrip("0Z") + "Z"
+    parsed, fraction = _parse_rfc3339_parts(value)
+    canonical = parsed.strftime("%Y-%m-%dT%H:%M:%S")
+    return canonical + (f".{fraction}" if fraction else "") + "Z"
 
 
 def _validate_schema(repository_root: Path, schema_path: str, value: Any, *, code: str) -> None:
@@ -167,6 +191,23 @@ def _verify_receipt_identities(receipt: dict[str, Any], normalized: dict[str, An
             raise GrowthAssessmentError(code, f"receipt {field} does not match assessment")
 
 
+def _validate_receipt_for_capture(value: dict[str, Any], receipt: Any) -> dict[str, Any]:
+    if not isinstance(receipt, dict) or set(receipt) != _RECEIPT_FIELDS:
+        raise GrowthAssessmentError("GROWTH_ARGUMENT_INVALID", "receipt does not have the closed receipt shape")
+    if receipt["schemaVersion"] != "growth-assessment-receipt/v1":
+        raise GrowthAssessmentError("GROWTH_ARGUMENT_INVALID", "receipt schema version is invalid")
+    if receipt["policyVersion"] != GROWTH_POLICY_VERSION:
+        raise GrowthAssessmentError("GROWTH_ARGUMENT_INVALID", "receipt policy version is invalid")
+    if receipt["status"] not in {"RECORDED", "DUPLICATE"}:
+        raise GrowthAssessmentError("GROWTH_ARGUMENT_INVALID", "receipt status is invalid")
+    if receipt["growthCaptureGate"] != "PASS":
+        raise GrowthAssessmentError("GROWTH_ARGUMENT_INVALID", "receipt capture gate is invalid")
+    if receipt["assessment"] != value:
+        raise GrowthAssessmentError("ASSESSMENT_ID_MISMATCH", "receipt assessment does not match request")
+    _verify_receipt_identities(receipt, value)
+    return receipt
+
+
 def validate_growth_receipt(repository_root: Path, value: dict[str, Any]) -> dict[str, Any]:
     """Revalidate a Receipt and all identities from its canonical assessment."""
     _validate_schema(repository_root, _RECEIPT_SCHEMA, value, code="RECEIPT_CORRUPT")
@@ -214,11 +255,7 @@ def build_growth_capture_result(
         return result
 
     assert receipt is not None
-    _verify_receipt_identities(receipt, value)
-    if receipt["assessment"] != value:
-        raise GrowthAssessmentError("ASSESSMENT_ID_MISMATCH", "receipt assessment does not match request")
-    if receipt["status"] not in {"RECORDED", "DUPLICATE"} or receipt["growthCaptureGate"] != "PASS":
-        raise GrowthAssessmentError("GROWTH_ARGUMENT_INVALID", "receipt is not a PASS capture outcome")
+    _validate_receipt_for_capture(value, receipt)
     return {
         "schemaVersion": "growth-capture-result/v1",
         "growthCaptureGate": "PASS",

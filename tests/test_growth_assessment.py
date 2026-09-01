@@ -1009,3 +1009,79 @@ def test_receipt_and_capture_recompute_derived_identities_and_enforce_closed_bra
     with pytest.raises(GrowthAssessmentError) as exc_info:
         build_growth_capture_result(normalized, deferred_reason="STATE_ROOT_UNSAFE")
     assert exc_info.value.code == "GROWTH_ARGUMENT_INVALID"
+
+
+def test_timestamp_normalization_preserves_arbitrary_fractional_precision_for_identity():
+    """Break caught: adjacent RFC 3339 fractions collide after datetime microsecond truncation."""
+    first = _r2_no_signal_request()
+    first["assessedAt"] = "2026-09-01T12:30:45.1234567Z"
+    second = copy.deepcopy(first)
+    second["assessedAt"] = "2026-09-01T12:30:45.1234568Z"
+
+    normalized_first = normalize_growth_assessment_request(_repository_root(), first)
+    normalized_second = normalize_growth_assessment_request(_repository_root(), second)
+
+    assert normalized_first["assessedAt"] == "2026-09-01T12:30:45.1234567Z"
+    assert normalized_second["assessedAt"] == "2026-09-01T12:30:45.1234568Z"
+    assert growth_assessment_id(normalized_first) != growth_assessment_id(normalized_second)
+    assert growth_request_digest(normalized_first) != growth_request_digest(normalized_second)
+
+
+def test_timestamp_normalization_carries_offsets_across_year_boundaries_without_losing_fraction():
+    """Break caught: offset conversion crosses a calendar boundary or drops precision."""
+    value = _r2_no_signal_request()
+    value["assessedAt"] = "2026-01-01T00:00:00.123456789+08:00"
+
+    normalized = normalize_growth_assessment_request(_repository_root(), value)
+
+    assert normalized["assessedAt"] == "2025-12-31T16:00:00.123456789Z"
+
+
+def test_timestamp_normalization_rejects_invalid_calendar_dates_with_long_fraction():
+    """Break caught: a fractional timestamp bypasses calendar validation."""
+    value = _r2_no_signal_request()
+    value["assessedAt"] = "2026-02-30T12:30:45.123456789Z"
+
+    with pytest.raises(GrowthAssessmentError) as exc_info:
+        normalize_growth_assessment_request(_repository_root(), value)
+
+    assert exc_info.value.code == "TIMESTAMP_INVALID"
+
+
+@pytest.mark.parametrize(
+    "tamper",
+    [
+        lambda receipt: receipt.__setitem__("unexpected", True),
+        lambda receipt: receipt.__setitem__("schemaVersion", "growth-assessment-receipt/v0"),
+        lambda receipt: receipt.__setitem__("policyVersion", "growth-assessment-policy/v0"),
+        lambda receipt: receipt.__setitem__("status", "DEFERRED"),
+        lambda receipt: receipt.__setitem__("growthCaptureGate", "FAIL"),
+        lambda receipt: receipt["assessment"].__setitem__("summary", "A different assessment."),
+        lambda receipt: receipt.__setitem__("assessmentKey", "growth-key:" + "0" * 24),
+        lambda receipt: receipt.__setitem__("assessmentId", "growth-assessment:" + "0" * 24),
+        lambda receipt: receipt.__setitem__("requestDigest", "sha256:" + "0" * 64),
+    ],
+)
+def test_capture_builder_rejects_every_invalid_receipt_projection(tamper):
+    """Break caught: PASS capture trusts a Receipt that has not passed its closed contract."""
+    normalized = normalize_growth_assessment_request(_repository_root(), _r1_signal_request())
+    receipt = build_growth_receipt(normalized)
+    tamper(receipt)
+
+    with pytest.raises(GrowthAssessmentError):
+        build_growth_capture_result(normalized, receipt=receipt)
+
+
+def test_capture_builder_outputs_official_schema_valid_pass_and_deferred_results():
+    """Break caught: the pure builder emits a shape outside the public capture contract."""
+    normalized = normalize_growth_assessment_request(_repository_root(), _r1_signal_request())
+    receipt = build_growth_receipt(normalized)
+
+    passed = build_growth_capture_result(normalized, receipt=receipt)
+    deferred = build_growth_capture_result(normalized, deferred_reason="STATE_ROOT_UNAVAILABLE")
+
+    _validate(CAPTURE_SCHEMA, passed)
+    _validate(CAPTURE_SCHEMA, deferred)
+    assert passed["assessmentKey"] == deferred["assessmentKey"] == growth_assessment_key(normalized)
+    assert passed["assessmentId"] == deferred["assessmentId"] == growth_assessment_id(normalized)
+    assert passed["requestDigest"] == deferred["requestDigest"] == growth_request_digest(normalized)

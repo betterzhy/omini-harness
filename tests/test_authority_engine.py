@@ -328,6 +328,73 @@ def test_git_source_revision_ignores_replace_and_ambient_git_execution(
     assert not invocation_log.exists()
 
 
+def test_git_source_revision_opens_only_requested_authority_tree_paths(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from evolution_harness import controlled_write_guard as guard
+    from evolution_harness.authority import build_authority_snapshot
+
+    root, integration, source = _fixture(tmp_path)
+    subprocess.run(["/usr/bin/git", "init", "-q", str(source)], check=True)
+    subprocess.run(
+        ["/usr/bin/git", "-C", str(source), "add", "--all"], check=True
+    )
+    subprocess.run(
+        [
+            "/usr/bin/git",
+            "-C",
+            str(source),
+            "-c",
+            "user.name=Harness Test",
+            "-c",
+            "user.email=harness@example.invalid",
+            "commit",
+            "-q",
+            "-m",
+            "baseline",
+        ],
+        check=True,
+    )
+    excluded_tree = subprocess.run(
+        ["/usr/bin/git", "-C", str(source), "rev-parse", "HEAD:private"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    original_read_object = guard._read_git_object
+    original_read_tree = guard._read_tree_entries
+    opened_objects: list[str] = []
+    requested_path_calls: list[tuple[str, ...] | None] = []
+
+    def observed_object(boundary, object_id: str, **kwargs):
+        opened_objects.append(object_id)
+        return original_read_object(boundary, object_id, **kwargs)
+
+    def observed_tree(boundary, tree: str, *, requested_paths=None):
+        requested_path_calls.append(
+            None if requested_paths is None else tuple(requested_paths)
+        )
+        if requested_paths is None:
+            return original_read_tree(boundary, tree)
+        return original_read_tree(
+            boundary,
+            tree,
+            requested_paths=requested_paths,
+        )
+
+    monkeypatch.setattr(guard, "_read_git_object", observed_object)
+    monkeypatch.setattr(guard, "_read_tree_entries", observed_tree)
+
+    snapshot = build_authority_snapshot(root, integration, source)
+
+    assert snapshot["sourceRevision"]["authoritySetStatus"] == (
+        "CLEAN_FOR_AUTHORITY_SET"
+    )
+    assert requested_path_calls == [("status.md", "slice.yaml", "derived.md")]
+    assert excluded_tree not in opened_objects
+
+
 def test_authority_hash_and_extracted_facts_come_from_one_byte_snapshot(tmp_path: Path, monkeypatch):
     from evolution_harness import authority
     from evolution_harness.anchored_fs import AnchoredRoot

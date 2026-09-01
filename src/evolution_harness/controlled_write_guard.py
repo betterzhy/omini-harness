@@ -5,6 +5,7 @@ import hashlib
 import os
 import stat
 import subprocess
+from collections.abc import Collection
 from datetime import datetime, timezone
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
@@ -1055,10 +1056,26 @@ def _commit_tree_identity(commit_body: bytes) -> str:
 def _read_tree_entries(
     boundary: _GitBoundary,
     tree: str,
+    *,
+    requested_paths: Collection[str] | None = None,
 ) -> dict[str, tuple[str, str]]:
     try:
         if _canonical_git_oid(tree.encode("ascii", "strict")) != tree:
             raise OSError("Git tree identity is not canonical")
+        requested: set[str] | None = None
+        requested_prefixes: set[str] = set()
+        if requested_paths is not None:
+            if isinstance(requested_paths, (str, bytes)):
+                raise OSError("Git tree requested paths are not a collection of paths")
+            requested = set()
+            for value in requested_paths:
+                relative = _canonical_relative(value, "Git tree requested path")
+                requested.add(relative)
+                parts = PurePosixPath(relative).parts
+                requested_prefixes.update(
+                    PurePosixPath(*parts[:index]).as_posix()
+                    for index in range(1, len(parts))
+                )
         entries: dict[str, tuple[str, str]] = {}
         object_bytes = len(tree) // 2
         expanded_entries = 0
@@ -1108,7 +1125,19 @@ def _read_tree_entries(
                 expanded_entries += 1
                 if expanded_entries > 100_000:
                     raise OSError("Git tree inventory exceeds the sealed limit")
-                if mode == "40000":
+                if requested is not None:
+                    if relative in requested:
+                        if relative in entries:
+                            raise OSError("Git committed path is ambiguous")
+                        entries[relative] = (mode, object_id)
+                    if mode == "40000" and relative in requested_prefixes:
+                        walk_tree(
+                            object_id,
+                            relative_path,
+                            ancestors | {tree_id},
+                            depth + 1,
+                        )
+                elif mode == "40000":
                     walk_tree(
                         object_id,
                         relative_path,

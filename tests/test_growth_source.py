@@ -62,11 +62,19 @@ def _commit_all(root: Path, message: str = "fixture") -> tuple[str, str]:
 
 def _snapshot_entries(root: Path) -> dict[str, tuple[Any, ...]]:
     snapshot: dict[str, tuple[Any, ...]] = {}
+    ignored_tool_roots = {".git", ".idea", ".vscode"}
 
     def visit(directory: Path) -> None:
         for entry in sorted(os.scandir(directory), key=lambda item: os.fsencode(item.name)):
             path = Path(entry.path)
             relative = path.relative_to(root).as_posix()
+            relative_path = Path(relative)
+            if (
+                relative_path.parts[0] in ignored_tool_roots
+                or relative_path.name == ".DS_Store"
+                or relative_path.name.startswith("._")
+            ):
+                continue
             current = entry.stat(follow_symlinks=False)
             mode = stat.S_IMODE(current.st_mode)
             if stat.S_ISLNK(current.st_mode):
@@ -83,12 +91,27 @@ def _snapshot_entries(root: Path) -> dict[str, tuple[Any, ...]]:
     return snapshot
 
 
+def _git_control_probe(root: Path) -> dict[str, bytes | None]:
+    git_directory = root / ".git"
+    head = (git_directory / "HEAD").read_bytes()
+    selected = ["HEAD", "index", "packed-refs"]
+    if head.startswith(b"ref: "):
+        selected.append(head.removeprefix(b"ref: ").strip().decode("ascii", "strict"))
+    return {
+        relative: (git_directory / relative).read_bytes()
+        if (git_directory / relative).is_file()
+        else None
+        for relative in selected
+    }
+
+
 def _call_unchanged(
     repository_root: Path,
     source_root: Path,
     request: dict[str, Any],
     *,
     expected_code: str | None = None,
+    expected_message: str | None = None,
 ) -> dict[str, Any] | None:
     from evolution_harness.growth_assessment import GrowthAssessmentError
     from evolution_harness.growth_source import validate_growth_source
@@ -102,6 +125,8 @@ def _call_unchanged(
         with pytest.raises(GrowthAssessmentError) as caught:
             validate_growth_source(repository_root, source_root, request)
         assert caught.value.code == expected_code
+        if expected_message is not None:
+            assert expected_message in str(caught.value)
         result = None
     assert request == before_request
     assert _snapshot_entries(physical_source) == before_source
@@ -200,30 +225,58 @@ def _request(*, source: dict[str, Any], evidence: list[dict[str, Any]]) -> dict[
 
 
 def _authority_paths(harness: Path) -> set[str]:
+    return set(_authority_path_list(harness))
+
+
+def _authority_path_list(harness: Path) -> tuple[str, ...]:
     value = yaml.safe_load(
         (harness / "integrations/neutral-shadow/authority-map.yaml").read_text(
             encoding="utf-8"
         )
     )
-    return {item["path"] for item in value["authorities"]}
+    return tuple(item["path"] for item in value["authorities"])
 
 
 def test_registered_source_accepts_exact_live_provenance_and_reads_only_allowlist(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ):
+    from evolution_harness import controlled_write_guard as guard
     from evolution_harness.anchored_fs import AnchoredRoot
 
     harness, source, request, _ = _registered_fixture(tmp_path)
+    excluded_tree = _git(source, "rev-parse", "HEAD:temp-input")
     original_read = AnchoredRoot.read_bytes
+    original_read_object = guard._read_git_object
+    original_read_tree = guard._read_tree_entries
     source_reads: list[str] = []
+    opened_objects: list[str] = []
+    requested_path_calls: list[tuple[str, ...] | None] = []
 
     def observed_read(filesystem: AnchoredRoot, relative: str) -> bytes:
         if filesystem.root == source:
             source_reads.append(relative)
         return original_read(filesystem, relative)
 
+    def observed_object(boundary, object_id: str, **kwargs):
+        opened_objects.append(object_id)
+        return original_read_object(boundary, object_id, **kwargs)
+
+    def observed_tree(boundary, tree: str, *, requested_paths=None):
+        requested_path_calls.append(
+            None if requested_paths is None else tuple(requested_paths)
+        )
+        if requested_paths is None:
+            return original_read_tree(boundary, tree)
+        return original_read_tree(
+            boundary,
+            tree,
+            requested_paths=requested_paths,
+        )
+
     monkeypatch.setattr(AnchoredRoot, "read_bytes", observed_read)
+    monkeypatch.setattr(guard, "_read_git_object", observed_object)
+    monkeypatch.setattr(guard, "_read_tree_entries", observed_tree)
     result = _call_unchanged(harness, source, request)
 
     assert result == request["source"]
@@ -234,6 +287,8 @@ def test_registered_source_accepts_exact_live_provenance_and_reads_only_allowlis
     }
     assert "private/secret.md" not in source_reads
     assert "temp-input/poison.txt" not in source_reads
+    assert requested_path_calls == [_authority_path_list(harness)]
+    assert excluded_tree not in opened_objects
 
 
 def test_registered_source_rejects_missing_registration_without_source_changes(
@@ -507,6 +562,21 @@ def test_registered_source_rejects_non_exact_replayable_claims_before_extra_read
 
     harness, source, request, snapshot = _registered_fixture(tmp_path)
     _mutate_replayable_case(case, harness, request, snapshot)
+    expected_message = None
+    if case == "duplicate":
+        from evolution_harness.authority import build_authority_snapshot
+        from evolution_harness.registration import load_project_registration
+
+        loaded = load_project_registration(harness, source)
+        live_snapshot = build_authority_snapshot(
+            harness,
+            loaded["integrationRoot"],
+            source,
+        )
+        request["source"]["authoritySnapshotFingerprint"] = live_snapshot[
+            "snapshotFingerprint"
+        ]
+        expected_message = "must match exactly one non-derived live authority"
     original_read = AnchoredRoot.read_bytes
     source_reads: list[str] = []
 
@@ -521,6 +591,7 @@ def test_registered_source_rejects_non_exact_replayable_claims_before_extra_read
         source,
         request,
         expected_code="SOURCE_AUTHORITY_NO_GO",
+        expected_message=expected_message,
     )
     assert set(source_reads) <= {
         ".agent-evolution/registration.yaml",
@@ -588,7 +659,7 @@ def test_harness_self_accepts_only_same_physical_root_with_two_read_only_git_que
     monkeypatch: pytest.MonkeyPatch,
 ):
     repository, request = _self_fixture(tmp_path)
-    before_status = _git(repository, "status", "--porcelain=v2", "--untracked-files=all")
+    before_git_control = _git_control_probe(repository)
     real_run = subprocess.run
     observed: list[tuple[tuple[str, ...], Path | None, dict[str, str]]] = []
 
@@ -614,7 +685,7 @@ def test_harness_self_accepts_only_same_physical_root_with_two_read_only_git_que
     assert all(item[1] == repository for item in observed)
     assert all(item[2]["GIT_OPTIONAL_LOCKS"] == "0" for item in observed)
     assert all(item[2]["GIT_TERMINAL_PROMPT"] == "0" for item in observed)
-    assert _git(repository, "status", "--porcelain=v2", "--untracked-files=all") == before_status
+    assert _git_control_probe(repository) == before_git_control
 
 
 def test_external_unregistered_repository_cannot_claim_harness_self(

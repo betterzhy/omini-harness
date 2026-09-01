@@ -85,7 +85,11 @@ def _source_revision(
         tree = _commit_tree_identity(
             _read_git_object(git_boundary, head, expected_type="commit")
         )
-        committed_entries = _read_tree_entries(git_boundary, tree)
+        committed_entries = _read_tree_entries(
+            git_boundary,
+            tree,
+            requested_paths=[authority["path"] for authority in authorities],
+        )
         clean = True
         for authority in authorities:
             try:

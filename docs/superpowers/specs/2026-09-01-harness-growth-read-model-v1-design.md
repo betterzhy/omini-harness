@@ -99,7 +99,7 @@ The following existing contracts remain authoritative and are not renamed:
 New contracts extend this sequence. They do not reinterpret an existing `candidate/v1`, `eval-result/v1`, canonical Capability, or historical ledger entry, and they never mutate historical records to fit the new model. Specifically:
 
 - an existing unbound `eval-result/v1` remains valid for the existing Candidate/Eval Promotion path but cannot establish Experiment PASS;
-- a historical ledger-backed Capability with no trial or Promotion binding remains a Release with partial lineage, not a fabricated Experiment-backed Release;
+- only an exact pre-HG3 Promotion entry listed in the approved legacy cutover may remain a Release with partial lineage; a missing post-cutover binding or Receipt fails closed;
 - canonical `lifecycle` and `validity` remain the only Release availability source axes;
 - no migration adds Experiment, Trial, Eval, or versioned supersession facts that the original bytes did not contain.
 
@@ -183,6 +183,7 @@ HG2 must first freeze shared strict primitives instead of letting each Schema in
 - `AssetRevisionReference` binds `kind`, ID, Schema version, canonical source path, immutable Git Revision or ledger identity, canonical content digest, and domain-version availability. Existing `experience/v1` and `candidate/v1` records have no domain-version field, so their domain version is `NOT_AVAILABLE` with reason `SCHEMA_HAS_NO_DOMAIN_VERSION`; source identity plus content digest provides their exact snapshot and concurrency identity without changing either v1 payload.
 - `CommandReference` binds command Schema version, command ID, IdempotencyKey, PayloadHash, canonical command digest, and durable journal identity. It never treats a human-readable command name as execution evidence.
 - `LedgerEntryReference` binds ledger Schema version, canonical source path, immutable repository Revision or ledger identity, the `(capabilityId, version)` entry key, canonical entry digest, and enclosing ledger digest. The entry key must resolve exactly once.
+- `AuthorityDecisionReference` binds decision kind and ID, actor, action, decided-at time, exact authority source Revision and digest, decision digest, and signature or explicit signature availability. A label such as `APPROVE` without this identity is not a reference.
 - `ExpectationOwnerAnchor` binds only the logical owner kind, ID, and version. It never contains owner content digest, record revision, Git Revision, ledger identity, or another `AssetRevisionReference`.
 - `ExecutionCohortIdentity` binds an exact Project reference; a target kind `PROPOSED_CAPABILITY | RELEASE` plus exact target reference; source commit and tree; Authority Snapshot fingerprint; capability-lock fingerprint; Runtime identity/profile/toolchain digest; model identity/configuration digest; and projection schema/builder/input digest. A not-applicable dimension uses an explicit typed state and reason. `cohortKey` is `sha256:` of its `canonical_json_bytes`. Trial Attempts require `PROPOSED_CAPABILITY`; Adoption Observations and Effects require `RELEASE`.
 - `Availability<T>` is a discriminated union: `PRESENT` requires `value`; `NOT_AVAILABLE` or `UNKNOWN` requires a bounded reason and forbids `value`.
@@ -209,6 +210,24 @@ authorizedSeeds[]
 `baselineVersion` is SemVer, `bootstrapBaselineDate` is an ISO date, and `governanceBeginsAfter` is an RFC 3339 UTC timestamp whose calendar date is not earlier than the baseline date. Each `authorizedSeeds[]` element is a canonical `capabilityId@semanticVersion` key; keys are unique and duplicate or malformed entries invalidate the baseline. A Projection invocation accepts exactly one baseline at the canonical path and binds its exact bytes through `bootstrapBaselineReference: AssetRevisionReference`, including source Git Revision and content digest.
 
 The baseline is a closed historical authority boundary. Its accepted bytes must agree with the existing governance validator and every matching ledger entry must have `authorization: BOOTSTRAP_AUTHORIZED`, `authorityDecision: CLOSED_BASELINE_BOOTSTRAP`, a matching content hash, and `authorizedAt <= governanceBeginsAfter`. A changed digest at the same baseline version, a second baseline, a post-cutoff seed, or an unlisted tuple is invalid and makes the projection Gate `NO_GO`. A future baseline version or authority mechanism requires a separately approved contract change; the builder never infers one from later canonical assets or ledger text.
+
+#### 7.1.2 `growth-bootstrap-content-binding/v1`
+
+The existing baseline names seed tuples but does not contain their content hashes. HG2 therefore freezes a separate immutable companion binding without rewriting baseline bytes. Required fields:
+
+```text
+schemaVersion
+bindingId
+sourceRevision
+bootstrapBaselineReference
+seedBindings[]
+authorityDecisionReference
+evidence[]
+```
+
+`sourceRevision` binds repository identity, commit, and tree. `bootstrapBaselineReference`, every canonical `capabilityReference`, and every `ledgerEntryReference` in `seedBindings[]` must resolve at that same Revision. Each closed seed binding contains `seedKey`, `capabilityReference: AssetRevisionReference`, `ledgerEntryReference: LedgerEntryReference`, and `contentHash`. The sorted seed keys equal the baseline's `authorizedSeeds[]` set exactly; keys and tuple/version/content-hash combinations are unique. Capability ID/version/content hash and asset digest, ledger tuple/entry digest/content hash, and seed key must all agree. `authorityDecisionReference` is exact, and `bindingId` is content-derived from the Revision, baseline digest, sorted Capability/entry digests, content hashes, and authority-decision digest.
+
+Changing both canonical Capability and ledger content to a new matching hash therefore still fails against this immutable binding. A missing/extra seed, changed digest at the same binding ID, second v1 binding, Revision disagreement, or post-cutoff authorization is invalid and makes Gate `NO_GO`. A future seed set requires a separately approved contract version; no current file is used to refresh this historical binding automatically.
 
 ### 7.2 `growth-expectation/v1`
 
@@ -322,11 +341,11 @@ evidence[]
 
 `recordRevision` and `previousRecordDigest` use the same first-record/later-record `Availability<Digest>` rule as Experiment. `state` is `AUTHORIZED | RUNNING | EVIDENCE_READY | TERMINAL`. `outcome` has type `Availability<PASS | FAIL | INCONCLUSIVE | CANCELLED>` and `closedAt` has type `Availability<Timestamp>`. HG2 encodes their relationship as a closed `oneOf`: `AUTHORIZED`, `RUNNING`, and `EVIDENCE_READY` require both fields to be `NOT_AVAILABLE`; `TERMINAL` requires both fields to be `PRESENT`. Pre-evidence states may have an empty receipt array. State transitions create append-only revisions and are compare-and-swap protected. `experimentReference`, `candidateReference`, and the `PROPOSED_CAPABILITY` target must match the enclosing Experiment exactly. The exact referenced Experiment revision must carry an `APPROVE` authority decision before the first Trial revision; the Trial inherits that authority and never stores a second mutable approval verdict. The cohort identity is frozen before `RUNNING`; changing Revision, lock, Runtime, model, projection, or toolchain creates another Trial Attempt.
 
-`evalCoverage` is a closed ledger over the Experiment's frozen exact Eval Definition reference set: it records the required count, exactly matched count, missing references, duplicate references, unexpected references, and `COMPLETE | PARTIAL | INVALID`. A receipt counts only when its `evalDefinitionReference` exactly equals one frozen entry, including source Revision and content digest; matching only Eval ID is insufficient. `protectedCriterionResults[]` accounts for every frozen Regression, Safety, and Recovery criterion by exact criterion reference and records `PASS | FAIL | UNKNOWN` with evidence. Neither object is a caller-supplied verdict; both are deterministically derived from validated Trial receipts and criterion evidence.
+`evalCoverage` is a closed ledger over the Experiment's frozen exact Eval Definition reference set: it records the required count, exactly matched count, missing references, duplicate references, unexpected references, reused-result references, and `COMPLETE | PARTIAL | INVALID`. A receipt counts only when its `evalDefinitionReference` exactly equals one frozen entry, including source Revision and content digest; matching only Eval ID is insufficient. `protectedCriterionResults[]` accounts for every frozen Regression, Safety, and Recovery criterion by exact criterion reference and records `PASS | FAIL | UNKNOWN` with evidence. Neither object is a caller-supplied verdict; both are deterministically derived from validated Trial receipts and criterion evidence.
 
 `cancellationDecision` has type `Availability<CancellationDecision>`. Its `PRESENT` branch requires action `CANCEL_TRIAL`, actor, decision time, authority reference, bounded reason, and decision digest; the `NOT_AVAILABLE` branch forbids those fields. It must be `NOT_AVAILABLE` for every nonterminal revision and for terminal PASS, FAIL, or INCONCLUSIVE. It is `PRESENT` if and only if terminal outcome is CANCELLED. A cancellation transition is rejected when already-durable Trial evidence establishes FAIL; compare-and-swap prevents a second terminal outcome.
 
-The terminal Trial outcome is derived by the first matching rule after schema, digest, reference, and cohort validation:
+`INVALID` coverage is not an outcome. It is a semantic validation failure caused by duplicate, unexpected, or reused evidence. A Trial revision with `INVALID` coverage is retained as an invalid source record, contributes to provider/count diagnostics, and makes the projection Gate `NO_GO`; no terminal outcome from that revision is accepted. The following terminal outcome function applies only after schema, digest, exact-reference, cohort, uniqueness, reuse, and coverage validation has succeeded, so its input coverage is `COMPLETE | PARTIAL`:
 
 1. `FAIL` when any required Eval Result is `FAIL` or any protected Regression, Safety, or Recovery criterion is `FAIL`. This takes precedence over a later cancellation request. Early termination is allowed, but missing coverage remains explicit and the Trial can never be reported as PASS.
 2. `CANCELLED` only when an explicit authorized cancellation transition exists and no FAIL evidence exists. It preserves all accumulated receipts and coverage and cannot satisfy Experiment PASS.
@@ -391,7 +410,55 @@ The future Promotion operation uses one durable journaled transaction boundary. 
 
 For `EXPERIMENT_BACKED`, exactly one terminal PASSED Experiment and one PRESENT qualifying PASSED Trial are required. Every required Eval must have a unique matching PASS Eval Execution Receipt for that same Trial and cohort; other Trial references are historical context only and cannot fill its coverage. `legacyEvalResultReferences[]` is empty. For `CANDIDATE_EVAL_BACKED`, `experimentReference` and `qualifyingTrialAttemptReference` are `NOT_AVAILABLE`, Trial and execution-receipt arrays are empty with explicit not-applicable coverage, while exact PASS legacy Eval Result references satisfy the existing Candidate requirements. In both cases Candidate proposed Capability, Eval targets, canonical Capability, ledger tuple, and Receipt must agree on Capability ID/version/content hash. Any mismatch, duplicate ledger tuple, reused trial result, missing Promotion Receipt, or ambiguous reference makes the binding invalid. The binding's canonical digest is carried by its `AssetRevisionReference`, not embedded recursively in the record.
 
-Current `candidate/v1`, `eval-result/v1`, and historical `promotion-ledger/v1` entries are never rewritten. A historical Promotion with no valid binding remains a real ledger-backed Release with explicit partial lineage; it can never be relabeled `EXPERIMENT_BACKED`. HG3 must add the trial-scoped execution and Promotion receipt path before any new Experiment-backed claim is possible.
+Current `candidate/v1`, `eval-result/v1`, and historical `promotion-ledger/v1` entries are never rewritten. Only a Promotion entry frozen into the approved legacy cutover contract below may remain a ledger-backed Release with partial lineage; a post-cutover entry missing its required binding or Receipt is invalid. HG3 must add the trial-scoped execution and Promotion receipt path before any new Experiment-backed claim is possible.
+
+#### 7.3.4 `promotion-receipt/v1`
+
+This immutable terminal record is the final commit marker for one successful governed Promotion. It is distinct from generic command acceptance, rejection, conflict, or uncertain-outcome receipts. Required fields:
+
+```text
+schemaVersion
+promotionReceiptId
+transactionId
+promotionCommandReference
+idempotencyKey
+authorityDecisionReference
+candidateReference
+capabilityReference
+promotionPath
+lineageIntentDigest
+promotionLineageBindingReference
+ledgerEntryReference
+commitState
+committedAt
+evidence[]
+```
+
+`schemaVersion` is `promotion-receipt/v1`; `commitState` is exactly `COMMITTED`. `promotionCommandReference` is a `CommandReference`; Candidate, Capability, and lineage-binding references are exact `AssetRevisionReference` values; `authorityDecisionReference` is an `AuthorityDecisionReference`; the ledger reference is a `LedgerEntryReference`. `promotionPath` is `EXPERIMENT_BACKED | CANDIDATE_EVAL_BACKED` and must equal the referenced binding kind. The Receipt repeats the command's `idempotencyKey` and lineage-intent digest and binds the exact binding digest, Capability ID/version/content hash and asset digest, ledger tuple and entry digest, transaction ID, authoritative decision, commit time, and bounded evidence references. Its canonical digest excludes no referenced source bytes and excludes only its own outer `AssetRevisionReference`, which is created after the Receipt bytes exist.
+
+The journal enforces uniqueness by both `(promotionCommandReference.commandId, idempotencyKey)` and the `(capabilityId, capabilityVersion)` ledger tuple. Exact replay of the same key and PayloadHash returns the same Receipt bytes. The same key with another payload is `IDEMPOTENCY_CONFLICT`; a second successful Receipt for either unique key is invalid. Capability, ledger entry, and lineage binding are staged and durably validated first; this Receipt is published last. Only then may the operation return `SUCCEEDED`.
+
+Loss of the response or uncertain directory durability after staging never authorizes replay as a new Promotion. Receipt lookup uses Command ID and IdempotencyKey: one exact valid COMMITTED Receipt returns that Receipt; no Receipt with recoverable staged journal state requires explicit recovery; disagreement, multiplicity, or unknowable durability returns `PROMOTION_OUTCOME_UNCERTAIN` and fails closed. Generic `UNKNOWN_OUTCOME` or recovery records never project as a Promotion Receipt or Release.
+
+#### 7.3.5 `growth-legacy-promotion-cutover/v1`
+
+This one-time immutable authority manifest separates pre-HG3 compatibility evidence from post-cutover Promotion invariants. Required fields:
+
+```text
+schemaVersion
+cutoverId
+activatedAt
+sourceRevision
+promotionLedgerReference
+historicalPromotionEntryReferences[]
+authorityDecision
+previousCutoverReference
+evidence[]
+```
+
+`schemaVersion` is `growth-legacy-promotion-cutover/v1`. `sourceRevision` binds repository identity, commit, and tree. `promotionLedgerReference` binds the exact pre-cutover ledger bytes at that same Revision; every historical entry is a unique `LedgerEntryReference` to a `PROMOTED` tuple in that snapshot and has `authorizedAt <= activatedAt`. `authorityDecision` is a closed `APPROVE` object with actor, decision time, authority reference, reason, and decision digest. `previousCutoverReference` is `NOT_AVAILABLE` with reason `SINGLE_V1_CUTOVER`; a second v1 cutover, changed digest at the same `cutoverId`, duplicate tuple, missing entry, or post-cutover time is invalid. `cutoverId` is content-derived from source Revision, ledger digest, sorted entry digests, activation time, and authority-decision digest.
+
+HG3 freezes this manifest under an explicit user-authorized fixed candidate before the new Promotion path is enabled. Only listed entry digests may select `HISTORICAL_PROMOTION_PARTIAL`. Any new or changed `PROMOTED` entry after the cutover must have one valid lineage binding and terminal `promotion-receipt/v1`; otherwise it emits no Release and makes the projection Gate `NO_GO`. The cutover never fabricates Candidate, Eval, Experiment, Trial, or Receipt facts for historical entries.
 
 ### 7.4 `growth-release-projection/v1`
 
@@ -408,11 +475,14 @@ promotionReceiptReference
 promotionPath
 lineageBindingReference
 bootstrapBaselineReference
+bootstrapContentBindingReference
+legacyPromotionCutoverReference
 sourceCandidateReferences[]
 sourceExperimentReferences[]
 trialAttemptReferences[]
 evalResultReferences[]
 expectationReferences[]
+expectationCoverage
 lineageCoverage
 compatibility
 rollback
@@ -435,15 +505,26 @@ BOOTSTRAP_AUTHORIZED
 
 `releaseId` is a stable encoding of `sha256(canonical_json_bytes({capabilityId, capabilityVersion, contentHash, ledgerEntryDigest}))`. The canonical asset and exactly one ledger entry must agree on Capability ID/version/content hash; otherwise no Release is emitted and the projection Gate is `NO_GO`.
 
-`capabilityReference` and every source Candidate, Experiment, Trial, Eval Result, and Expectation array element have type `AssetRevisionReference`; each array rejects duplicate identity/digest keys. `ledgerEntryReference` has type `LedgerEntryReference`. `lineageBindingReference`, `promotionReceiptReference`, and `bootstrapBaselineReference` each have type `Availability<AssetRevisionReference>` with closed `PRESENT` and `NOT_AVAILABLE` `oneOf` branches. `EXPERIMENT_BACKED` requires PRESENT lineage and Receipt references and a NOT_AVAILABLE bootstrap reference, with a valid binding plus terminal Receipt whose bound lineage intent consumed a PASSED Experiment and its exact same-Trial Eval receipts. `CANDIDATE_EVAL_BACKED` has the same reference availability but consumes a valid non-Experiment binding and terminal Receipt. A valid historical `PROMOTED` ledger entry without that binding/Receipt is `HISTORICAL_PROMOTION_PARTIAL` and requires all three references to be `NOT_AVAILABLE` with path-specific reasons. A PASSED Experiment, lineage binding, or Promotion Receipt without the canonical asset and existing ledger entry never creates a Release.
+`capabilityReference` and every source Candidate, Experiment, Trial, Eval Result, and Expectation array element have type `AssetRevisionReference`; each array rejects duplicate identity/digest keys. `ledgerEntryReference` has type `LedgerEntryReference`. `lineageBindingReference`, `promotionReceiptReference`, `bootstrapBaselineReference`, `bootstrapContentBindingReference`, and `legacyPromotionCutoverReference` each have type `Availability<AssetRevisionReference>` with closed `PRESENT` and `NOT_AVAILABLE` `oneOf` branches. `EXPERIMENT_BACKED` requires PRESENT lineage and Receipt references and NOT_AVAILABLE bootstrap/content-binding/cutover references, with a valid binding plus terminal Receipt whose bound lineage intent consumed a PASSED Experiment and its exact same-Trial Eval receipts. `CANDIDATE_EVAL_BACKED` has the same reference availability but consumes a valid non-Experiment binding and terminal Receipt. A PASSED Experiment, lineage binding, or Promotion Receipt without the canonical asset and existing ledger entry never creates a Release.
 
-`BOOTSTRAP_AUTHORIZED` is selected only when all of the following exact sources agree: the ledger entry has `authorization: BOOTSTRAP_AUTHORIZED` and `authorityDecision: CLOSED_BASELINE_BOOTSTRAP`; its tuple and content hash match the canonical Capability; and the tuple appears exactly once in `authorizedSeeds[]` of the immutable `bootstrap-baseline/v1` referenced by PRESENT `bootstrapBaselineReference`. Its lineage and Promotion Receipt references are `NOT_AVAILABLE` with `CUTOFF_BOOTSTRAP_HAS_NO_PROMOTION_BINDING`. A claimed bootstrap entry absent from that baseline, a baseline duplicate, or any disagreement is invalid, emits no Release, and makes the projection Gate `NO_GO`.
+`BOOTSTRAP_AUTHORIZED` is selected only when all of the following exact sources agree: the ledger entry has `authorization: BOOTSTRAP_AUTHORIZED` and `authorityDecision: CLOSED_BASELINE_BOOTSTRAP`; its tuple and content hash match the canonical Capability; the tuple appears exactly once in `authorizedSeeds[]` of the immutable baseline referenced by PRESENT `bootstrapBaselineReference`; the content binding's own `bootstrapBaselineReference` is byte-identical to that Release reference across kind, ID, source Revision, and digest; and the exact Capability/ledger/content hash tuple appears exactly once in the immutable companion referenced by PRESENT `bootstrapContentBindingReference`. Its lineage, Promotion Receipt, and legacy-cutover references are `NOT_AVAILABLE` with path-specific reasons. A claimed seed absent from either source, a cross-baseline splice, a duplicate, a changed Capability/ledger pair, or any disagreement is invalid, emits no Release, and makes the projection Gate `NO_GO`.
 
-Promotion-path selection is mutually exclusive and ordered: a validated bootstrap tuple selects `BOOTSTRAP_AUTHORIZED`; a `PROMOTED` ledger entry with one valid Experiment binding and Receipt selects `EXPERIMENT_BACKED`; a `PROMOTED` entry with one valid Candidate/Eval binding and Receipt selects `CANDIDATE_EVAL_BACKED`; an otherwise valid historical `PROMOTED` entry with neither selects `HISTORICAL_PROMOTION_PARTIAL`. Multiple matching bindings, contradictory authorization markers, or any other authorization value are projection errors, never tie-broken guesses.
+Promotion-path selection is mutually exclusive and ordered: a validated bootstrap tuple selects `BOOTSTRAP_AUTHORIZED`; a `PROMOTED` ledger entry with one valid Experiment binding and Receipt selects `EXPERIMENT_BACKED`; a `PROMOTED` entry with one valid Candidate/Eval binding and Receipt selects `CANDIDATE_EVAL_BACKED`; a `PROMOTED` entry whose exact digest is PRESENT exactly once in the approved legacy cutover selects `HISTORICAL_PROMOTION_PARTIAL`. That historical path requires PRESENT `legacyPromotionCutoverReference` and NOT_AVAILABLE lineage, Receipt, baseline, and bootstrap-content references. An unlisted entry missing a valid binding/Receipt is invalid rather than historical. Multiple matching bindings, contradictory authorization markers, or any other authorization value are projection errors, never tie-broken guesses.
 
-`lineageCoverage` is a typed object with `COMPLETE | PARTIAL | NOT_APPLICABLE | UNKNOWN`, explicit missing kinds, and reason. Empty Experiment/Trial references are valid for non-Experiment paths only; historical references that cannot be reconstructed remain partial rather than guessed. `compatibility` and `rollback` are typed availability objects sourced only from explicit canonical or Promotion evidence; absence in current v1 contracts is `NOT_AVAILABLE`, not an invented default.
+`lineageCoverage` is a typed object with `COMPLETE | PARTIAL | NOT_APPLICABLE | UNKNOWN`, explicit edge coverage, missing kinds, and reason. Empty Experiment/Trial references are valid for non-Experiment paths only; historical references that cannot be reconstructed remain partial rather than guessed. Any Candidate source edge that is `LEGACY_ID_ONLY`, `AMBIGUOUS`, or `MISSING` keeps the affected Source -> Experience -> Candidate or Candidate -> Eval-Definition edge `PARTIAL` or `UNKNOWN`; even a valid modern Promotion Receipt cannot relabel it exact. This degraded provenance does not revoke the existing Candidate/Eval Promotion path, but Workbench must display it. For all current v1 source contracts, `compatibility` is `NOT_AVAILABLE` with reason `V1_SOURCE_HAS_NO_COMPATIBILITY_CONTRACT` and `rollback` is `NOT_AVAILABLE` with reason `V1_SOURCE_HAS_NO_ROLLBACK_CONTRACT`; no path may infer either from prose, version distance, or source filenames. A future explicit source contract requires a new projection rule version.
 
 A historical ledger `sourceReference` such as `candidate://...` may be shown as opaque ledger evidence, but it is not promoted to an `AssetRevisionReference` unless the exact historical bytes, Revision, and digest are independently available. The current file with the same Candidate ID is never assumed to be the historical snapshot.
+
+Path-specific Release derivation is closed:
+
+| Promotion path | Candidate / Experiment / Trial / Eval references | Release expectation references | `releasedAt` |
+| --- | --- | --- | --- |
+| `EXPERIMENT_BACKED` | Candidate and Experiment are the binding's exact PRESENT references; Trial references are the binding's sorted exact Trial array including the qualifying Trial; Eval Results are the sorted unique results reached from that binding's execution receipts | All and only valid frozen Expectations whose `ownerAnchor` exactly equals this `releaseId`; Experiment-owned Expectations are not silently copied | exact `ledgerEntry.authorizedAt`, which must be no later than Receipt `committedAt` |
+| `CANDIDATE_EVAL_BACKED` | Candidate is the binding's exact reference; Experiment/Trial arrays are empty; Eval Results equal the binding's sorted exact legacy-result array | same owner-anchor rule | exact `ledgerEntry.authorizedAt`, no later than Receipt `committedAt` |
+| `HISTORICAL_PROMOTION_PARTIAL` | all four arrays are empty; opaque source text and current files never fill historical lineage | same owner-anchor rule; absence is an empty known set only after the profile has completely scanned Release-owned Expectations | exact `ledgerEntry.authorizedAt` |
+| `BOOTSTRAP_AUTHORIZED` | all four arrays are empty | same owner-anchor rule | exact `ledgerEntry.authorizedAt`, which must be at or before the baseline cutoff |
+
+`expectationCoverage` is `COMPLETE | PARTIAL | NONE | UNKNOWN` with exact population definition, numerator, denominator availability, unknown count, and source references. `NONE` is permitted only after a complete owner-anchor scan proves zero Release-owned Expectations; an unread or incomplete provider is `UNKNOWN` or `PARTIAL`, not an empty known set. Each path row is validated as a closed `oneOf`; wrong presence, extra references, or inconsistent coverage is invalid, never silently empty. The Release `evidence[]` is the sorted deterministic union of direct path evidence references allowed by that row and never includes dereferenced evidence bodies.
 
 The projection exposes the canonical source axes without renaming them:
 
@@ -629,11 +710,56 @@ CONFLICT
 UNKNOWN
 ```
 
-The required population is the Release's exact `expectationReferences[]` entries whose referenced expectation has `requirement: REQUIRED`. For each required expectation, the rule selects only Effects with the exact view Cohort Identity and frozen window/sample-contract digest, then chooses the latest valid Effect at or before `asOf`; equally latest disagreeing Effects produce `CONFLICT`. No cross-cohort fallback is allowed. No required expectation produces `UNKNOWN` with reason `NO_REQUIRED_EFFECT_EXPECTATIONS` rather than success.
+The required population is the Release's exact `expectationReferences[]` entries whose referenced expectation has `requirement: REQUIRED`. `expectationCoverage: PARTIAL | UNKNOWN` makes `effective` UNKNOWN before outcome aggregation; missing provider coverage never becomes a zero-length success set. For each required expectation, the rule selects only Effects with the exact view Cohort Identity and frozen window/sample-contract digest, then chooses the latest valid Effect at or before `asOf`; equally latest disagreeing Effects produce `CONFLICT`. No cross-cohort fallback is allowed. A complete population with no required expectation produces `UNKNOWN` with reason `NO_REQUIRED_EFFECT_EXPECTATIONS` rather than success.
 
 The fail-closed summary precedence is `REGRESSION`, `CONFLICT`, `BELOW_EXPECTATION`, `UNKNOWN`, `STALE`, `INCONCLUSIVE`, `NOT_OBSERVED`, then `VERIFIED_EFFECTIVE`. `VERIFIED_EFFECTIVE` additionally requires all four adoption axes to be `MATCHED` and every context dimension required by the observation/expectation profile to be exact; an explicitly `NOT_APPLICABLE` dimension is allowed only when that same frozen profile permits it. Optional expectations remain visible but do not establish the summary. `freshness` is the least-current selected source state (`UNKNOWN`, then `STALE`, then `CURRENT`); `coverage` retains explicit counts and unknowns rather than averaging percentages. `evaluationRuleId` is fixed to `growth-project-release-view/v1` for this version.
 
-### 7.9 `growth-projection/v1`
+### 7.9 `growth-projection-builder-profile/v1`
+
+The builder profile is immutable input authority for what the projection must read. It prevents one implementation from calling a source required while another silently calls it optional. Required fields:
+
+```text
+schemaVersion
+profileId
+version
+projectionSchemaVersion
+canonicalizationRuleId
+sourceKindRules[]
+authorityDecisionReference
+evidence[]
+```
+
+`authorityDecisionReference` is an exact `AuthorityDecisionReference`. `sourceKindRules[]` contains each supported source kind exactly once, sorted by kind, with closed fields `sourceKind`, `requirement`, `locatorPolicy`, `temporalPolicy`, `effectiveTimeField`, `freshnessPolicy`, `populationDefinition`, and `visibilityCeiling`. `requirement` is `REQUIRED | OPTIONAL`; `temporalPolicy` is `EVENT_TIME | SNAPSHOT_AT_SOURCE_REVISION`. The effective-time field is PRESENT for event-time sources and `NOT_AVAILABLE` with a fixed reason for snapshot sources. Locator policies name approved provider/root classes and never embed arbitrary absolute paths. Runtime root identities and their exact Revision/digest appear in `sourceIdentities[]`.
+
+V1 fixes, rather than merely permits, the temporal rule for every source kind. In particular `PROMOTION_LINEAGE_BINDING` is `EVENT_TIME`; because the acyclic binding intentionally cannot point forward to its Receipt, its effective-time selector is the `committedAt` of the unique valid `promotion-receipt/v1` whose `promotionLineageBindingReference` points back to that exact binding digest. No such Receipt, more than one Receipt, or a Receipt after `asOf` means the binding cannot enter accepted arrays or counts; a missing or contradictory Receipt is retained as invalid source diagnostics and makes Gate `NO_GO` for a post-cutover Promotion.
+
+The closed v1 source-kind enum is:
+
+```text
+GAP_ASSESSMENT_RECEIPT
+EXPERIENCE
+CANDIDATE
+EVAL_DEFINITION
+EVAL_RESULT
+GROWTH_EXPECTATION
+GROWTH_EXPERIMENT
+TRIAL_ATTEMPT
+EVAL_EXECUTION_RECEIPT
+PROMOTION_LINEAGE_BINDING
+PROMOTION_RECEIPT
+CANONICAL_CAPABILITY
+PROMOTION_LEDGER_ENTRY
+BOOTSTRAP_BASELINE
+BOOTSTRAP_CONTENT_BINDING
+LEGACY_PROMOTION_CUTOVER
+PROJECT
+ADOPTION_OBSERVATION
+OBSERVED_EFFECT
+```
+
+The profile's exact bytes are bound by `builderProfileReference: AssetRevisionReference` and included in the projection watermark. Adding a source kind, changing required/optional status, locator, cutoff, freshness, population, or visibility semantics creates a new profile version. A builder cannot downgrade a required source at runtime; an unavailable required kind produces provider `UNAVAILABLE` or `UNKNOWN` and Gate `NO_GO` under the rules below.
+
+### 7.10 `growth-projection/v1`
 
 Required top-level fields:
 
@@ -641,15 +767,26 @@ Required top-level fields:
 schemaVersion
 asOf
 toolchainIdentity
+builderProfileReference
 watermark
 sourceIdentities[]
 providerState
+assessmentReceipts[]
+experiences[]
+evalDefinitions[]
+evalResults[]
 expectations[]
 candidates[]
 experiments[]
 trialAttempts[]
 evalExecutionReceipts[]
 promotionLineageBindings[]
+promotionReceipts[]
+capabilities[]
+promotionLedgerEntries[]
+bootstrapBaselines[]
+bootstrapContentBindings[]
+legacyPromotionCutovers[]
 releases[]
 projects[]
 adoptionObservations[]
@@ -659,16 +796,34 @@ counts
 gate
 ```
 
-`asOf` is a caller-supplied, normalized UTC cutoff; no wall-clock generation timestamp is embedded in projection bytes. Build execution time belongs in a non-authoritative command receipt. `watermark` is `sha256:` of the existing `canonical_json_bytes` representation of `{schemaVersion, asOf, toolchainIdentity, orderedSourceIdentityManifest}`. The manifest binds every validated source kind, ID, Schema version, domain-version availability, Revision or ledger identity, and content digest. The watermark is computed before and independently of the projection object, so it is not circular.
+`asOf` is a caller-supplied, normalized UTC cutoff; no wall-clock generation timestamp is embedded in projection bytes. Build execution time belongs in a non-authoritative command receipt. `builderProfileReference` must resolve to exactly one valid profile whose `projectionSchemaVersion` matches. `watermark` is `sha256:` of the existing `canonical_json_bytes` representation of `{schemaVersion, asOf, toolchainIdentity, builderProfileReference, orderedSourceIdentityManifest}`. The manifest binds every configured source kind whether readable or not, its root/provider identity, availability, Schema set, Revision or ledger identity, content digest availability, and selected-record digests. The watermark is computed before and independently of the projection object, so it is not circular.
+
+The projection carries safe, typed read records rather than dereferenced evidence bodies. Assessment Receipt records expose exact receipt reference, project/task/attempt identity, risk/trigger/verdict/disposition, assessed time, bounded summary/impact distillation, visibility, and Evidence References. Experience records expose exact reference, source project, capture time, stage, bounded signal/impact distillation, triage state/decision, hints, visibility, and Evidence References. Eval Definition records expose exact reference, Eval ID, target Capability, model sensitivity, transfer scope, bounded scenario distillation, and criterion counts. Eval Result records expose exact reference, Eval/Capability/version/projection/Runtime/model identities, execution time, result, and Evidence References. Promotion Receipt, Capability, ledger, baseline, bootstrap-content-binding, and cutover read records expose their exact typed references plus the fields required by Release derivation. Visibility filtering may redact bounded distillation but never identity, state, digest, coverage, or redaction reason.
+
+Existing `candidate/v1` source Experience and Eval requirement fields are logical IDs only. A Candidate read record therefore represents each as a closed edge `{logicalId, bindingState, reference, reason}`. `bindingState` is `EXACT_AT_CREATION | LEGACY_ID_ONLY | AMBIGUOUS | MISSING`; `reference` is `Availability<AssetRevisionReference>`. Only a separate immutable creation snapshot or Receipt that actually bound the original bytes may produce `EXACT_AT_CREATION`. The current v1 Candidate alone always produces `LEGACY_ID_ONLY` with `NOT_AVAILABLE: LEGACY_SCHEMA_HAS_ID_ONLY`; a same-ID record currently present in `experiences[]` or `evalDefinitions[]` may be displayed as a non-authoritative match but is never upgraded to the Candidate's historical source. Multiple same-ID digests are `AMBIGUOUS`; absence is `MISSING`. Both remain visible and reduce lineage coverage, but they do not rewrite the existing Candidate/Eval Promotion authority.
+
+`asOf` inclusion is fixed by source kind. Event-time sources are included only when their authoritative time is at or before `asOf`: GAP `assessment.assessedAt`; Experience `capturedAt`; Eval Result `executedAt`; Expectation freeze time; Experiment and Trial `stateEnteredAt`; Eval Execution Receipt `completedAt`; Promotion Lineage Binding through its unique referencing Receipt `committedAt`; Promotion Receipt `committedAt`; ledger entry `authorizedAt`; legacy cutover `activatedAt`; Adoption Observation and Effect `observedAt`. A modern Release requires both its ledger time and terminal Receipt time at or before `asOf`; the earlier staged ledger never exposes a Release by itself. Later record revisions are excluded rather than used to rewrite earlier state.
+
+Candidate, Eval Definition, canonical Capability, bootstrap baseline, bootstrap content binding, and Project definitions without an authoritative event time use `SNAPSHOT_AT_SOURCE_REVISION`: the exact builder input Revision and digest are included and labeled as snapshot facts, not claimed to have existed at an earlier wall-clock time. An `asOf` earlier than a source's known event boundary, an unknowable required cutoff, or a source that cannot prove whether a record is after the cutoff is excluded with explicit coverage and produces `SOURCE_CUTOFF_INVALID` or `REQUIRED_SOURCE_UNKNOWN` as applicable. After-cutoff records do not appear in arrays, selected-record digests, or record counts; their source provider/root identity remains in the manifest so absence cannot masquerade as an empty provider.
 
 Canonical output uses the repository's existing `canonical_json_bytes` algorithm plus one newline. Arrays use these stable keys:
 
+- assessment Receipts: `(sourceProjectId, assessmentKey, assessmentId)`;
+- experiences: `(experienceId, reference.contentDigest)`;
+- Eval Definitions: `(evalId, reference.contentDigest)`;
+- Eval Results: `(evalResultId, reference.contentDigest)`;
 - expectations: `(expectationId, version)`;
 - candidates: `(candidateId, canonicalCandidateBundleDigest)`;
 - experiments: `(experimentId, version, recordRevision)`;
 - Trial Attempts: `(experimentId, experimentVersion, trialAttemptId, recordRevision)`;
 - Eval Execution Receipts: `(trialAttemptId, evalId, executionReceiptId)`;
 - Promotion Lineage Bindings: `(capabilityId, capabilityVersion, bindingId)`;
+- Promotion Receipts: `(capabilityId, capabilityVersion, promotionReceiptId)`;
+- capabilities: `(capabilityId, capabilityVersion, contentHash)`;
+- promotion ledger entries: `(capabilityId, capabilityVersion, entryDigest)`;
+- bootstrap baselines: `(baselineVersion, reference.contentDigest)`;
+- bootstrap content bindings: `(bindingId, reference.contentDigest)`;
+- legacy Promotion cutovers: `(cutoverId, reference.contentDigest)`;
 - releases: `(capabilityId, capabilityVersion, releaseId)`;
 - projects: `projectId`;
 - adoption observations: `(projectId, releaseId, cohortKey, observedAt, observationId)`;
@@ -678,31 +833,42 @@ Canonical output uses the repository's existing `canonical_json_bytes` algorithm
 
 All set-like nested arrays are sorted by their declared immutable reference key. An order-significant array must carry an explicit ordinal and sort by `(ordinal, immutable reference key)`; filesystem enumeration order is never semantic.
 
-For identical validated source bytes, `asOf`, schema set, and toolchain identity, the output is byte-identical. `counts` and `projectReleaseViews` are deterministic derived data and never replace their source objects. A project-release view keeps `declared`, `configured`, `loaded`, `invoked`, and `effective` separate; `effective` is derived only from referenced Effect outcomes, while reconciliation retains its rule ID and source references.
+For identical validated source bytes, `asOf`, builder-profile bytes, schema set, and toolchain identity, the output is byte-identical. `counts` and `projectReleaseViews` are deterministic derived data and never replace their source objects. A project-release view keeps `declared`, `configured`, `loaded`, `invoked`, and `effective` separate; `effective` is derived only from referenced Effect outcomes, while reconciliation retains its rule ID and source references.
 
 `providerState` is a strict object:
 
 ```text
 state
 reasonCodes[]
-sourceCoverage
+sourceCoverage[]
 requiredSourceKinds[]
 unavailableSourceKinds[]
 staleSourceKinds[]
+unknownSourceKinds[]
+omittedOptionalSourceKinds[]
 invalidSourceCount
 ruleId
 ```
 
-`state` is `READY | PARTIAL | STALE | UNAVAILABLE | UNKNOWN`; `ruleId` is `growth-projection-provider-state/v1`. Source-kind arrays are sorted unique enums from the builder profile. The first matching rule wins: required configured provider unreadable/unverifiable -> `UNAVAILABLE`; required identity, availability, Schema set, or cutoff unknowable -> `UNKNOWN`; required usable source past its deadline -> `STALE`; known incomplete coverage, omitted optional source, or known nonfatal gap -> `PARTIAL`; otherwise complete/current/valid -> `READY`. Priority is therefore `UNAVAILABLE`, `UNKNOWN`, `STALE`, `PARTIAL`, `READY`.
+`state` is `READY | PARTIAL | STALE | UNAVAILABLE | UNKNOWN`; `ruleId` is `growth-projection-provider-state/v1`. Source-kind arrays are sorted unique enums derived from the exact builder profile, not caller claims. `sourceCoverage[]` contains every profile source kind exactly once and has closed fields `sourceKind`, `requirement`, `populationState`, `denominator`, `currentCount`, `staleCount`, `invalidCount`, `unavailableCount`, `unknownCount`, `omittedCount`, `coverage`, and `sourceIdentityReferences[]`. Counts are nonnegative and classify each known expected identity into exactly one bucket. For `populationState: KNOWN`, `denominator` is PRESENT and equals the six-bucket sum; for `UNKNOWN`, the denominator is typed UNKNOWN with reason and coverage is UNKNOWN. An empty known population is distinct from an unread or unknown population.
+
+The first matching provider rule wins: any required source provider or known required identity unavailable/unreadable -> `UNAVAILABLE`; any required population, identity, Schema set, cutoff, or digest unknowable -> `UNKNOWN`; any required usable source past its profile deadline -> `STALE`; any invalid known record, known incomplete coverage, or omitted optional source -> `PARTIAL`; otherwise all configured populations are complete/current/valid -> `READY`. A required source can never be omitted. Priority is therefore `UNAVAILABLE`, `UNKNOWN`, `STALE`, `PARTIAL`, `READY`. Provider `PARTIAL` does not suppress the independent Gate rule that any invalid source is `NO_GO`.
 
 `counts` is a closed `growth-projection-counts/v1` ledger, not a dynamic map. It contains:
 
 ```text
 ruleId
-sourceIdentities { total, valid, invalid, unavailable }
+sourceIdentities { total, current, stale, invalid, unavailable, unknown, omitted }
+sourceKinds[] {
+  sourceKind, requirement, denominator, included,
+  stale, invalid, unavailable, unknown, omitted, coverage
+}
 records {
+  assessmentReceipts, experiences, evalDefinitions, evalResults,
   expectations, candidates, experiments, trialAttempts,
-  evalExecutionReceipts, promotionLineageBindings, releases,
+  evalExecutionReceipts, promotionLineageBindings, promotionReceipts,
+  capabilities, promotionLedgerEntries, bootstrapBaselines,
+  bootstrapContentBindings, legacyPromotionCutovers, releases,
   projects, adoptionObservations, effects, projectReleaseViews
 }
 projectReleaseViewsByEffectiveState {
@@ -715,7 +881,7 @@ projectReleaseViewsByReconciliationState {
 projectCoverage
 ```
 
-Every enum bucket is present even when zero. Each record count equals its array length; each view-bucket sum equals `projectReleaseViews`; source total equals valid plus invalid plus unavailable. Context rows are counted separately from unique projects, and `projectCoverage` supplies the exact unique-project denominator and unknown count.
+Every enum bucket and every builder-profile source kind is present even when zero. Each record count equals its array length; each view-bucket sum equals `projectReleaseViews`; source-identity total equals the seven mutually exclusive identity-state buckets. Each `sourceKinds[]` row is derived from the corresponding provider `sourceCoverage` row: `included` equals the current plus stale projected identities, and a PRESENT denominator equals included plus invalid, unavailable, unknown, and omitted. The record array count for a source kind equals its included count unless the profile explicitly defines a one-to-many derived output, in which case that fixed mapping rule and its numerator/denominator are part of the profile. Context rows are counted separately from unique projects, and `projectCoverage` supplies the exact unique-project denominator and unknown count. Any mismatch is `DERIVATION_INVARIANT_VIOLATION`.
 
 `gate` is:
 
@@ -725,11 +891,11 @@ reasonCodes[]
 ruleId = growth-projection-gate/v1
 ```
 
-The fixed `NO_GO` reasons are `REQUIRED_PROVIDER_UNAVAILABLE | REQUIRED_SOURCE_UNKNOWN | SOURCE_IDENTITY_CONFLICT | SOURCE_SCHEMA_INVALID | SOURCE_CUTOFF_INVALID | COHORT_IDENTITY_MISMATCH | CROSS_REFERENCE_INVALID | DIGEST_INVALID | DERIVATION_INVARIANT_VIOLATION`. Gate is `NO_GO` exactly when provider state is `UNAVAILABLE` or `UNKNOWN`, `invalidSourceCount > 0`, or any listed identity, Schema, cutoff, cohort, cross-reference, digest, count, or derivation invariant fails. Otherwise it is `PASS`.
+The fixed `NO_GO` reasons are `BUILDER_PROFILE_INVALID | REQUIRED_PROVIDER_UNAVAILABLE | REQUIRED_SOURCE_UNKNOWN | REQUIRED_SOURCE_OMITTED | SOURCE_IDENTITY_CONFLICT | SOURCE_SCHEMA_INVALID | SOURCE_CUTOFF_INVALID | COHORT_IDENTITY_MISMATCH | CROSS_REFERENCE_INVALID | DIGEST_INVALID | DERIVATION_INVARIANT_VIOLATION`. Gate is `NO_GO` exactly when the profile is invalid or unresolved, provider state is `UNAVAILABLE` or `UNKNOWN`, a required source is omitted, `invalidSourceCount > 0`, or any listed identity, Schema, cutoff, cohort, cross-reference, digest, count, or derivation invariant fails. Otherwise it is `PASS`.
 
 Known `STALE` or `PARTIAL` data may produce a structurally valid `PASS` projection so Workbench can display the degraded truth; `PASS` never means a Release is adopted or effective. Every aggregate includes explicit denominators and coverage. Unknown or unavailable projects are reported separately and never counted as failed, zero, adopted, or effective.
 
-### 7.10 Workbench-local `GrowthImprovementProposal`
+### 7.11 Workbench-local `GrowthImprovementProposal`
 
 This object is intentionally not a formal Harness object. Its Schema uses discriminated `oneOf` branches rather than making decision and receipt fields universally required.
 
@@ -816,7 +982,7 @@ Candidate
 -> Observed Effect
 ```
 
-A PASSED Experiment establishes only its own outcome, not Promotion authority. `EXPERIMENT_BACKED` additionally requires exact same-Trial Eval receipts, a Promotion Lineage Intent consumed by the authorized Promotion command, a durable lineage binding, its terminal Receipt published last, the canonical Capability, and the matching ledger entry. A historical canonical Capability remains projectable as `HISTORICAL_PROMOTION_PARTIAL`; only an exact baseline-and-ledger-backed seed is `BOOTSTRAP_AUTHORIZED`.
+A PASSED Experiment establishes only its own outcome, not Promotion authority. `EXPERIMENT_BACKED` additionally requires exact same-Trial Eval receipts, a Promotion Lineage Intent consumed by the authorized Promotion command, a durable lineage binding, its terminal Receipt published last, the canonical Capability, and the matching ledger entry. Only a cutover-listed historical Promotion remains projectable as `HISTORICAL_PROMOTION_PARTIAL`; only an exact baseline-and-ledger-backed seed is `BOOTSTRAP_AUTHORIZED`.
 
 Allowed Experiment transitions are exact:
 
@@ -974,6 +1140,10 @@ UNKNOWN_OUTCOME
 | Declared/configured/loaded/invoked divergence | Show each axis and `DIVERGED`; route a deduplicated `Needs You` item |
 | Unbound or reused Eval Result | Preserve it as legacy evidence; never count it toward Experiment PASS |
 | Promotion lineage or ledger/canonical mismatch | Do not emit an Experiment-backed Release; set projection Gate `NO_GO` for identity/digest contradiction |
+| Missing or contradictory terminal Promotion Receipt | Do not emit a modern Release; query by Command ID/IdempotencyKey and fail closed on uncertain outcome |
+| Post-cutover Promotion lacks binding/Receipt | Do not downgrade to historical partial; emit no Release and set Gate `NO_GO` |
+| Builder profile missing, changed, or silently downgrades a source | Reject the projection with `BUILDER_PROFILE_INVALID` |
+| Required provider population or cutoff unknown | Preserve known records for diagnostics, report `UNKNOWN`, and set Gate `NO_GO`; never report zero |
 | Experiment failure or inconclusive result | Retain all evidence; allow only Revise/Reject/Rerun proposal |
 | Regression, Safety, or Recovery failure | Block Experiment-backed Promotion and wider-adoption recommendation; never mutate an existing canonical Release |
 | Multiple execution cohorts | Preserve separate context rows; a singular unkeyed query returns `AMBIGUOUS_CONTEXT_COHORT` |
@@ -1017,7 +1187,7 @@ Every stable implementation candidate must prove:
 
 Any P0 or P1 finding is NO-GO. A new tree requires affected gates and a fresh fixed-candidate review.
 
-Required negative fixtures include: a PASS Eval from another Candidate/Experiment; the same Eval Result digest reused by two Trials; the same Eval Result ID with different bytes; a Promotion Receipt that does not bind the lineage intent; duplicate ledger tuples; ledger content hash different from canonical Capability; canonical `INVALID` incorrectly mapped to `RETIRED`; an unversioned v1 supersedes relation presented as exact; equal-time same-cohort conflicts; and four adoption/effect facts taken from different Revision/Runtime/model/projection cohorts. Each must fail closed or produce the explicitly degraded state, never complete lineage or verified effectiveness.
+Required negative fixtures include: a PASS Eval from another Candidate/Experiment; duplicate, unexpected, or reused Trial receipts with otherwise PASS results; the same Eval Result digest reused by two Trials; the same Eval Result ID with different bytes; a v1 Candidate logical Experience/Eval ID matched to later or multiple bytes and incorrectly presented as exact; a Promotion Receipt that does not bind the lineage intent; a Promotion Lineage Binding whose unique Receipt is after `asOf`; a post-cutover Promotion missing its binding or terminal Receipt; a changed or duplicate legacy cutover; duplicate ledger tuples; ledger content hash different from canonical Capability; canonical Capability and bootstrap ledger changed together away from the frozen content binding; a required source kind omitted or silently downgraded by another builder profile; after-cutoff evidence included in arrays/counts; canonical `INVALID` incorrectly mapped to `RETIRED`; an unversioned v1 supersedes relation presented as exact; equal-time same-cohort conflicts; and four adoption/effect facts taken from different Revision/Runtime/model/projection cohorts. Each must fail closed or produce the explicitly degraded state, never complete lineage or verified effectiveness.
 
 ## 15. Delivery Sequence
 
@@ -1037,14 +1207,16 @@ The work is intentionally decomposed so each phase produces a separately reviewa
 
 ### HG2 — Growth Lifecycle Contracts
 
-- Freeze the shared typed primitives, immutable Expectation, Experiment revision/transition table, Trial Attempt, Eval Execution Receipt, Promotion Lineage Binding, Release Projection, Project, Adoption Observation, Observed Effect, project-release view, and Growth Projection Schemas.
-- Add compatibility, state-transition, promotion-path, cohort-isolation, determinism, and invariant tests.
+- Freeze the shared typed primitives, existing Bootstrap Baseline read profile, Bootstrap Content Binding, immutable Expectation, Experiment revision/transition table, Trial Attempt, Eval Execution Receipt, Promotion Lineage Binding, terminal Promotion Receipt, Legacy Promotion Cutover, Release Projection, Project, Adoption Observation, Observed Effect, project-release view, Builder Profile, and Growth Projection Schemas.
+- Materialize the one-time Bootstrap Content Binding from one fixed source Revision under an explicit authority decision; never refresh it from later matching Capability/ledger bytes.
+- Add compatibility, state-transition, promotion-path, receipt/journal, cutover, source-coverage, as-of, cohort-isolation, determinism, and invariant tests.
 - No Workbench changes and no controlled write commands.
 
 ### HG3 — Harness Growth Runtime
 
 - Add explicit human triage/import.
 - Persist Experiment, Trial Attempt, and trial-scoped Eval Execution Receipt records while preserving the existing unbound Eval path.
+- Under an explicit fixed-candidate authority decision, freeze the one-time Legacy Promotion Cutover before enabling the new Promotion path; post-cutover missing lineage never degrades to historical partial.
 - Extend the existing direct Harness Promotion command so an Experiment-backed path consumes a frozen lineage intent, stages and validates the canonical Capability, ledger entry, and lineage binding in one durable journaled transaction, then publishes the terminal Promotion Receipt last. This does not expose Promotion through Workbench.
 - Compose canonical Release lineage, context-isolated cross-project observations, effects, and deterministic read-only projection.
 - Keep project and Runtime facts reference-based and source-owned.
@@ -1130,6 +1302,7 @@ This specification aligns with:
 - `design/schemas/eval-result.schema.json`;
 - `core/schemas/common-capability.schema.json`;
 - `core/schemas/relationships.schema.json`;
+- `core/governance/bootstrap-baseline.yaml`;
 - `core/governance/promotion-ledger.yaml`;
 - Project Helm `00-Product-Definition-v0.1.4.md`;
 - Project Helm `15-Knowledge-Management-Workspace-Design-v0.1.md`;

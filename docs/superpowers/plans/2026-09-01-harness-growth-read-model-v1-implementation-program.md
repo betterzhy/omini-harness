@@ -669,7 +669,9 @@ HG4 does not authorize Project Helm code, project registration, Hook/scheduler i
 
 - [ ] **Step 1: Migrate and review Project Helm Authority before code**
 
-The current conceptual `HarnessEvolutionPort` mixes read and write methods. The HG5 Authority change must split or version the read capability so a read Adapter cannot imply commands exist. Update the Harness Evolution rows in `16-Knowledge-Workspace-Page-State-Matrix-v0.1.csv`: request/revise/rerun/adoption operations remain local proposals or unavailable in HG5, and no row may imply an enabled formal Harness command. Authority must also name the Workbench-local cache owner, storage mechanism, retention/freshness rule, and the exact pure-read versus explicit-refresh boundary. It must define `workbench-growth-projection-validation-receipt/v1` as a non-authoritative Workbench-local record, name `GrowthProjectionV1Adapter` as its sole producer, name `growthProjectionIntegrityV1.ts` as the single producer/consumer integrity implementation, freeze its Harness-compatible canonical-byte and SHA-256 rules, permit Receipt emission only after complete validation PASS, require the validated read and cache snapshot to carry the exact Receipt and explicit refresh and every cache read to revalidate it, and state that the Receipt cannot change Harness projection freshness or provider state. The Page-State Matrix must make Receipt availability explicit for both `VALIDATED` and `LAST_VALIDATED_STALE` states, map an invalid retained cache only to `INVALID` with no snapshot data, and must not imply a PASS Receipt for any failed validation branch.
+The current conceptual `HarnessEvolutionPort` mixes read and write methods. The HG5 Authority change must split or version the read capability so a read Adapter cannot imply commands exist. Update the Harness Evolution rows in `16-Knowledge-Workspace-Page-State-Matrix-v0.1.csv`: request/revise/rerun/adoption operations remain local proposals or unavailable in HG5, and no row may imply an enabled formal Harness command. Authority must also name the Workbench-local cache owner, one exact transactional storage mechanism, immutable Receipt retention/recovery rule, freshness rule, and the exact pure-read versus explicit-refresh boundary. `CACHE_NOT_ENABLED` remains mandatory unless the selected mechanism proves that the current Entry update and immutable terminal Refresh Receipt append commit in one atomic, isolated, crash-recoverable transaction; a best-effort pair of `localStorage`, file, or database writes is forbidden.
+
+Authority must define `workbench-growth-projection-validation-receipt/v1` as a non-authoritative Workbench-local record, name `GrowthProjectionV1Adapter` as its sole producer, name `growthProjectionIntegrityV1.ts` as the single producer/consumer integrity implementation, freeze its Harness-compatible canonical-byte and SHA-256 rules, permit Receipt emission only after complete validation PASS, require the validated read and cache snapshot to carry the exact Receipt and explicit refresh and every cache read to revalidate it, and state that the Receipt cannot change Harness projection freshness or provider state. It must separately define the closed Cache Refresh Request/Receipt, mandatory `EXPECT_EMPTY | MATCH_REVISION` precondition, PayloadHash, Entry-digest, Receipt-digest and acyclic cross-binding formulas, exact-replay/conflict rule, and atomic Entry-plus-Receipt commit described below. Every Cache read must resolve the Entry's unique terminal Refresh Receipt and validate their complete two-way binding before exposing a snapshot. The Page-State Matrix must make Receipt availability explicit for both `VALIDATED` and `LAST_VALIDATED_STALE` states, map a missing, duplicate, wrong-link, or invalid retained Receipt/Entry only to `INVALID` with no snapshot data, keep `UNKNOWN_OUTCOME` unresolved until a byte-valid request-bound terminal Receipt or conflict is found, and must not imply a PASS Receipt for any failed validation branch.
 
 - [ ] **Step 2: Freeze the read Port**
 
@@ -712,7 +714,15 @@ import type {
 } from '../models/growthProjectionV1';
 import type {
   GrowthProjectionValidationReceiptV1,
+  Sha256DigestV1,
 } from '../models/growthProjectionValidationReceiptV1';
+import type {
+  GrowthProjectionCacheRefreshReceiptV1,
+  GrowthProjectionCacheRefreshRequestCoreV1,
+  GrowthProjectionCacheRefreshRequestV1,
+  ValidatedGrowthProjectionCacheEntry,
+  ValidatedGrowthProjectionSnapshot,
+} from '../models/growthProjectionCacheV1';
 
 export declare function canonicalProjectionFileBytesV1(
   projection: Readonly<GrowthProjectionV1>,
@@ -734,6 +744,38 @@ export declare function validateGrowthProjectionValidationReceiptV1(input: {
   acceptedValidatorIdentity: Readonly<
     GrowthProjectionValidationReceiptV1['validatorIdentity']
   >;
+}): Promise<
+  | Readonly<{ state: 'VALID' }>
+  | Readonly<{ state: 'INVALID'; reasonCode: string }>
+>;
+
+export declare function deriveGrowthProjectionCacheRefreshPayloadHashV1(
+  core: Readonly<GrowthProjectionCacheRefreshRequestCoreV1>,
+): Promise<Sha256DigestV1>;
+
+export declare function deriveGrowthProjectionCacheCommitV1(input: {
+  request: Readonly<GrowthProjectionCacheRefreshRequestV1>;
+  snapshot: Readonly<ValidatedGrowthProjectionSnapshot>;
+  resultingCacheRevision: string;
+  storedAt: string;
+}): Promise<
+  Readonly<{
+    entry: Readonly<ValidatedGrowthProjectionCacheEntry>;
+    receipt: Readonly<GrowthProjectionCacheRefreshReceiptV1>;
+  }>
+>;
+
+export declare function validateGrowthProjectionCacheRefreshReceiptV1(input: {
+  receipt: Readonly<GrowthProjectionCacheRefreshReceiptV1>;
+  expectedRequest: Readonly<GrowthProjectionCacheRefreshRequestV1>;
+}): Promise<
+  | Readonly<{ state: 'VALID' }>
+  | Readonly<{ state: 'INVALID'; reasonCode: string }>
+>;
+
+export declare function validateGrowthProjectionCacheEntryBindingV1(input: {
+  entry: Readonly<ValidatedGrowthProjectionCacheEntry>;
+  receipt: Readonly<GrowthProjectionCacheRefreshReceiptV1>;
 }): Promise<
   | Readonly<{ state: 'VALID' }>
   | Readonly<{ state: 'INVALID'; reasonCode: string }>
@@ -833,7 +875,11 @@ export interface HarnessEvolutionReadPort {
 }
 ```
 
-`GrowthProjectionV1` is the complete validated Schema model, not a UI summary shape. Its own provider state remains `READY | PARTIAL | STALE | UNAVAILABLE | UNKNOWN` together with the exact watermark, Gate, coverage, closed counts ledger, and typed references. `growthProjectionValidationReceiptV1.ts` imports `GrowthProjectionSnapshotIdentity` from the projection model. `growthProjectionIntegrityV1.ts` owns the one shared producer/consumer algorithm; neither Adapter may implement a second digest path. Its canonical JSON bytes are byte-compatible with Harness `src/evolution_harness/hashing.py::canonical_json_bytes`: recursive JSON only, object keys ordered by Unicode code point, array order preserved, no insignificant whitespace, UTF-8 without ASCII escaping, JSON scalar escaping, and only Schema-valid safe integers for numeric fields. The HG5 plan must add cross-runtime golden fixtures, including non-ASCII strings and numeric boundaries, emitted by the fixed HG3 Harness builder; any unsupported number or byte mismatch is validation failure rather than normalization. Projection file bytes are those canonical JSON bytes plus exactly one LF, and `projectionContentDigest` is `sha256:<64 lowercase hex>` over those complete file bytes. The Receipt core is the closed ordered value `{schemaVersion, validatedAt, validatorIdentity, snapshotIdentity, projectionContentDigest, validationState}`; `receiptDigest` is `sha256:<64 lowercase hex>` over its canonical JSON bytes without LF, and `receiptId` is `growth-projection-validation:<the same 64 lowercase hex>`. `GrowthProjectionV1Adapter` is the sole producer of this Workbench-local Receipt: only after complete Schema, digest, watermark, and identity validation does it call the shared derivation function. The Receipt is non-authoritative; its local `validatedAt` never changes projection freshness or provider state. Validation failure returns a failed read branch and emits no PASS Receipt. The orthogonal `retrieval.transportState` and `retrieval.cacheState` report Adapter transport/cache truth. A retained snapshot keeps its original provider state, identity, and exact validation Receipt plus separate local cache freshness; a failed latest read cannot rewrite that projection state, fabricate an empty projection, or discard validation failure.
+`GrowthProjectionV1` is the complete validated Schema model, not a UI summary shape. Its own provider state remains `READY | PARTIAL | STALE | UNAVAILABLE | UNKNOWN` together with the exact watermark, Gate, coverage, closed counts ledger, and typed references. `growthProjectionValidationReceiptV1.ts` imports `GrowthProjectionSnapshotIdentity` from the projection model. `growthProjectionIntegrityV1.ts` owns the one shared producer/consumer algorithm; neither Adapter may implement a second digest path. Its canonical JSON bytes are byte-compatible with Harness `src/evolution_harness/hashing.py::canonical_json_bytes`: recursive JSON only, object keys ordered by Unicode code point, array order preserved, no insignificant whitespace, UTF-8 without ASCII escaping, JSON scalar escaping, and only Schema-valid safe integers for numeric fields. The HG5 plan must add cross-runtime golden fixtures, including non-ASCII strings and numeric boundaries, emitted by the fixed HG3 Harness builder; any unsupported number or byte mismatch is validation failure rather than normalization. Projection file bytes are those canonical JSON bytes plus exactly one LF, and `projectionContentDigest` is `sha256:<64 lowercase hex>` over those complete file bytes. The Validation Receipt core is the closed value `{schemaVersion, validatedAt, validatorIdentity, snapshotIdentity, projectionContentDigest, validationState}`; normalized `validatedAt` is RFC 3339 UTC, `receiptDigest` is `sha256:<64 lowercase hex>` over its canonical JSON bytes without LF, and `receiptId` is `growth-projection-validation:<the same 64 lowercase hex>`. `GrowthProjectionV1Adapter` is the sole producer of this Workbench-local Receipt: only after complete Schema, digest, watermark, and identity validation does it call the shared derivation function. The Receipt is non-authoritative; its local `validatedAt` never changes projection freshness or provider state. Validation failure returns a failed read branch and emits no PASS Receipt. The orthogonal `retrieval.transportState` and `retrieval.cacheState` report Adapter transport/cache truth. A retained snapshot keeps its original provider state, identity, and exact validation Receipt plus separate local cache freshness; a failed latest read cannot rewrite that projection state, fabricate an empty projection, or discard validation failure.
+
+The Cache Refresh request core is exactly `{schemaVersion, refreshId, idempotencyKey, precondition, snapshotIdentity, projectionContentDigest, validationReceiptId, validationReceiptDigest}`. `payloadHash` is `sha256:<64 lowercase hex>` over the shared canonical JSON bytes of that core without LF and is excluded from its own input. The Entry core is exactly `{schemaVersion, snapshotIdentity, validationReceipt, projection, cacheRevision, storedAt}` and `entryDigest` is the same SHA-256 format over that core without LF. The complete terminal Receipt core is exactly `{schemaVersion, request, outcome, resultingCacheRevision, storedAt, entryDigest}`; normalized `storedAt` is RFC 3339 UTC and `receiptDigest` is the same SHA-256 format over that core without LF. The stored Entry then adds the exact `entryDigest` and a closed Refresh Receipt Reference `{kind, refreshId, idempotencyKey, payloadHash, resultingCacheRevision, entryDigest, receiptDigest}`. The Entry digest excludes both its own digest and that reference, while the Receipt binds the Entry digest and the reference binds the Receipt digest, producing the acyclic chain `Entry core -> entryDigest -> terminal Receipt -> receiptDigest -> Entry reference`.
+
+Runtime decoders reject extra/missing fields, malformed digests, a recomputed PayloadHash or Entry/Receipt digest mismatch, any request/snapshot/Validation-Receipt mismatch, any Entry/Receipt/reference inequality, or any Receipt whose embedded request differs byte-for-byte from the caller-retained request. `deriveGrowthProjectionCacheCommitV1` is the sole producer of the paired Entry and terminal Receipt. `validateGrowthProjectionCacheRefreshReceiptV1` is the standalone historical-outcome validator: it needs the complete Receipt plus caller-retained request, recomputes the request PayloadHash and terminal Receipt digest, and never claims that the historical Entry is still current. `validateGrowthProjectionCacheEntryBindingV1` is the current-cache validator: it additionally recomputes the current Entry core/digest and checks the complete Entry Reference against that Receipt. These shared validators are the only acceptance paths.
 
 - [ ] **Step 3: Freeze the separate local cache Port**
 
@@ -844,6 +890,7 @@ import type {
 } from '../models/growthProjectionV1';
 import type {
   GrowthProjectionValidationReceiptV1,
+  Sha256DigestV1,
 } from '../models/growthProjectionValidationReceiptV1';
 
 export interface ValidatedGrowthProjectionSnapshot {
@@ -852,17 +899,59 @@ export interface ValidatedGrowthProjectionSnapshot {
   projection: Readonly<GrowthProjectionV1>;
 }
 
-export interface ValidatedGrowthProjectionCacheEntry
+export interface ValidatedGrowthProjectionCacheEntryCoreV1
   extends ValidatedGrowthProjectionSnapshot {
+  schemaVersion: 'workbench-growth-projection-cache-entry/v1';
   cacheRevision: string;
   storedAt: string;
 }
 
-export interface GrowthProjectionCacheReceiptReference {
+export interface GrowthProjectionCacheRefreshReceiptReferenceV1 {
   kind: 'GROWTH_PROJECTION_CACHE_REFRESH_RECEIPT';
   refreshId: string;
-  cacheRevision: string;
-  contentDigest: string;
+  idempotencyKey: string;
+  payloadHash: Sha256DigestV1;
+  resultingCacheRevision: string;
+  entryDigest: Sha256DigestV1;
+  receiptDigest: Sha256DigestV1;
+}
+
+export interface ValidatedGrowthProjectionCacheEntry
+  extends ValidatedGrowthProjectionCacheEntryCoreV1 {
+  entryDigest: Sha256DigestV1;
+  refreshReceiptReference: Readonly<
+    GrowthProjectionCacheRefreshReceiptReferenceV1
+  >;
+}
+
+export type GrowthProjectionCachePreconditionV1 =
+  | Readonly<{ state: 'EXPECT_EMPTY' }>
+  | Readonly<{ state: 'MATCH_REVISION'; cacheRevision: string }>;
+
+export interface GrowthProjectionCacheRefreshRequestCoreV1 {
+  schemaVersion: 'workbench-growth-projection-cache-refresh-request/v1';
+  refreshId: string;
+  idempotencyKey: string;
+  precondition: GrowthProjectionCachePreconditionV1;
+  snapshotIdentity: GrowthProjectionSnapshotIdentity;
+  projectionContentDigest: Sha256DigestV1;
+  validationReceiptId: `growth-projection-validation:${string}`;
+  validationReceiptDigest: Sha256DigestV1;
+}
+
+export interface GrowthProjectionCacheRefreshRequestV1
+  extends GrowthProjectionCacheRefreshRequestCoreV1 {
+  payloadHash: Sha256DigestV1;
+}
+
+export interface GrowthProjectionCacheRefreshReceiptV1 {
+  schemaVersion: 'workbench-growth-projection-cache-refresh-receipt/v1';
+  request: Readonly<GrowthProjectionCacheRefreshRequestV1>;
+  outcome: 'STORED';
+  resultingCacheRevision: string;
+  storedAt: string;
+  entryDigest: Sha256DigestV1;
+  receiptDigest: Sha256DigestV1;
 }
 
 export type GrowthProjectionCacheReadResult =
@@ -878,24 +967,39 @@ export type GrowthProjectionCacheReadResult =
 export type GrowthProjectionCacheRefreshResult =
   | Readonly<{
       state: 'STORED';
-      cacheRevision: string;
-      receiptReference: GrowthProjectionCacheReceiptReference;
+      receipt: Readonly<GrowthProjectionCacheRefreshReceiptV1>;
     }>
   | Readonly<{ state: 'REJECTED'; reasonCode: string }>
-  | Readonly<{ state: 'CONFLICT'; currentCacheRevision: string }>
+  | Readonly<{
+      state: 'CONFLICT';
+      conflictKind: 'CACHE_PRECONDITION';
+      currentCacheState:
+        | Readonly<{ state: 'EMPTY' }>
+        | Readonly<{ state: 'REVISION'; cacheRevision: string }>;
+    }>
+  | Readonly<{
+      state: 'CONFLICT';
+      conflictKind: 'IDEMPOTENCY';
+      requestedPayloadHash: Sha256DigestV1;
+      existingPayloadHash: Sha256DigestV1;
+    }>
   | Readonly<{
       state: 'UNKNOWN_OUTCOME';
-      refreshId: string;
-      idempotencyKey: string;
+      request: Readonly<GrowthProjectionCacheRefreshRequestV1>;
     }>;
 
 export type GrowthProjectionCacheReceiptLookup =
   | Readonly<{
       state: 'FOUND';
-      receiptReference: GrowthProjectionCacheReceiptReference;
+      receipt: Readonly<GrowthProjectionCacheRefreshReceiptV1>;
     }>
   | Readonly<{ state: 'NOT_FOUND' }>
-  | Readonly<{ state: 'CONFLICT'; reasonCode: string }>
+  | Readonly<{
+      state: 'CONFLICT';
+      reasonCode: string;
+      requestedPayloadHash: Sha256DigestV1;
+      existingPayloadHash?: Sha256DigestV1;
+    }>
   | Readonly<{ state: 'LOOKUP_UNAVAILABLE'; reasonCode: string }>
   | Readonly<{ state: 'LOOKUP_UNKNOWN'; reasonCode: string }>;
 
@@ -905,21 +1009,21 @@ export interface HarnessEvolutionCachePort {
   readLastValidated(): Promise<GrowthProjectionCacheReadResult>;
 
   refreshValidated(input: {
-    refreshId: string;
-    idempotencyKey: string;
-    payloadHash: string;
-    expectedCacheRevision?: string;
+    request: Readonly<GrowthProjectionCacheRefreshRequestV1>;
     snapshot: Readonly<ValidatedGrowthProjectionSnapshot>;
   }): Promise<GrowthProjectionCacheRefreshResult>;
 
   findRefreshReceipt(input: {
-    refreshId: string;
-    idempotencyKey: string;
+    request: Readonly<GrowthProjectionCacheRefreshRequestV1>;
   }): Promise<GrowthProjectionCacheReceiptLookup>;
 }
 ```
 
-`getGrowthProjection`, `readLastValidated`, and `findRefreshReceipt` are pure reads. On every `readLastValidated`, the Cache Adapter parses and Schema-validates the complete entry, recomputes the projection file digest and snapshot identity/watermark relation, and calls the shared Receipt validator against the complete Receipt and accepted validator identity. Only exact agreement may return `FOUND`. Any malformed entry, projection/Receipt/snapshot mismatch, forged digest, unsupported canonical value, or failed Receipt validation returns `INVALID` with no `entry`; the Read Adapter may form `LAST_VALIDATED_STALE` only from `FOUND`, never from `INVALID`, `UNAVAILABLE`, or `UNKNOWN`. `refreshValidated` is the only HG5 write: it performs the same shared validation, recomputes Schema/as-of/watermark and PayloadHash equality, verifies the complete validation Receipt identity/digest against those same bytes and validator, and accepts no caller-supplied cache Revision or storage time. Under one owner-controlled CAS lock, the Adapter generates `cacheRevision` and authoritative `storedAt`, atomically stores and durably rereads the entry, then returns a queryable local receipt. IdempotencyKey reuse with a different recomputed PayloadHash is conflict. `UNKNOWN_OUTCOME` retains both lookup keys; `NOT_FOUND`, `LOOKUP_UNAVAILABLE`, and `LOOKUP_UNKNOWN` all keep the refresh unresolved and forbid another refresh until a found authoritative Receipt or conflict resolves it. When capability is `CACHE_NOT_ENABLED`, refresh returns `REJECTED/CACHE_NOT_ENABLED` and creates no record. If Project Helm cannot prove the selected browser/local-host storage's atomicity, isolation, retention, and recovery semantics, capability remains disabled and the UI shows no fabricated last-known state.
+`getGrowthProjection`, `readLastValidated`, and `findRefreshReceipt` are pure reads. On every `readLastValidated`, one consistent read transaction parses and Schema-validates the complete Entry, recomputes the projection file and Entry digests plus snapshot identity/watermark relation, validates the complete Validation Receipt and accepted validator identity, resolves exactly one immutable terminal Refresh Receipt through `refreshReceiptReference`, and calls the shared Cache Receipt validator across the Entry, Receipt, embedded request, all digests, resulting Revision, and `storedAt`. Only complete equality may return `FOUND`. A missing, duplicate, invalid, or wrong-link Refresh Receipt; malformed Entry; projection/Receipt/snapshot mismatch; forged digest; unsupported canonical value; or failed Validation Receipt returns `INVALID` with no `entry`. The Read Adapter may form `LAST_VALIDATED_STALE` only from `FOUND`, never from `INVALID`, `UNAVAILABLE`, or `UNKNOWN`.
+
+`refreshValidated` is the only HG5 write. The Adapter strictly decodes and recomputes the closed request, complete projection, Validation Receipt, PayloadHash, Schema/as-of/watermark relation, and every digest before acquiring the storage transaction. `EXPECT_EMPTY` succeeds only when no current Entry exists; every update of an existing Entry requires `MATCH_REVISION` with the exact current Revision. There is no absent or wildcard precondition. Under one owner-controlled transactional CAS boundary, the Adapter first checks immutable Receipt indexes and the current Entry: exact replay of the same Refresh ID, IdempotencyKey, and PayloadHash returns the byte-identical existing terminal Receipt without writing; reuse of either identity with a different pair or PayloadHash is `IDEMPOTENCY` conflict; a cache-precondition mismatch is `CACHE_PRECONDITION` conflict. Otherwise the Adapter generates the resulting Revision and authoritative `storedAt`, calls the sole commit-pair derivation function, writes its complete Entry and appends its complete immutable terminal Refresh Receipt, and commits both in one atomic transaction. Neither object may become visible alone. Only after commit and a durable consistent reread resolve the Entry's unique Receipt Reference and revalidate the complete acyclic binding may the call return `STORED`.
+
+A crash before commit leaves neither Entry nor Receipt visible; an aborted transaction is a terminal rejection/conflict only when the storage proves abort. Loss of response or unknowable commit durability returns `UNKNOWN_OUTCOME` with the complete immutable request and permits lookup only. After restart, `findRefreshReceipt` accepts that complete caller-retained request, resolves exactly one immutable committed-index record, runs the standalone historical Receipt validator, and compares every embedded request field byte-for-byte; exact agreement returns the complete Receipt, changed payload or identity disagreement returns `CONFLICT`, and invalid, multiple, unavailable, or durability-unknown state never returns `FOUND`. A historical FOUND proves only that refresh's terminal outcome; after a later refresh it does not imply that its Entry is still current. Current cache truth always comes from `readLastValidated` and its separate Entry-binding validator. `NOT_FOUND`, `LOOKUP_UNAVAILABLE`, and `LOOKUP_UNKNOWN` keep the refresh unresolved and forbid blind replay until explicit recovery resolves it. Immutable Receipts and their committed unique-index identity cannot be garbage-collected while an outcome may remain unresolved. When capability is `CACHE_NOT_ENABLED`, refresh returns `REJECTED/CACHE_NOT_ENABLED` and creates no record. If Project Helm cannot prove the selected storage transaction's atomicity, isolation, durable commit/readback, unique indexes, Receipt retention, and restart recovery, capability remains disabled and the UI shows no fabricated last-known state.
 
 - [ ] **Step 4: Keep command capability disabled**
 
@@ -942,7 +1046,9 @@ pnpm exec playwright test
 git diff --check
 ```
 
-The HG5 plan must define exact fixtures for each validated projection provider state; transport unavailable/unknown with and without a retained snapshot; unsupported version, invalid Schema, identity mismatch, corrupt cache, changed watermark, forged validation Receipt or PayloadHash, caller attempts to supply/forge cache Revision or storage time, cache CAS conflict/interruption/unknown outcome and every unresolved lookup result, and cache-disabled behavior; plus command-disabled behavior. Cross-runtime golden tests must prove the Workbench integrity utility matches fixed Harness canonical projection bytes and all three digest/ID derivations. Cache contract tests must prove every read revalidates the complete entry, each corruption/mismatch returns `INVALID` without `entry`, and no invalid cache can produce `LAST_VALIDATED_STALE`. Tests must also prove retained valid snapshots keep their original provider state while local cache freshness becomes stale, every pure read has zero writes, and explicit refresh writes only the single authorized cache record and receipt. It must obtain Project Helm's required fixed-candidate review before claiming closure.
+The HG5 plan must define exact fixtures for each validated projection provider state; transport unavailable/unknown with and without a retained snapshot; unsupported version, invalid Schema, identity mismatch, corrupt cache, changed watermark, forged Validation Receipt, Cache Refresh Receipt, Entry digest, Receipt reference, or PayloadHash; missing, duplicate, wrong-link, and mismatched terminal Refresh Receipts; caller attempts to forge a resulting cache Revision or storage time; cache CAS conflict/interruption/unknown outcome and every unresolved lookup result; and cache-disabled behavior, plus command-disabled behavior. Cross-runtime golden tests must prove the Workbench integrity utility matches fixed Harness canonical projection bytes and every projection, Validation-Receipt, refresh-request, PayloadHash, Entry-digest, Cache-Receipt, Receipt-reference, and Receipt-digest derivation. Cache contract tests must prove every read resolves and revalidates the complete Entry-plus-terminal-Receipt binding, each corruption/mismatch returns `INVALID` without `entry`, and no invalid cache can produce `LAST_VALIDATED_STALE`.
+
+Refresh tests must cover first-create `EXPECT_EMPTY`, mandatory exact `MATCH_REVISION` for a nonempty Cache, exact replay returning identical Receipt bytes with zero writes, same Refresh ID or IdempotencyKey with changed pair/PayloadHash, forged/mismatched Receipt lookup, response loss followed by exact FOUND, an old valid Receipt still returning its historical outcome after a later refresh replaces the current Entry without claiming current-cache equivalence, and the complete crash matrix: before lock, after lock/before write, after Entry staging, after Receipt staging, before commit, commit outcome unknown, after commit/before response, concurrent CAS, process restart, and durable reread failure. Every pre-commit branch exposes neither object; every committed success exposes both; no partial state may return `FOUND`. Tests must also prove retained valid snapshots keep their original provider state while local cache freshness becomes stale, every pure read has zero writes, and explicit refresh performs only the one authorized atomic Entry-plus-Receipt transaction. It must obtain Project Helm's required fixed-candidate review before claiming closure.
 
 - [ ] **Step 7: Stop with read capability only**
 

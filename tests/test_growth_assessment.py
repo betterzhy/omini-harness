@@ -7,6 +7,17 @@ from pathlib import Path
 import pytest
 
 from evolution_harness.schema import SchemaStore, SchemaValidationError
+from evolution_harness.growth_assessment import (
+    GrowthAssessmentError,
+    build_growth_capture_result,
+    build_growth_receipt,
+    growth_assessment_id,
+    growth_assessment_key,
+    growth_request_digest,
+    normalize_growth_assessment_request,
+    parse_rfc3339,
+    validate_growth_receipt,
+)
 
 
 REQUEST_SCHEMA = "core/schemas/growth-assessment-request.schema.json"
@@ -752,3 +763,249 @@ def test_nested_protocol_objects_reject_unknown_fields(factory, path):
     elif factory is _scan_report:
         schema_path = SCAN_SCHEMA
     _assert_invalid(schema_path, value)
+
+
+def test_normalization_rejects_schema_invalid_request_before_identity_derivation():
+    """Break caught: a malformed request could acquire an identity."""
+    value = _r1_signal_request()
+    value["policyVersion"] = "growth-assessment-policy/v0"
+
+    with pytest.raises(GrowthAssessmentError, match="schema") as exc_info:
+        normalize_growth_assessment_request(_repository_root(), value)
+
+    assert exc_info.value.code == "ASSESSMENT_SCHEMA_INVALID"
+
+
+def test_normalization_canonicalizes_only_prose_newlines_and_set_order():
+    """Break caught: noncanonical user spelling changes a logical request."""
+    crlf = _r1_signal_request()
+    crlf["summary"] = "A reusable\r\nreview behavior was identified."
+    crlf["impact"] = "The behavior can\rprevent repeated authority mistakes."
+    crlf["evidence"][0]["distillation"] = "Independent\r\nreview found no blocking issue."
+    crlf["reasonCodes"] = ["CROSS_PROJECT_PATTERN", "REUSABLE_AGENT_BEHAVIOR"]
+    crlf["capabilityHints"] = [
+        "workflow:agent-design:architecture-review",
+        "skill:agent-design:architecture-review",
+    ]
+
+    lf = copy.deepcopy(crlf)
+    lf["summary"] = "A reusable\nreview behavior was identified."
+    lf["impact"] = "The behavior can\nprevent repeated authority mistakes."
+    lf["evidence"][0]["distillation"] = "Independent\nreview found no blocking issue."
+    lf["reasonCodes"] = list(reversed(lf["reasonCodes"]))
+    lf["capabilityHints"] = list(reversed(lf["capabilityHints"]))
+
+    normalized_crlf = normalize_growth_assessment_request(_repository_root(), crlf)
+    normalized_lf = normalize_growth_assessment_request(_repository_root(), lf)
+
+    assert normalized_crlf == normalized_lf
+    assert normalized_crlf["summary"] == "A reusable\nreview behavior was identified."
+    assert normalized_crlf["impact"] == "The behavior can\nprevent repeated authority mistakes."
+    assert normalized_crlf["evidence"][0]["distillation"] == "Independent\nreview found no blocking issue."
+    assert normalized_crlf["reasonCodes"] == ["CROSS_PROJECT_PATTERN", "REUSABLE_AGENT_BEHAVIOR"]
+    assert normalized_crlf["capabilityHints"] == [
+        "skill:agent-design:architecture-review",
+        "workflow:agent-design:architecture-review",
+    ]
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        ("source", "projectId"),
+        ("source", "sourceRevision", "head"),
+        ("source", "authoritySnapshotFingerprint"),
+        ("task", "taskId"),
+        ("riskLevel",),
+        ("assessedAt",),
+        ("evidence", 0, "reference"),
+        ("evidence", 0, "revision"),
+        ("evidence", 0, "digest"),
+    ],
+)
+def test_normalization_rejects_controls_outside_prose(path):
+    """Break caught: a structural value silently receives prose cleanup."""
+    value = _r1_signal_request()
+    target = value
+    for part in path[:-1]:
+        target = target[part]
+    target[path[-1]] += "\n"
+
+    with pytest.raises(GrowthAssessmentError) as exc_info:
+        normalize_growth_assessment_request(_repository_root(), value)
+
+    assert exc_info.value.code in {"ASSESSMENT_SCHEMA_INVALID", "GROWTH_ARGUMENT_INVALID"}
+
+
+@pytest.mark.parametrize("field", ["summary", "impact"])
+def test_normalization_rejects_prose_control_and_whitespace_only_required_text(field):
+    """Break caught: required prose can be semantically empty or contain controls."""
+    value = _r1_signal_request()
+    value[field] = "\t \n" if field == "summary" else "unsafe\x00control"
+
+    with pytest.raises(GrowthAssessmentError) as exc_info:
+        normalize_growth_assessment_request(_repository_root(), value)
+
+    assert exc_info.value.code == "GROWTH_ARGUMENT_INVALID"
+
+
+def test_normalization_sorts_evidence_by_the_full_authority_tuple():
+    """Break caught: equivalent evidence sets depend on caller order or omit tie breakers."""
+    value = _r1_signal_request()
+    first = _evidence(availability="OPAQUE")
+    first.update(
+        {
+            "kind": "OTHER",
+            "reference": "opaque://later",
+            "revision": "rev-b",
+            "digest": "sha256:" + "8" * 64,
+            "visibility": "SHARED",
+            "distillation": "Later evidence.",
+        }
+    )
+    second = copy.deepcopy(first)
+    second["digest"] = "sha256:" + "7" * 64
+    second["visibility"] = "PRIVATE"
+    second["distillation"] = "Earlier digest evidence."
+    value["evidence"] = [first, second, _evidence()]
+
+    normalized = normalize_growth_assessment_request(_repository_root(), value)
+
+    assert [item["kind"] for item in normalized["evidence"]] == [
+        "FIXED_REVIEW",
+        "OTHER",
+        "OTHER",
+    ]
+    assert normalized["evidence"][1]["digest"] == "sha256:" + "7" * 64
+    assert normalized["evidence"][2]["digest"] == "sha256:" + "8" * 64
+
+
+def test_normalization_rejects_duplicate_keyed_evidence_even_if_schema_items_differ():
+    """Break caught: conflicting claims share a stable evidence identity."""
+    value = _r1_signal_request()
+    conflicting = copy.deepcopy(value["evidence"][0])
+    conflicting["visibility"] = "PUBLIC"
+    conflicting["distillation"] = "Conflicting publication claim."
+    value["evidence"].append(conflicting)
+
+    with pytest.raises(GrowthAssessmentError) as exc_info:
+        normalize_growth_assessment_request(_repository_root(), value)
+
+    assert exc_info.value.code == "GROWTH_ARGUMENT_INVALID"
+
+
+def test_identity_uses_normalized_full_request_and_only_source_task_policy_for_key():
+    """Break caught: mutable assessment fields are omitted from assessment identity or key payload expands."""
+    normalized = normalize_growth_assessment_request(_repository_root(), _r1_signal_request())
+    changed_summary = copy.deepcopy(normalized)
+    changed_summary["summary"] = "A different reusable behavior was identified."
+    changed_summary = normalize_growth_assessment_request(_repository_root(), changed_summary)
+
+    assert growth_assessment_key(normalized) == growth_assessment_key(changed_summary)
+    assert growth_assessment_id(normalized) != growth_assessment_id(changed_summary)
+    assert growth_request_digest(normalized) != growth_request_digest(changed_summary)
+    assert growth_assessment_key(normalized).startswith("growth-key:")
+    assert growth_assessment_id(normalized).startswith("growth-assessment:")
+    assert growth_request_digest(normalized).startswith("sha256:")
+
+
+@pytest.mark.parametrize(
+    "path,replacement",
+    [
+        (("verdict",), "NO_SIGNAL"),
+        (("evidence",), [_evidence(availability="OPAQUE")]),
+        (("source", "sourceRevision", "head"), "f" * 40),
+        (("source", "authoritySnapshotFingerprint"), "sha256:" + "e" * 64),
+        (("source", "capabilityLockFingerprint"), "sha256:" + "f" * 64),
+        (("task", "attemptId"), "attempt:neutral-2"),
+        (("task", "gateId"), "gate:alternate"),
+        (("task", "candidate"), "6" * 40),
+    ],
+)
+def test_identity_changes_for_each_identity_bearing_request_field(path, replacement):
+    """Break caught: a specific protocol input is missing from derived content identity."""
+    base = _r2_no_signal_request()
+    if path[0] == "source" and path[1] in {
+        "authoritySnapshotFingerprint",
+        "capabilityLockFingerprint",
+    }:
+        base = _r1_signal_request()
+    if path[0] == "evidence":
+        replacement[0]["distillation"] = "An opaque follow-up confirms the same conclusion."
+    if path[0] == "verdict":
+        base = _r1_signal_request()
+    original = normalize_growth_assessment_request(_repository_root(), base)
+    changed = copy.deepcopy(original)
+    target = changed
+    for part in path[:-1]:
+        target = target[part]
+    target[path[-1]] = replacement
+    if path == ("verdict",):
+        changed["reasonCodes"] = ["PROJECT_LOCAL_ONLY"]
+    changed = normalize_growth_assessment_request(_repository_root(), changed)
+
+    assert growth_assessment_id(original) != growth_assessment_id(changed)
+    assert growth_request_digest(original) != growth_request_digest(changed)
+
+
+def test_request_schema_forbids_caller_supplied_identity_fields():
+    """Break caught: callers can choose a durable assessment identity."""
+    value = _r1_signal_request()
+    value["assessmentId"] = "growth-assessment:" + "0" * 24
+
+    with pytest.raises(GrowthAssessmentError) as exc_info:
+        normalize_growth_assessment_request(_repository_root(), value)
+
+    assert exc_info.value.code == "ASSESSMENT_SCHEMA_INVALID"
+
+
+def test_key_changes_for_source_task_policy_and_fixed_candidate_without_reordering_task_fields():
+    """Break caught: obligation fields are absent, or task order is rewritten before identity derivation."""
+    base = normalize_growth_assessment_request(_repository_root(), _r2_no_signal_request())
+    changed_policy = copy.deepcopy(base)
+    changed_policy["policyVersion"] = "other-policy"
+    changed_source = copy.deepcopy(base)
+    changed_source["source"]["projectId"] = "other-project"
+    changed_task = copy.deepcopy(base)
+    changed_task["task"]["candidate"] = "6" * 40
+
+    assert growth_assessment_key(base) != growth_assessment_key(changed_policy)
+    assert growth_assessment_key(base) != growth_assessment_key(changed_source)
+    assert growth_assessment_key(base) != growth_assessment_key(changed_task)
+    assert list(base["task"]) == ["taskId", "attemptId", "gateId", "candidate", "parent", "tree"]
+
+
+def test_timestamp_parser_normalizes_valid_offsets_and_rejects_calendar_and_offset_overflow():
+    """Break caught: timestamp identity accepts invalid instants or preserves offset spelling."""
+    assert parse_rfc3339("2026-09-01T12:30:45.123+08:00").isoformat() == "2026-09-01T04:30:45.123000+00:00"
+
+    for value in ["2026-02-30T12:30:45Z", "2026-09-01T12:30:45+24:00", "2026-09-01T12:30:45+08:60"]:
+        with pytest.raises(GrowthAssessmentError) as exc_info:
+            parse_rfc3339(value)
+        assert exc_info.value.code == "TIMESTAMP_INVALID"
+
+
+def test_receipt_and_capture_recompute_derived_identities_and_enforce_closed_branches():
+    """Break caught: stored identity fields or capture branch fields are trusted without recomputation."""
+    normalized = normalize_growth_assessment_request(_repository_root(), _r1_signal_request())
+    receipt = build_growth_receipt(normalized)
+    validated = validate_growth_receipt(_repository_root(), receipt)
+    result = build_growth_capture_result(normalized, receipt=receipt)
+    deferred = build_growth_capture_result(normalized, deferred_reason="INBOX_LOCKED")
+
+    assert validated == receipt
+    assert result["assessmentId"] == growth_assessment_id(normalized)
+    assert result["requestDigest"] == growth_request_digest(normalized)
+    assert deferred["growthCaptureGate"] == "DEFERRED"
+    assert deferred["assessmentKey"] == growth_assessment_key(normalized)
+    assert "receipt" not in deferred
+
+    tampered = copy.deepcopy(receipt)
+    tampered["requestDigest"] = "sha256:" + "0" * 64
+    with pytest.raises(GrowthAssessmentError) as exc_info:
+        validate_growth_receipt(_repository_root(), tampered)
+    assert exc_info.value.code == "REQUEST_DIGEST_MISMATCH"
+
+    with pytest.raises(GrowthAssessmentError) as exc_info:
+        build_growth_capture_result(normalized, deferred_reason="STATE_ROOT_UNSAFE")
+    assert exc_info.value.code == "GROWTH_ARGUMENT_INVALID"

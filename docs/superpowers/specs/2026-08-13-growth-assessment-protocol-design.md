@@ -6,6 +6,12 @@ This document materializes the user-approved direction for deterministic Agent g
 
 The design is approved at the conceptual level. It does not implement the protocol, install a Skill, enable a Hook, create a scheduled task, modify Pay-Nexus, import any Experience, or authorize Candidate creation or promotion.
 
+The exact public machine contract for the four Phase 1 Schemas is frozen by
+`docs/superpowers/specs/2026-09-01-growth-assessment-protocol-v1-schema-contract.md`.
+That user-approved Schema Authority controls wherever this conceptual design is
+less specific or differs about fields, bounds, branches, normalization,
+transport limits, error envelopes, or scan invariants.
+
 ## Decision
 
 Add a **Growth Assessment Protocol (GAP)** to Agent Evolution Harness as a governed intake boundary, not as a Skill.
@@ -198,6 +204,7 @@ assessedAt
 `reasonCodes` is a unique, sorted subset of:
 
 - `PROJECT_LOCAL_ONLY`;
+- `ACCIDENTAL`;
 - `INSUFFICIENT_EVIDENCE`;
 - `ALREADY_COVERED`;
 - `NON_TRANSFERABLE`;
@@ -420,7 +427,7 @@ It also accepts an explicit request file for testing and controlled automation. 
 ```text
 Explicit user command or later scheduled task
   -> open safe state root read-only
-  -> no-follow enumerate only inbox/*.json
+  -> no-follow enumerate direct Inbox entries; parse only expected *.json receipts
   -> validate filename, file type, permissions, schema, key, id and digest
   -> emit deterministic report
   -> no import, mutation, deletion, move, rewrite, or source-project access
@@ -501,6 +508,7 @@ A later Hook may verify or remind that an R2 task report contains a valid receip
 | Corrupt existing receipt | Scan/assess fail closed; no automatic repair |
 | Inbox unavailable or non-blocking lock busy | Return validated `growth-capture-result/v1` with `DEFERRED`, key/ID/digest and retry instruction; never claim receipt PASS |
 | Scanner encounters invalid record | Report `INVALID_RECEIPT`, continue only when safe to enumerate remaining entries |
+| Scanner observes more than 10,000 direct Inbox entries | Return `SCAN_LIMIT_EXCEEDED`; emit no partial Scan Report and write nothing |
 
 ## Compatibility
 

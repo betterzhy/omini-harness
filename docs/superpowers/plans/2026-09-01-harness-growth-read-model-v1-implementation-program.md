@@ -193,9 +193,16 @@ If the repository has changed these dependencies, stop and revise the HG1 plan r
 
 HG1 preserves the approved contract versions exactly: `growth-assessment-request/v1`, `growth-assessment-receipt/v1`, `growth-capture-result/v1`, and `growth-scan-report/v1`.
 
+The exact HG1 Schema Authority is
+`docs/superpowers/specs/2026-09-01-growth-assessment-protocol-v1-schema-contract.md`.
+It controls the four public contracts, normalization/transport responsibility
+boundary, strict input rules, error-envelope shape, persistence projection, and
+scan invariants wherever the earlier conceptual design or Phase 1 plan is less
+specific.
+
 - [ ] **Step 1: Implement strict protocol Schemas using the existing HG1 plan Task 1**
 
-Run its failing schema tests before creating the four Schema files. Require Draft 2020-12, `additionalProperties: false`, bounded fields, and closed conditional branches.
+Run its failing schema tests before creating the four Schema files. Require Draft 2020-12, `additionalProperties: false`, bounded fields, closed conditional branches, both uniform Git object formats, explicit `ACCIDENTAL` handling, and the exact request/Receipt/result/report shapes in the Schema Authority.
 
 - [ ] **Step 2: Implement pure normalization and identity using the existing HG1 plan Task 2**
 

@@ -8,6 +8,8 @@
 
 **Tech Stack:** Python 3.12+, standard library, PyYAML, jsonschema Draft 2020-12, pytest, existing `SchemaStore`, `canonical_json_bytes`, `sha256_bytes`, `AnchoredRoot`, project registration, authority snapshot, and exact-lock validation.
 
+**Normative Schema Authority:** `docs/superpowers/specs/2026-09-01-growth-assessment-protocol-v1-schema-contract.md` closes the exact fields, constants, bounds, branches, normalization ownership, transport limits, error envelopes, and scan invariants for Tasks 1–5. It controls wherever this historical plan is less specific or conflicts about those four public contracts.
+
 ## Risk and review route
 
 This is an `R2` implementation because it changes governance contracts, schemas, cross-project provenance, owner-only durable state, path handling, concurrent persistence, and CLI behavior.
@@ -127,6 +129,7 @@ INBOX_LOCKED
 RECEIPT_UNSAFE
 RECEIPT_CORRUPT
 RECEIPT_NOT_FOUND
+SCAN_LIMIT_EXCEEDED
 TIMESTAMP_INVALID
 ```
 
@@ -205,10 +208,12 @@ Add neutral factories for a valid R1 `SIGNAL` and R2 `NO_SIGNAL` request. Write 
 - `NO_SIGNAL` without an allowed no-signal reason;
 - R1 trigger outside the R1 set and R2 trigger outside the R2 set;
 - malformed Git head/tree and SHA-256 values;
+- mixed 40/64-hex Git identities within one source revision or fixed Candidate tuple;
 - fixed-candidate identities that are only partially present;
 - invalid RFC 3339 timestamps, including offset-hour/minute overflow;
 - unknown receipt/report fields and invalid status/disposition combinations.
 - invalid capture-result combinations, including `PASS` without a receipt, `DEFERRED` with a receipt, missing key/ID/digest, or a non-retryable reason presented as deferred.
+- explicit acceptance of `ACCIDENTAL` only in the `NO_SIGNAL` branch and rejection of every mixed positive/negative reason set.
 
 Run:
 
@@ -224,6 +229,8 @@ Expected: FAIL because the four schemas do not exist.
 - [ ] **Step 2: Implement the four schemas**
 
 Use Draft 2020-12, repository-local `$id` values, strict `required`, bounded arrays/strings, `uniqueItems: true`, conditional `allOf`, and `additionalProperties: false` at every object level.
+
+Implement the exact field tables and closed branches from the normative Schema Authority. Schema enforces uniqueness; Task 2 normalization enforces lexicographic ordering and runtime-only semantic checks.
 
 Keep request source modes explicit:
 
@@ -487,7 +494,7 @@ Tests must cover:
 - a complete published receipt is always readable and identity-valid;
 - an existing corrupt or identity-mismatched record is never overwritten or repaired;
 - no operation removes, truncates, replaces, hard-links from, or renames an existing final receipt;
-- scan enumerates only direct `inbox/*.json` entries through an anchored directory descriptor and rejects symlinks, subdirectories, special files, unsafe names, and unsafe modes;
+- scan enumerates every direct `inbox/` entry through an anchored directory descriptor, parses only expected `*.json` receipt names, and safely reports symlinks, subdirectories, special files, unsafe names, and unsafe modes as invalid entries;
 - scan has zero writes, including no index, mtime update by application logic, quarantine move, or repair.
 
 Use real subprocesses for the concurrent cases. Do not rely only on threads.
@@ -611,13 +618,13 @@ Implementation order for `assess` is mandatory:
 
 This order proves invalid/untrusted source input cannot create Inbox state.
 
-Bound stdin and request-file bytes before YAML parsing. Use `yaml.safe_load` only. Reject multiple YAML documents and non-object roots.
+Bound stdin and request-file bytes at 65,536 bytes before parsing. Use a strict UTF-8 JSON/YAML single-document loader that rejects duplicate keys, aliases, anchors, merge keys, multiple documents, non-string mapping keys, and non-object roots. Plain `yaml.safe_load` without those controls is insufficient.
 
 Open an explicit request file as one no-follow regular file and read its bounded bytes once. Do not follow a request-file symlink or reread the path after validation.
 
 `scan` and `receipt` do not accept `--source` and must never load project registration or enumerate source repositories.
 
-Catch only `STATE_ROOT_UNAVAILABLE` and `INBOX_LOCKED` at the `assess` orchestration boundary and return a validated `growth-capture-result/v1` with `growthCaptureGate: DEFERRED`. All other exceptions continue through the normal `ok=false` error envelope with `growthCaptureGate: FAIL` where applicable.
+Catch only `STATE_ROOT_UNAVAILABLE` and `INBOX_LOCKED` at the `assess` orchestration boundary and return a validated `growth-capture-result/v1` with `growthCaptureGate: DEFERRED`. All other `growth assess` exceptions continue through the normal `ok=false` error envelope whose data contains exactly `code`, a non-sensitive `message`, and `growthCaptureGate: FAIL`. The capture-result Schema has no FAIL branch. Receipt and scan operational errors do not claim a new assessment capture Gate. A completed scan with invalid entries returns its full typed report with `gate: FAIL`; a 10,001st direct entry returns `SCAN_LIMIT_EXCEEDED` with no partial report.
 
 - [ ] **Step 3: Run focused CLI and compatibility tests**
 

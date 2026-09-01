@@ -444,9 +444,13 @@ def test_capture_result_closes_pass_and_deferred_branches():
     _assert_invalid(CAPTURE_SCHEMA, value)
 
 
-def test_capture_pass_status_matches_receipt_status():
-    value = _capture_pass(status="RECORDED")
-    value["receipt"]["status"] = "DUPLICATE"
+@pytest.mark.parametrize(
+    ("outer_status", "receipt_status"),
+    [("RECORDED", "DUPLICATE"), ("DUPLICATE", "RECORDED")],
+)
+def test_capture_pass_status_matches_receipt_status(outer_status, receipt_status):
+    value = _capture_pass(status=outer_status)
+    value["receipt"]["status"] = receipt_status
     _assert_invalid(CAPTURE_SCHEMA, value)
 
 
@@ -474,13 +478,14 @@ def test_scan_report_closes_valid_and_invalid_record_branches():
     _assert_invalid(SCAN_SCHEMA, value)
 
 
-def test_scan_record_enforces_verdict_disposition_pairing():
+@pytest.mark.parametrize(
+    ("verdict", "disposition"),
+    [("SIGNAL", "NO_ACTION"), ("NO_SIGNAL", "HUMAN_TRIAGE_REQUIRED")],
+)
+def test_scan_record_enforces_verdict_disposition_pairing(verdict, disposition):
     value = _scan_report()
-    value["records"][0]["disposition"] = "NO_ACTION"
-    _assert_invalid(SCAN_SCHEMA, value)
-
-    value = _scan_report()
-    value["records"][0]["riskLevel"] = "R2"
+    value["records"][0]["verdict"] = verdict
+    value["records"][0]["disposition"] = disposition
     _assert_invalid(SCAN_SCHEMA, value)
 
 
@@ -596,10 +601,14 @@ def test_scan_accepts_each_r2_trigger(trigger):
     _validate(SCAN_SCHEMA, value)
 
 
-def test_scan_rejects_r1_trigger_for_r2_record():
+@pytest.mark.parametrize(
+    ("risk_level", "trigger"),
+    [("R1", "FORMAL_CLOSURE"), ("R2", "HUMAN_CORRECTION")],
+)
+def test_scan_rejects_cross_risk_triggers(risk_level, trigger):
     value = _scan_report()
-    value["records"][0]["riskLevel"] = "R2"
-    value["records"][0]["trigger"] = "HUMAN_CORRECTION"
+    value["records"][0]["riskLevel"] = risk_level
+    value["records"][0]["trigger"] = trigger
     _assert_invalid(SCAN_SCHEMA, value)
 
 
@@ -696,6 +705,13 @@ def test_evidence_requires_each_declared_field(field):
 def test_retry_instruction_requires_each_declared_field(field):
     value = _capture_deferred()
     del value["retryInstruction"][field]
+    _assert_invalid(CAPTURE_SCHEMA, value)
+
+
+@pytest.mark.parametrize("field", list(_capture_deferred()))
+def test_deferred_capture_requires_each_declared_field(field):
+    value = _capture_deferred()
+    del value[field]
     _assert_invalid(CAPTURE_SCHEMA, value)
 
 

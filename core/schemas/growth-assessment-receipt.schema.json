@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-evolution.local/core/schemas/growth-assessment-receipt.schema.json",
+  "$defs": {
+    "assessmentKey": {"type": "string", "pattern": "^growth-key:[0-9a-f]{24}$"},
+    "assessmentId": {"type": "string", "pattern": "^growth-assessment:[0-9a-f]{24}$"},
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+  },
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "policyVersion",
+    "assessmentKey",
+    "assessmentId",
+    "requestDigest",
+    "status",
+    "growthCaptureGate",
+    "assessment"
+  ],
+  "properties": {
+    "schemaVersion": {"const": "growth-assessment-receipt/v1"},
+    "policyVersion": {"const": "growth-assessment-policy/v1"},
+    "assessmentKey": {"$ref": "#/$defs/assessmentKey"},
+    "assessmentId": {"$ref": "#/$defs/assessmentId"},
+    "requestDigest": {"$ref": "#/$defs/digest"},
+    "status": {"enum": ["RECORDED", "DUPLICATE"]},
+    "growthCaptureGate": {"const": "PASS"},
+    "assessment": {"$ref": "https://agent-evolution.local/core/schemas/growth-assessment-request.schema.json"}
+  },
+  "additionalProperties": false
+}

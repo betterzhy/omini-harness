@@ -1,0 +1,146 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-evolution.local/core/schemas/growth-scan-report.schema.json",
+  "$defs": {
+    "projectId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[a-z0-9][a-z0-9._-]*$"
+    },
+    "capabilityId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^(principle|framework|skill|workflow):[a-z0-9][a-z0-9._-]*:[a-z0-9][a-z0-9._-]*$"
+    },
+    "assessmentKey": {"type": "string", "pattern": "^growth-key:[0-9a-f]{24}$"},
+    "assessmentId": {"type": "string", "pattern": "^growth-assessment:[0-9a-f]{24}$"},
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "timestamp": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?(?:Z|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)$"
+    },
+    "validRecord": {
+      "type": "object",
+      "required": [
+        "assessmentKey",
+        "assessmentId",
+        "requestDigest",
+        "projectId",
+        "sourceKind",
+        "riskLevel",
+        "trigger",
+        "verdict",
+        "visibilityCeiling",
+        "capabilityHints",
+        "disposition"
+      ],
+      "properties": {
+        "assessmentKey": {"$ref": "#/$defs/assessmentKey"},
+        "assessmentId": {"$ref": "#/$defs/assessmentId"},
+        "requestDigest": {"$ref": "#/$defs/digest"},
+        "projectId": {"$ref": "#/$defs/projectId"},
+        "sourceKind": {"enum": ["REGISTERED_PROJECT", "HARNESS_SELF"]},
+        "riskLevel": {"enum": ["R1", "R2"]},
+        "trigger": {
+          "enum": [
+            "HUMAN_CORRECTION",
+            "REPEATED_FRICTION",
+            "SHARED_GUIDANCE_CONFLICT",
+            "CONTRACT_AMBIGUITY",
+            "VERIFICATION_GAP",
+            "FORMAL_CLOSURE",
+            "FIXED_CANDIDATE_REVIEW",
+            "GATE_FAILURE",
+            "AUTHORITY_OR_GOVERNANCE_CHANGE",
+            "SECURITY_RECOVERY_OR_CONCURRENCY_FINDING",
+            "CONTRACT_SCHEMA_OR_PROJECTION_CHANGE"
+          ]
+        },
+        "verdict": {"enum": ["SIGNAL", "NO_SIGNAL"]},
+        "visibilityCeiling": {"enum": ["NONE", "PRIVATE", "PROJECT", "SHARED", "PUBLIC"]},
+        "capabilityHints": {
+          "type": "array",
+          "maxItems": 20,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/capabilityId"}
+        },
+        "disposition": {"enum": ["HUMAN_TRIAGE_REQUIRED", "NO_ACTION"]}
+      },
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {"required": ["riskLevel"], "properties": {"riskLevel": {"const": "R1"}}},
+          "then": {
+            "properties": {
+              "trigger": {"enum": ["HUMAN_CORRECTION", "REPEATED_FRICTION", "SHARED_GUIDANCE_CONFLICT", "CONTRACT_AMBIGUITY", "VERIFICATION_GAP"]}
+            }
+          }
+        },
+        {
+          "if": {"required": ["riskLevel"], "properties": {"riskLevel": {"const": "R2"}}},
+          "then": {
+            "properties": {
+              "trigger": {"enum": ["FORMAL_CLOSURE", "FIXED_CANDIDATE_REVIEW", "GATE_FAILURE", "AUTHORITY_OR_GOVERNANCE_CHANGE", "SECURITY_RECOVERY_OR_CONCURRENCY_FINDING", "CONTRACT_SCHEMA_OR_PROJECTION_CHANGE"]}
+            }
+          }
+        },
+        {
+          "if": {"required": ["verdict"], "properties": {"verdict": {"const": "SIGNAL"}}},
+          "then": {"properties": {"disposition": {"const": "HUMAN_TRIAGE_REQUIRED"}}}
+        },
+        {
+          "if": {"required": ["verdict"], "properties": {"verdict": {"const": "NO_SIGNAL"}}},
+          "then": {"properties": {"disposition": {"const": "NO_ACTION"}}}
+        }
+      ]
+    },
+    "invalidRecord": {
+      "type": "object",
+      "required": ["entryNameDigest", "errorCode", "disposition"],
+      "properties": {
+        "entryNameDigest": {"$ref": "#/$defs/digest"},
+        "errorCode": {"enum": ["RECEIPT_UNSAFE", "RECEIPT_CORRUPT"]},
+        "disposition": {"const": "INVALID_RECEIPT"}
+      },
+      "additionalProperties": false
+    },
+    "counts": {
+      "type": "object",
+      "required": ["totalEntries", "validRecords", "invalidRecords", "signal", "noSignal", "humanTriageRequired", "noAction"],
+      "properties": {
+        "totalEntries": {"type": "integer", "minimum": 0, "maximum": 10000},
+        "validRecords": {"type": "integer", "minimum": 0, "maximum": 10000},
+        "invalidRecords": {"type": "integer", "minimum": 0, "maximum": 10000},
+        "signal": {"type": "integer", "minimum": 0, "maximum": 10000},
+        "noSignal": {"type": "integer", "minimum": 0, "maximum": 10000},
+        "humanTriageRequired": {"type": "integer", "minimum": 0, "maximum": 10000},
+        "noAction": {"type": "integer", "minimum": 0, "maximum": 10000}
+      },
+      "additionalProperties": false
+    }
+  },
+  "type": "object",
+  "required": ["schemaVersion", "policyVersion", "asOf", "stateRootIdentity", "records", "counts", "gate"],
+  "properties": {
+    "schemaVersion": {"const": "growth-scan-report/v1"},
+    "policyVersion": {"const": "growth-assessment-policy/v1"},
+    "asOf": {"$ref": "#/$defs/timestamp"},
+    "stateRootIdentity": {"$ref": "#/$defs/digest"},
+    "records": {
+      "type": "array",
+      "maxItems": 10000,
+      "uniqueItems": true,
+      "items": {
+        "oneOf": [
+          {"$ref": "#/$defs/validRecord"},
+          {"$ref": "#/$defs/invalidRecord"}
+        ]
+      }
+    },
+    "counts": {"$ref": "#/$defs/counts"},
+    "gate": {"enum": ["PASS", "FAIL"]}
+  },
+  "additionalProperties": false
+}

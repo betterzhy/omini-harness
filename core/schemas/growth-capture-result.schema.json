@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-evolution.local/core/schemas/growth-capture-result.schema.json",
+  "$defs": {
+    "assessmentKey": {"type": "string", "pattern": "^growth-key:[0-9a-f]{24}$"},
+    "assessmentId": {"type": "string", "pattern": "^growth-assessment:[0-9a-f]{24}$"},
+    "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "pass": {
+      "type": "object",
+      "required": ["schemaVersion", "growthCaptureGate", "status", "assessmentKey", "assessmentId", "requestDigest", "receipt"],
+      "properties": {
+        "schemaVersion": {"const": "growth-capture-result/v1"},
+        "growthCaptureGate": {"const": "PASS"},
+        "status": {"enum": ["RECORDED", "DUPLICATE"]},
+        "assessmentKey": {"$ref": "#/$defs/assessmentKey"},
+        "assessmentId": {"$ref": "#/$defs/assessmentId"},
+        "requestDigest": {"$ref": "#/$defs/digest"},
+        "receipt": {"$ref": "https://agent-evolution.local/core/schemas/growth-assessment-receipt.schema.json"}
+      },
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {"required": ["status"], "properties": {"status": {"const": "RECORDED"}}},
+          "then": {"properties": {"receipt": {"properties": {"status": {"const": "RECORDED"}}}}}
+        },
+        {
+          "if": {"required": ["status"], "properties": {"status": {"const": "DUPLICATE"}}},
+          "then": {"properties": {"receipt": {"properties": {"status": {"const": "DUPLICATE"}}}}}
+        }
+      ]
+    },
+    "retryInstruction": {
+      "type": "object",
+      "required": ["command", "requiresSameRequestDigest", "requiresSameSourceContext"],
+      "properties": {
+        "command": {"const": "growth assess"},
+        "requiresSameRequestDigest": {"const": true},
+        "requiresSameSourceContext": {"const": true}
+      },
+      "additionalProperties": false
+    },
+    "deferred": {
+      "type": "object",
+      "required": ["schemaVersion", "growthCaptureGate", "status", "assessmentKey", "assessmentId", "requestDigest", "deferredReason", "retryInstruction"],
+      "properties": {
+        "schemaVersion": {"const": "growth-capture-result/v1"},
+        "growthCaptureGate": {"const": "DEFERRED"},
+        "status": {"const": "DEFERRED"},
+        "assessmentKey": {"$ref": "#/$defs/assessmentKey"},
+        "assessmentId": {"$ref": "#/$defs/assessmentId"},
+        "requestDigest": {"$ref": "#/$defs/digest"},
+        "deferredReason": {"enum": ["STATE_ROOT_UNAVAILABLE", "INBOX_LOCKED"]},
+        "retryInstruction": {"$ref": "#/$defs/retryInstruction"}
+      },
+      "additionalProperties": false
+    }
+  },
+  "oneOf": [
+    {"$ref": "#/$defs/pass"},
+    {"$ref": "#/$defs/deferred"}
+  ]
+}

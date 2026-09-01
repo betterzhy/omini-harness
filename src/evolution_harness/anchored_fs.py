@@ -175,6 +175,96 @@ class AnchoredRoot:
                 except FileNotFoundError:
                     pass
 
+    @contextmanager
+    def _directory(self, relative: str) -> Iterator[int]:
+        parts = self._parts(relative)
+        current = os.dup(self._descriptor)
+        try:
+            for part in parts:
+                try:
+                    following = os.open(part, _DIRECTORY_FLAGS, dir_fd=current)
+                except OSError as exc:
+                    raise AnchoredPathError(f"anchored directory is unsafe: {relative}") from exc
+                os.close(current)
+                current = following
+            yield current
+        finally:
+            os.close(current)
+
+    @staticmethod
+    def _same_inode(descriptor: int, directory: int, name: str) -> bool:
+        opened = os.fstat(descriptor)
+        try:
+            named = os.stat(name, dir_fd=directory, follow_symlinks=False)
+        except FileNotFoundError:
+            return False
+        return opened.st_dev == named.st_dev and opened.st_ino == named.st_ino
+
+    def publish_bytes_no_replace(
+        self,
+        staging_directory: str,
+        destination: str,
+        data: bytes,
+        *,
+        mode: int = 0o600,
+    ) -> None:
+        """Publish one complete staged inode to an absent destination name."""
+        if mode & 0o077:
+            raise AnchoredPathError("anchored staged file mode is not owner-only")
+        with self._directory(staging_directory) as staging:
+            with self._parent(destination) as (destination_directory, destination_name):
+                if os.fstat(staging).st_dev != os.fstat(destination_directory).st_dev:
+                    raise AnchoredPathError("anchored staging and destination are not on the same device")
+                staging_name = f".staged-{uuid.uuid4().hex}.part"
+                descriptor = -1
+                staging_removed = False
+                try:
+                    descriptor = os.open(
+                        staging_name,
+                        os.O_WRONLY | os.O_CREAT | os.O_EXCL | _NOFOLLOW,
+                        mode,
+                        dir_fd=staging,
+                    )
+                    os.fchmod(descriptor, mode)
+                    opened = os.fstat(descriptor)
+                    if not stat.S_ISREG(opened.st_mode) or stat.S_IMODE(opened.st_mode) != mode:
+                        raise AnchoredPathError("anchored staging file is unsafe")
+                    view = memoryview(data)
+                    while view:
+                        written = os.write(descriptor, view)
+                        if written <= 0:
+                            raise AnchoredPathError("anchored staged write made no progress")
+                        view = view[written:]
+                    os.fsync(descriptor)
+                    if not self._same_inode(descriptor, staging, staging_name):
+                        raise AnchoredPathError("anchored staging inode changed before publication")
+                    os.link(
+                        staging_name,
+                        destination_name,
+                        src_dir_fd=staging,
+                        dst_dir_fd=destination_directory,
+                        follow_symlinks=False,
+                    )
+                    os.fsync(destination_directory)
+                    if not self._same_inode(descriptor, staging, staging_name):
+                        raise AnchoredPathError("anchored staging inode changed after publication")
+                    os.unlink(staging_name, dir_fd=staging)
+                    staging_removed = True
+                    os.fsync(staging)
+                except AnchoredPathError:
+                    raise
+                except OSError as exc:
+                    raise AnchoredPathError(f"anchored no-replace publication failed: {destination}") from exc
+                finally:
+                    if descriptor >= 0:
+                        if not staging_removed and self._same_inode(descriptor, staging, staging_name):
+                            try:
+                                os.unlink(staging_name, dir_fd=staging)
+                                os.fsync(staging)
+                            except OSError:
+                                pass
+                        os.close(descriptor)
+
     def unlink(self, relative: str, *, missing_ok: bool = False) -> None:
         try:
             with self._parent(relative) as (parent, name):

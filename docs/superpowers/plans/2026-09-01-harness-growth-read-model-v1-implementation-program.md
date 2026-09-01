@@ -56,6 +56,8 @@ This program plan is intentionally not a substitute for the five reserved phase 
 - Read: `docs/superpowers/specs/2026-08-13-growth-assessment-protocol-design.md`
 - Read: `docs/superpowers/plans/2026-08-13-growth-assessment-protocol-phase-1.md`
 - Read: `docs/superpowers/specs/2026-09-01-harness-growth-read-model-v1-design.md`
+- Read: `src/evolution_harness/schema.py`
+- Read: `src/evolution_harness/registry.py`
 - No production or test files change during reconciliation.
 
 **Interfaces:**
@@ -112,7 +114,7 @@ tests/test_growth_cli.py
 README.md
 ```
 
-Only an already-existing deterministic Schema inventory proven by a failing generated check may be added. `feedback.py`, `learning.py`, existing Experience/Candidate/Eval/ledger records, Project Helm, target projects, and operational Inbox data remain excluded.
+The current repository has no separately maintained deterministic Schema inventory: `SchemaStore` discovers `**/*.schema.json`, and the generated registries do not enumerate core protocol Schemas. Therefore `registry.py`, generated registry bytes, and any inventory file are excluded from HG1. If the selected future execution base changes that fact or a baseline generated check requires another path, reconciliation returns `WRITESET_DRIFT` and stops to revise and reapprove the plan; execution never adds the path dynamically. `feedback.py`, `learning.py`, existing Experience/Candidate/Eval/ledger records, Project Helm, target projects, and operational Inbox data remain excluded.
 
 - [ ] **Step 5: Run the fresh HG1 baseline Gate**
 
@@ -623,7 +625,9 @@ HG4 does not authorize Project Helm code, project registration, Hook/scheduler i
 - Proposed Create: `src/features/harness/ports/HarnessEvolutionReadPort.ts`
 - Proposed Create: `src/features/harness/ports/HarnessEvolutionCachePort.ts`
 - Proposed Create: `src/features/harness/models/growthProjectionV1.ts`
+- Proposed Create: `src/features/harness/models/growthProjectionValidationReceiptV1.ts`
 - Proposed Create: `src/features/harness/models/growthProjectionCacheV1.ts`
+- Proposed Create: `src/features/harness/integrity/growthProjectionIntegrityV1.ts`
 - Proposed Create: `src/features/harness/adapters/GrowthProjectionV1Adapter.ts`
 - Proposed Create: `src/features/harness/adapters/GrowthProjectionCacheAdapter.ts`
 - Proposed Create: `src/features/harness/fixtures/growthProjectionV1.ts`
@@ -649,6 +653,8 @@ HG4 does not authorize Project Helm code, project registration, Hook/scheduler i
 - Proposed Test: `tests/contracts/harness-evolution-read-port.test.ts`
 - Proposed Test: `tests/contracts/harness-evolution-cache-port.test.ts`
 - Proposed Test: `tests/contracts/growth-projection-v1-adapter.test.ts`
+- Proposed Test: `tests/contracts/growth-projection-validation-receipt.test.ts`
+- Proposed Test: `tests/contracts/growth-projection-integrity.test.ts`
 - Proposed Test: `tests/contracts/growth-projection-cache-adapter.test.ts`
 - Proposed Test: `tests/contracts/harness-evolution-page.test.tsx`
 - Proposed Test: `tests/contracts/harness-needs-you-projection.test.tsx`
@@ -663,18 +669,85 @@ HG4 does not authorize Project Helm code, project registration, Hook/scheduler i
 
 - [ ] **Step 1: Migrate and review Project Helm Authority before code**
 
-The current conceptual `HarnessEvolutionPort` mixes read and write methods. The HG5 Authority change must split or version the read capability so a read Adapter cannot imply commands exist. Update the Harness Evolution rows in `16-Knowledge-Workspace-Page-State-Matrix-v0.1.csv`: request/revise/rerun/adoption operations remain local proposals or unavailable in HG5, and no row may imply an enabled formal Harness command. Authority must also name the Workbench-local cache owner, storage mechanism, retention/freshness rule, and the exact pure-read versus explicit-refresh boundary.
+The current conceptual `HarnessEvolutionPort` mixes read and write methods. The HG5 Authority change must split or version the read capability so a read Adapter cannot imply commands exist. Update the Harness Evolution rows in `16-Knowledge-Workspace-Page-State-Matrix-v0.1.csv`: request/revise/rerun/adoption operations remain local proposals or unavailable in HG5, and no row may imply an enabled formal Harness command. Authority must also name the Workbench-local cache owner, storage mechanism, retention/freshness rule, and the exact pure-read versus explicit-refresh boundary. It must define `workbench-growth-projection-validation-receipt/v1` as a non-authoritative Workbench-local record, name `GrowthProjectionV1Adapter` as its sole producer, name `growthProjectionIntegrityV1.ts` as the single producer/consumer integrity implementation, freeze its Harness-compatible canonical-byte and SHA-256 rules, permit Receipt emission only after complete validation PASS, require the validated read and cache snapshot to carry the exact Receipt and explicit refresh and every cache read to revalidate it, and state that the Receipt cannot change Harness projection freshness or provider state. The Page-State Matrix must make Receipt availability explicit for both `VALIDATED` and `LAST_VALIDATED_STALE` states, map an invalid retained cache only to `INVALID` with no snapshot data, and must not imply a PASS Receipt for any failed validation branch.
 
 - [ ] **Step 2: Freeze the read Port**
 
 ```typescript
-import type { GrowthProjectionV1 } from '../models/growthProjectionV1';
-
+// src/features/harness/models/growthProjectionV1.ts
 export interface GrowthProjectionSnapshotIdentity {
   schemaVersion: 'growth-projection/v1';
   asOf: string;
   watermark: string;
 }
+
+// src/features/harness/models/growthProjectionValidationReceiptV1.ts
+import type {
+  GrowthProjectionSnapshotIdentity,
+} from './growthProjectionV1';
+
+export type Sha256DigestV1 = `sha256:${string}`;
+
+export interface GrowthProjectionValidationReceiptV1 {
+  schemaVersion: 'workbench-growth-projection-validation-receipt/v1';
+  receiptId: `growth-projection-validation:${string}`;
+  validatedAt: string;
+  validatorIdentity: Readonly<{
+    id: string;
+    version: string;
+    contentDigest: Sha256DigestV1;
+  }>;
+  snapshotIdentity: GrowthProjectionSnapshotIdentity;
+  projectionContentDigest: Sha256DigestV1;
+  validationState: 'PASS';
+  receiptDigest: Sha256DigestV1;
+}
+```
+
+```typescript
+// src/features/harness/integrity/growthProjectionIntegrityV1.ts
+import type {
+  GrowthProjectionSnapshotIdentity,
+  GrowthProjectionV1,
+} from '../models/growthProjectionV1';
+import type {
+  GrowthProjectionValidationReceiptV1,
+} from '../models/growthProjectionValidationReceiptV1';
+
+export declare function canonicalProjectionFileBytesV1(
+  projection: Readonly<GrowthProjectionV1>,
+): Uint8Array;
+
+export declare function deriveGrowthProjectionValidationReceiptV1(input: {
+  projection: Readonly<GrowthProjectionV1>;
+  snapshotIdentity: Readonly<GrowthProjectionSnapshotIdentity>;
+  validatedAt: string;
+  validatorIdentity: Readonly<
+    GrowthProjectionValidationReceiptV1['validatorIdentity']
+  >;
+}): Promise<GrowthProjectionValidationReceiptV1>;
+
+export declare function validateGrowthProjectionValidationReceiptV1(input: {
+  projection: Readonly<GrowthProjectionV1>;
+  snapshotIdentity: Readonly<GrowthProjectionSnapshotIdentity>;
+  receipt: Readonly<GrowthProjectionValidationReceiptV1>;
+  acceptedValidatorIdentity: Readonly<
+    GrowthProjectionValidationReceiptV1['validatorIdentity']
+  >;
+}): Promise<
+  | Readonly<{ state: 'VALID' }>
+  | Readonly<{ state: 'INVALID'; reasonCode: string }>
+>;
+```
+
+```typescript
+import type {
+  GrowthProjectionSnapshotIdentity,
+  GrowthProjectionV1,
+} from '../models/growthProjectionV1';
+import type {
+  GrowthProjectionValidationReceiptV1,
+} from '../models/growthProjectionValidationReceiptV1';
 
 export interface GrowthProjectionFailureDetails {
   code: string;
@@ -710,6 +783,7 @@ export type GrowthProjectionReadResult =
       }>;
       snapshotIdentity: GrowthProjectionSnapshotIdentity;
       projection: Readonly<GrowthProjectionV1>;
+      validationReceipt: Readonly<GrowthProjectionValidationReceiptV1>;
       failure?: never;
     }>
   | Readonly<{
@@ -724,6 +798,7 @@ export type GrowthProjectionReadResult =
           reasonCode: string;
         }>;
         projection: Readonly<GrowthProjectionV1>;
+        validationReceipt: Readonly<GrowthProjectionValidationReceiptV1>;
       }>;
     }>
   | Readonly<{
@@ -758,23 +833,22 @@ export interface HarnessEvolutionReadPort {
 }
 ```
 
-`GrowthProjectionV1` is the complete validated Schema model, not a UI summary shape. Its own provider state remains `READY | PARTIAL | STALE | UNAVAILABLE | UNKNOWN` together with the exact watermark, Gate, coverage, closed counts ledger, and typed references. The orthogonal `retrieval.transportState` and `retrieval.cacheState` report Adapter transport/cache truth. A retained snapshot keeps its original provider state and identity plus separate local cache freshness; a failed latest read cannot rewrite that projection state, fabricate an empty projection, or discard validation failure.
+`GrowthProjectionV1` is the complete validated Schema model, not a UI summary shape. Its own provider state remains `READY | PARTIAL | STALE | UNAVAILABLE | UNKNOWN` together with the exact watermark, Gate, coverage, closed counts ledger, and typed references. `growthProjectionValidationReceiptV1.ts` imports `GrowthProjectionSnapshotIdentity` from the projection model. `growthProjectionIntegrityV1.ts` owns the one shared producer/consumer algorithm; neither Adapter may implement a second digest path. Its canonical JSON bytes are byte-compatible with Harness `src/evolution_harness/hashing.py::canonical_json_bytes`: recursive JSON only, object keys ordered by Unicode code point, array order preserved, no insignificant whitespace, UTF-8 without ASCII escaping, JSON scalar escaping, and only Schema-valid safe integers for numeric fields. The HG5 plan must add cross-runtime golden fixtures, including non-ASCII strings and numeric boundaries, emitted by the fixed HG3 Harness builder; any unsupported number or byte mismatch is validation failure rather than normalization. Projection file bytes are those canonical JSON bytes plus exactly one LF, and `projectionContentDigest` is `sha256:<64 lowercase hex>` over those complete file bytes. The Receipt core is the closed ordered value `{schemaVersion, validatedAt, validatorIdentity, snapshotIdentity, projectionContentDigest, validationState}`; `receiptDigest` is `sha256:<64 lowercase hex>` over its canonical JSON bytes without LF, and `receiptId` is `growth-projection-validation:<the same 64 lowercase hex>`. `GrowthProjectionV1Adapter` is the sole producer of this Workbench-local Receipt: only after complete Schema, digest, watermark, and identity validation does it call the shared derivation function. The Receipt is non-authoritative; its local `validatedAt` never changes projection freshness or provider state. Validation failure returns a failed read branch and emits no PASS Receipt. The orthogonal `retrieval.transportState` and `retrieval.cacheState` report Adapter transport/cache truth. A retained snapshot keeps its original provider state, identity, and exact validation Receipt plus separate local cache freshness; a failed latest read cannot rewrite that projection state, fabricate an empty projection, or discard validation failure.
 
 - [ ] **Step 3: Freeze the separate local cache Port**
 
 ```typescript
-import type { GrowthProjectionV1 } from '../models/growthProjectionV1';
 import type {
   GrowthProjectionSnapshotIdentity,
-} from './HarnessEvolutionReadPort';
+  GrowthProjectionV1,
+} from '../models/growthProjectionV1';
+import type {
+  GrowthProjectionValidationReceiptV1,
+} from '../models/growthProjectionValidationReceiptV1';
 
 export interface ValidatedGrowthProjectionSnapshot {
   snapshotIdentity: GrowthProjectionSnapshotIdentity;
-  validationReceiptReference: Readonly<{
-    kind: 'GROWTH_PROJECTION_VALIDATION_RECEIPT';
-    id: string;
-    contentDigest: string;
-  }>;
+  validationReceipt: Readonly<GrowthProjectionValidationReceiptV1>;
   projection: Readonly<GrowthProjectionV1>;
 }
 
@@ -796,10 +870,10 @@ export type GrowthProjectionCacheReadResult =
       state: 'FOUND';
       entry: Readonly<ValidatedGrowthProjectionCacheEntry>;
     }>
-  | Readonly<{ state: 'EMPTY' }>
-  | Readonly<{ state: 'INVALID'; reasonCode: string }>
-  | Readonly<{ state: 'UNAVAILABLE'; reasonCode: string }>
-  | Readonly<{ state: 'UNKNOWN'; reasonCode: string }>;
+  | Readonly<{ state: 'EMPTY'; entry?: never }>
+  | Readonly<{ state: 'INVALID'; reasonCode: string; entry?: never }>
+  | Readonly<{ state: 'UNAVAILABLE'; reasonCode: string; entry?: never }>
+  | Readonly<{ state: 'UNKNOWN'; reasonCode: string; entry?: never }>;
 
 export type GrowthProjectionCacheRefreshResult =
   | Readonly<{
@@ -821,6 +895,7 @@ export type GrowthProjectionCacheReceiptLookup =
       receiptReference: GrowthProjectionCacheReceiptReference;
     }>
   | Readonly<{ state: 'NOT_FOUND' }>
+  | Readonly<{ state: 'CONFLICT'; reasonCode: string }>
   | Readonly<{ state: 'LOOKUP_UNAVAILABLE'; reasonCode: string }>
   | Readonly<{ state: 'LOOKUP_UNKNOWN'; reasonCode: string }>;
 
@@ -844,7 +919,7 @@ export interface HarnessEvolutionCachePort {
 }
 ```
 
-`getGrowthProjection`, `readLastValidated`, and `findRefreshReceipt` are pure reads. `refreshValidated` is the only HG5 write: it revalidates the complete projection, recomputes Schema/as-of/watermark and PayloadHash equality, verifies the validation Receipt reference, and accepts no caller-supplied cache Revision or storage time. Under one owner-controlled CAS lock, the Adapter generates `cacheRevision` and authoritative `storedAt`, atomically stores and durably rereads the entry, then returns a queryable local receipt. IdempotencyKey reuse with a different recomputed PayloadHash is conflict. `UNKNOWN_OUTCOME` retains both lookup keys; `NOT_FOUND`, `LOOKUP_UNAVAILABLE`, and `LOOKUP_UNKNOWN` all keep the refresh unresolved and forbid another refresh until a found authoritative Receipt or conflict resolves it. When capability is `CACHE_NOT_ENABLED`, refresh returns `REJECTED/CACHE_NOT_ENABLED` and creates no record. If Project Helm cannot prove the selected browser/local-host storage's atomicity, isolation, retention, and recovery semantics, capability remains disabled and the UI shows no fabricated last-known state.
+`getGrowthProjection`, `readLastValidated`, and `findRefreshReceipt` are pure reads. On every `readLastValidated`, the Cache Adapter parses and Schema-validates the complete entry, recomputes the projection file digest and snapshot identity/watermark relation, and calls the shared Receipt validator against the complete Receipt and accepted validator identity. Only exact agreement may return `FOUND`. Any malformed entry, projection/Receipt/snapshot mismatch, forged digest, unsupported canonical value, or failed Receipt validation returns `INVALID` with no `entry`; the Read Adapter may form `LAST_VALIDATED_STALE` only from `FOUND`, never from `INVALID`, `UNAVAILABLE`, or `UNKNOWN`. `refreshValidated` is the only HG5 write: it performs the same shared validation, recomputes Schema/as-of/watermark and PayloadHash equality, verifies the complete validation Receipt identity/digest against those same bytes and validator, and accepts no caller-supplied cache Revision or storage time. Under one owner-controlled CAS lock, the Adapter generates `cacheRevision` and authoritative `storedAt`, atomically stores and durably rereads the entry, then returns a queryable local receipt. IdempotencyKey reuse with a different recomputed PayloadHash is conflict. `UNKNOWN_OUTCOME` retains both lookup keys; `NOT_FOUND`, `LOOKUP_UNAVAILABLE`, and `LOOKUP_UNKNOWN` all keep the refresh unresolved and forbid another refresh until a found authoritative Receipt or conflict resolves it. When capability is `CACHE_NOT_ENABLED`, refresh returns `REJECTED/CACHE_NOT_ENABLED` and creates no record. If Project Helm cannot prove the selected browser/local-host storage's atomicity, isolation, retention, and recovery semantics, capability remains disabled and the UI shows no fabricated last-known state.
 
 - [ ] **Step 4: Keep command capability disabled**
 
@@ -867,7 +942,7 @@ pnpm exec playwright test
 git diff --check
 ```
 
-The HG5 plan must define exact fixtures for each validated projection provider state; transport unavailable/unknown with and without a retained snapshot; unsupported version, invalid Schema, identity mismatch, corrupt cache, changed watermark, forged validation Receipt or PayloadHash, caller attempts to supply/forge cache Revision or storage time, cache CAS conflict/interruption/unknown outcome and every unresolved lookup result, and cache-disabled behavior; plus command-disabled behavior. Tests must prove retained snapshots keep their original provider state while local cache freshness becomes stale, every pure read has zero writes, and explicit refresh writes only the single authorized cache record and receipt. It must obtain Project Helm's required fixed-candidate review before claiming closure.
+The HG5 plan must define exact fixtures for each validated projection provider state; transport unavailable/unknown with and without a retained snapshot; unsupported version, invalid Schema, identity mismatch, corrupt cache, changed watermark, forged validation Receipt or PayloadHash, caller attempts to supply/forge cache Revision or storage time, cache CAS conflict/interruption/unknown outcome and every unresolved lookup result, and cache-disabled behavior; plus command-disabled behavior. Cross-runtime golden tests must prove the Workbench integrity utility matches fixed Harness canonical projection bytes and all three digest/ID derivations. Cache contract tests must prove every read revalidates the complete entry, each corruption/mismatch returns `INVALID` without `entry`, and no invalid cache can produce `LAST_VALIDATED_STALE`. Tests must also prove retained valid snapshots keep their original provider state while local cache freshness becomes stale, every pure read has zero writes, and explicit refresh writes only the single authorized cache record and receipt. It must obtain Project Helm's required fixed-candidate review before claiming closure.
 
 - [ ] **Step 7: Stop with read capability only**
 

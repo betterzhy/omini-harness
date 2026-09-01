@@ -103,15 +103,20 @@ core/schemas/growth-capture-result.schema.json
 core/schemas/growth-scan-report.schema.json
 src/evolution_harness/growth_assessment.py
 src/evolution_harness/growth_source.py
+src/evolution_harness/authority.py
+src/evolution_harness/controlled_write_guard.py
 src/evolution_harness/growth_store.py
 src/evolution_harness/anchored_fs.py
 src/evolution_harness/cli.py
 tests/test_growth_assessment.py
 tests/test_growth_source.py
+tests/test_authority_engine.py
 tests/test_anchored_fs.py
 tests/test_growth_store.py
 tests/test_growth_cli.py
 README.md
+docs/superpowers/plans/2026-08-13-growth-assessment-protocol-phase-1.md
+docs/superpowers/plans/2026-09-01-harness-growth-read-model-v1-implementation-program.md
 ```
 
 The current repository has no separately maintained deterministic Schema inventory: `SchemaStore` discovers `**/*.schema.json`, and the generated registries do not enumerate core protocol Schemas. Therefore `registry.py`, generated registry bytes, and any inventory file are excluded from HG1. If the selected future execution base changes that fact or a baseline generated check requires another path, reconciliation returns `WRITESET_DRIFT` and stops to revise and reapprove the plan; execution never adds the path dynamically. `feedback.py`, `learning.py`, existing Experience/Candidate/Eval/ledger records, Project Helm, target projects, and operational Inbox data remain excluded.
@@ -211,6 +216,10 @@ The module must not read the clock, filesystem, environment, Git, project, or In
 - [ ] **Step 3: Implement zero-write source provenance using the existing HG1 plan Task 3**
 
 Registered-project evidence resolves only through validated registration and Authority Snapshot inputs. `OPAQUE` evidence is never opened. `HARNESS_SELF` uses only read-only Git identity commands.
+
+The approved Task 3 repair keeps one committed-tree scanner. `_read_tree_entries(..., requested_paths=None)` preserves complete recursive inventory for existing callers, while Authority passes exact authority-map paths and descends only their selected prefixes. Shared ancestor tree objects may be parsed as required by Git's object format; unselected excluded subtree objects and entries are never descended into, opened, returned, or independently hashed. Missing and non-regular Authority paths remain dirty. Tests instrument the exact requested path collection and excluded subtree object IDs.
+
+Source mutation oracles ignore only `.git/**`, `.idea/**`, `.vscode/**`, `.DS_Store`, and `._*`. They continue to include `.agent-evolution/**`. Harness-self refs/index preservation uses directed non-refreshing read-only probes and never recursively snapshots `.git/**`.
 
 - [ ] **Step 4: Implement no-replace Inbox publication using the existing HG1 plan Task 4**
 
@@ -343,15 +352,20 @@ git add core/schemas/growth-assessment-request.schema.json \
   core/schemas/growth-scan-report.schema.json \
   src/evolution_harness/growth_assessment.py \
   src/evolution_harness/growth_source.py \
+  src/evolution_harness/authority.py \
+  src/evolution_harness/controlled_write_guard.py \
   src/evolution_harness/growth_store.py \
   src/evolution_harness/anchored_fs.py \
   src/evolution_harness/cli.py \
   tests/test_growth_assessment.py \
   tests/test_growth_source.py \
+  tests/test_authority_engine.py \
   tests/test_anchored_fs.py \
   tests/test_growth_store.py \
   tests/test_growth_cli.py \
-  README.md
+  README.md \
+  docs/superpowers/plans/2026-08-13-growth-assessment-protocol-phase-1.md \
+  docs/superpowers/plans/2026-09-01-harness-growth-read-model-v1-implementation-program.md
 git diff --cached --check
 git diff --cached --quiet || git commit -m "feat(growth): 增加评估收据 Inbox"
 git diff --check "${HGRM_HG1_PHASE_BASE}..HEAD"

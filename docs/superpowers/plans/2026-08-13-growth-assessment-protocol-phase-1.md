@@ -32,14 +32,19 @@ This is an `R2` implementation because it changes governance contracts, schemas,
 - Create: `core/schemas/growth-scan-report.schema.json`
 - Create: `src/evolution_harness/growth_assessment.py`
 - Create: `src/evolution_harness/growth_source.py`
+- Modify for the approved Task 3 provenance repair: `src/evolution_harness/authority.py`
+- Modify for the approved Task 3 provenance repair: `src/evolution_harness/controlled_write_guard.py`
 - Create: `src/evolution_harness/growth_store.py`
 - Modify: `src/evolution_harness/anchored_fs.py`
 - Modify: `src/evolution_harness/cli.py`
 - Create: `tests/test_growth_assessment.py`
 - Create: `tests/test_growth_source.py`
+- Modify for the approved Task 3 provenance repair: `tests/test_authority_engine.py`
 - Create: `tests/test_growth_store.py`
 - Create: `tests/test_growth_cli.py`
 - Modify: `README.md`
+- Modify for the approved Task 3 provenance repair: `docs/superpowers/plans/2026-08-13-growth-assessment-protocol-phase-1.md`
+- Modify for the approved Task 3 provenance repair: `docs/superpowers/plans/2026-09-01-harness-growth-read-model-v1-implementation-program.md`
 - Modify only if structural validation proves it necessary: a schema inventory or explicit generated schema index already owned by the current repository
 
 ### Explicitly excluded
@@ -347,12 +352,17 @@ git commit -m "feat: normalize growth assessment identities"
 
 **Files:**
 
+- Modify: `docs/superpowers/plans/2026-08-13-growth-assessment-protocol-phase-1.md`
+- Modify: `docs/superpowers/plans/2026-09-01-harness-growth-read-model-v1-implementation-program.md`
+- Modify: `src/evolution_harness/controlled_write_guard.py`
+- Modify: `src/evolution_harness/authority.py`
 - Create: `src/evolution_harness/growth_source.py`
+- Modify: `tests/test_authority_engine.py`
 - Create: `tests/test_growth_source.py`
 
 - [ ] **Step 1: Write registered-project provenance tests**
 
-Build a neutral Harness fixture and registered external-source fixture using the same patterns as `tests/test_project_registration.py`. Snapshot every source filesystem entry before and after each call.
+Build a neutral Harness fixture and registered external-source fixture using the same patterns as `tests/test_project_registration.py`. Snapshot every governed source filesystem entry before and after each call. The mutation oracle ignores only tool metadata `.git/**`, `.idea/**`, `.vscode/**`, `.DS_Store`, and `._*`; it must not ignore all dot paths, and `.agent-evolution/**` remains governed registration/lock input. Harness-self Git identity and zero-write checks use directed read-only probes rather than a recursive `.git/**` snapshot.
 
 Tests must prove:
 
@@ -369,6 +379,10 @@ Tests must prove:
 - the source snapshot is byte-for-byte and entry-for-entry unchanged on success and every failure.
 
 Use instrumentation around `AnchoredRoot.read_bytes` or the authority reader to assert the exact allowlist, not only a Git status check.
+
+For Git-backed registered sources, the approved object boundary is exact: the existing single `_read_tree_entries` scanner may parse the shared ancestor tree objects required to locate approved Authority paths, but it must not descend into, open, return, or independently hash an unselected excluded subtree object or its entries. Instrument `_read_git_object` and `_read_tree_entries` so the RED proves excluded subtree object IDs are never opened and `requested_paths` equals the exact authority-map paths.
+
+The duplicate-`REPLAYABLE` regression must rebuild the live Authority Snapshot fingerprint after modifying the authority map. It must reach and fail the exactly-one live Authority-record check rather than fail earlier on a stale fingerprint.
 
 Expected: FAIL because `growth_source.py` does not exist.
 
@@ -404,6 +418,19 @@ Compare every request source identity to validated live values. For each `REPLAY
 
 For Harness self, obtain only `git rev-parse HEAD` and `git rev-parse HEAD^{tree}` through non-interactive read-only subprocess calls. Do not run Git cleanup, checkout, reset, add, commit, update-index, or status commands that refresh the index.
 
+Extend the existing single committed-tree reader compatibly:
+
+```python
+def _read_tree_entries(
+    boundary: _GitBoundary,
+    tree: str,
+    *,
+    requested_paths: Collection[str] | None = None,
+) -> dict[str, tuple[str, str]]: ...
+```
+
+`requested_paths=None` preserves the complete recursive inventory used by every existing caller. A supplied collection is validated as canonical relative paths and traversed through a prefix trie or an equivalent exact selector; only matching prefixes are descended and only exact requested leaves are returned. `authority._source_revision` passes the exact authority-map paths. Missing or non-regular requested authorities retain the existing `DIRTY_AUTHORITY_SET` result. Do not add a second Git tree scanner.
+
 Return a small validated context projection; do not mutate the request.
 
 - [ ] **Step 4: Run focused source and registration regression tests**
@@ -416,16 +443,29 @@ PYTHONPATH=src uv run --isolated --python 3.12 \
     tests/test_growth_source.py \
     tests/test_project_registration.py \
     tests/test_authority_engine.py \
-    tests/test_lock_enforcement.py
+    tests/test_lock_enforcement.py \
+    tests/test_controlled_write_guard.py \
+    tests/test_integration_e2e.py \
+    tests/test_neutral_integration_fixture.py \
+    tests/test_cognitura_integration_fixture.py \
+    tests/test_pay_nexus_java_capability_adoption_pilot.py
 ```
 
 Expected: PASS.
 
 - [ ] **Step 5: Commit provenance validation**
 
+Commit the approved plan amendment separately before writing the repair RED. After RED → GREEN, commit only the four production/test repair paths; the historical Task 3 source commit remains unchanged.
+
 ```bash
-git add src/evolution_harness/growth_source.py tests/test_growth_source.py
-git commit -m "feat: validate growth assessment provenance"
+git add docs/superpowers/plans/2026-08-13-growth-assessment-protocol-phase-1.md \
+  docs/superpowers/plans/2026-09-01-harness-growth-read-model-v1-implementation-program.md
+git commit -m "docs(growth): 扩展来源证明修复写集"
+git add src/evolution_harness/controlled_write_guard.py \
+  src/evolution_harness/authority.py \
+  tests/test_authority_engine.py \
+  tests/test_growth_source.py
+git commit -m "fix(growth): 限制 Authority Git 树遍历"
 ```
 
 ---

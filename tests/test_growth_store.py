@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import errno
 import gc
 import json
 import os
@@ -454,6 +455,44 @@ def test_scan_rejects_observation_before_valid_receipt(tmp_path: Path):
     with pytest.raises(GrowthAssessmentError) as timestamp:
         store.scan(as_of="2026-09-02T07:59:59Z")
     assert timestamp.value.code == "TIMESTAMP_INVALID"
+
+
+def test_scan_rejects_submicrosecond_observation_before_valid_receipt(tmp_path: Path):
+    store = _open_for_record(tmp_path / "submicrosecond-state")
+    request = _request()
+    request["assessedAt"] = "2026-09-02T08:00:00.1234568Z"
+    store.record(request)
+
+    with pytest.raises(GrowthAssessmentError) as timestamp:
+        store.scan(as_of="2026-09-02T08:00:00.1234567Z")
+
+    assert timestamp.value.code == "TIMESTAMP_INVALID"
+
+
+@pytest.mark.parametrize("precreate_root", [False, True])
+def test_directory_creation_permission_failure_is_not_retryable_unavailable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    precreate_root: bool,
+):
+    from evolution_harness import growth_store
+    from evolution_harness.growth_store import GrowthInbox
+
+    state = tmp_path / "permission-state"
+    if precreate_root:
+        state.mkdir(mode=0o700)
+
+    def permission_denied(*args, **kwargs):
+        raise PermissionError(errno.EACCES, "permission denied")
+
+    monkeypatch.setattr(growth_store.os, "mkdir", permission_denied)
+
+    with pytest.raises(GrowthAssessmentError) as captured:
+        GrowthInbox.open_for_record(_repository_root(), _repository_root(), state)
+
+    assert captured.value.code == "STATE_ROOT_UNSAFE"
+    if state.exists():
+        assert list(state.iterdir()) == []
 
 
 def test_scan_accepts_10000_entries_and_stops_incrementally_at_10001(

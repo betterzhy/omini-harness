@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import errno
 import fcntl
 import json
 import os
@@ -15,10 +16,10 @@ from .anchored_fs import AnchoredPathError, AnchoredRoot
 from .growth_assessment import (
     GROWTH_POLICY_VERSION,
     GrowthAssessmentError,
+    _rfc3339_order_key,
     _utc_rfc3339,
     build_growth_receipt,
     normalize_growth_assessment_request,
-    parse_rfc3339,
     validate_growth_receipt,
 )
 from .hashing import canonical_json_bytes, sha256_bytes
@@ -37,6 +38,12 @@ _SCAN_SCHEMA = "core/schemas/growth-scan-report.schema.json"
 
 def _state_error(code: str, message: str) -> GrowthAssessmentError:
     return GrowthAssessmentError(code, message)
+
+
+def _state_creation_error(message: str, error: OSError) -> GrowthAssessmentError:
+    if isinstance(error, PermissionError) or error.errno in {errno.EACCES, errno.EPERM, errno.EROFS}:
+        return _state_error("STATE_ROOT_UNSAFE", message)
+    return _state_error("STATE_ROOT_UNAVAILABLE", message)
 
 
 def _resolve_state_root(state_root: Path | None) -> Path:
@@ -188,7 +195,7 @@ def _open_absolute_directory(path: Path, *, create: bool) -> int:
                 except FileExistsError:
                     pass
                 except OSError as exc:
-                    raise _state_error("STATE_ROOT_UNAVAILABLE", "state root cannot be created safely") from exc
+                    raise _state_creation_error("state root cannot be created safely", exc) from exc
                 try:
                     following = os.open(part, _DIRECTORY_FLAGS, dir_fd=current)
                 except OSError as exc:
@@ -222,7 +229,7 @@ def _open_fixed_directory(root_descriptor: int, name: str, *, create: bool) -> i
         except FileExistsError:
             pass
         except OSError as exc:
-            raise _state_error("STATE_ROOT_UNAVAILABLE", "Growth Inbox directory cannot be created") from exc
+            raise _state_creation_error("Growth Inbox directory cannot be created", exc) from exc
         try:
             descriptor = os.open(name, _DIRECTORY_FLAGS, dir_fd=root_descriptor)
         except OSError as exc:
@@ -595,7 +602,7 @@ class GrowthInbox:
 
     def scan(self, *, as_of: str) -> dict[str, Any]:
         normalized_as_of = _utc_rfc3339(as_of)
-        observed_at = parse_rfc3339(normalized_as_of)
+        observed_at = _rfc3339_order_key(normalized_as_of)
         with self._lock(exclusive=False):
             names = self._bounded_inbox_names()
             records: list[dict[str, Any]] = []
@@ -614,7 +621,7 @@ class GrowthInbox:
                     code = "RECEIPT_UNSAFE" if exc.code == "RECEIPT_UNSAFE" else "RECEIPT_CORRUPT"
                     records.append(self._invalid_record(name, code))
                     continue
-                if parse_rfc3339(receipt["assessment"]["assessedAt"]) > observed_at:
+                if _rfc3339_order_key(receipt["assessment"]["assessedAt"]) > observed_at:
                     raise _state_error("TIMESTAMP_INVALID", "scan observation predates a valid receipt")
                 record = self._scan_record(receipt)
                 records.append(record)

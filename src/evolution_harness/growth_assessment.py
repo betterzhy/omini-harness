@@ -66,6 +66,11 @@ def parse_rfc3339(value: str) -> datetime:
     return parsed.replace(microsecond=int((fraction[:6] + "000000")[:6]))
 
 
+def _rfc3339_order_key(value: str) -> tuple[datetime, str]:
+    """Return an exact UTC ordering key without truncating fractional seconds."""
+    return _parse_rfc3339_parts(value)
+
+
 def _utc_rfc3339(value: str) -> str:
     parsed, fraction = _parse_rfc3339_parts(value)
     canonical = parsed.strftime("%Y-%m-%dT%H:%M:%S")

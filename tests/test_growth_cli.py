@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import errno
 import fcntl
 import json
 import os
@@ -38,6 +39,30 @@ def _git(root: Path, *arguments: str) -> str:
             "GIT_TERMINAL_PROMPT": "0",
         },
     )
+    return completed.stdout.strip()
+
+
+def _git_symbolic_head(root: Path) -> str:
+    completed = subprocess.run(
+        ["/usr/bin/git", "symbolic-ref", "-q", "HEAD"],
+        cwd=root,
+        check=False,
+        capture_output=True,
+        text=True,
+        env={
+            "PATH": "/usr/bin:/bin",
+            "HOME": "/var/empty",
+            "XDG_CONFIG_HOME": "/var/empty",
+            "LANG": "C",
+            "LC_ALL": "C",
+            "GIT_CONFIG_GLOBAL": "/dev/null",
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_OPTIONAL_LOCKS": "0",
+            "GIT_TERMINAL_PROMPT": "0",
+        },
+    )
+    if completed.returncode not in {0, 1}:
+        completed.check_returncode()
     return completed.stdout.strip()
 
 
@@ -123,9 +148,24 @@ def _git_probe(root: Path) -> dict[str, bytes | str]:
         "status": _git(root, "status", "--porcelain=v2", "--untracked-files=all"),
         "index": Path(_git(root, "rev-parse", "--path-format=absolute", "--git-path", "index")).read_bytes(),
         "head-file": Path(_git(root, "rev-parse", "--path-format=absolute", "--git-path", "HEAD")).read_bytes(),
-        "head-symbolic-target": _git(root, "symbolic-ref", "-q", "HEAD"),
+        "head-symbolic-target": _git_symbolic_head(root),
         "refs": refs,
     }
+
+
+def test_git_probe_supports_detached_head(tmp_path: Path):
+    repository = tmp_path / "detached-probe"
+    repository.mkdir()
+    _git(repository, "init", "-q")
+    (repository / "tracked.txt").write_text("tracked\n", encoding="utf-8")
+    head, tree = _commit_all(repository)
+    _git(repository, "checkout", "-q", "--detach", head)
+
+    probe = _git_probe(repository)
+
+    assert probe["head"] == head
+    assert probe["tree"] == tree
+    assert probe["head-symbolic-target"] == ""
 
 
 def _run_cli(
@@ -591,6 +631,55 @@ def test_assess_deferred_results_are_typed_and_retry_bound(tmp_path: Path):
     SchemaStore(_repository_root()).validate(
         "core/schemas/growth-capture-result.schema.json", deferred
     )
+
+
+def test_assess_permission_failure_uses_outer_fail_not_deferred(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+):
+    from evolution_harness import cli, growth_store
+
+    source, request = _registered_fixture(tmp_path)
+    request_path = tmp_path / "permission-request.json"
+    request_path.write_text(json.dumps(request), encoding="utf-8")
+    state = tmp_path / "permission-state"
+
+    def permission_denied(*args, **kwargs):
+        raise PermissionError(errno.EACCES, "permission denied")
+
+    monkeypatch.setattr(growth_store.os, "mkdir", permission_denied)
+    result = cli.main(
+        [
+            "--repository-root",
+            str(_repository_root()),
+            "growth",
+            "assess",
+            "--source",
+            str(source),
+            "--request",
+            str(request_path),
+            "--state-root",
+            str(state),
+            "--format",
+            "json",
+        ]
+    )
+
+    output = capsys.readouterr()
+    assert result == 1
+    assert output.err == ""
+    assert json.loads(output.out) == {
+        "schemaVersion": "harness-cli/v1",
+        "ok": False,
+        "command": "growth assess",
+        "data": {
+            "code": "STATE_ROOT_UNSAFE",
+            "message": "Growth Inbox state is unsafe",
+            "growthCaptureGate": "FAIL",
+        },
+    }
+    assert not state.exists()
 
 
 @pytest.mark.parametrize(

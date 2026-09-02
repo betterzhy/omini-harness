@@ -209,6 +209,80 @@ A persistent WriteSet breach places the entire project coordinator into explicit
 
 Protected actions remain denied even when a request claims permission: formal database writes, migration application, destructive operations, production or secret access, Landing, Wave entry, push, release, and deployment.
 
+### Growth Assessment Protocol (GAP) Phase 1 boundary
+
+GAP Phase 1 is a narrow, receipt-backed assessment intake. It records whether a
+completed task supplies a reusable-growth signal; it does not make a learning
+decision or change a project. The assessment risk levels are deliberately
+separate from the project result: `R0` is skipped; `HUMAN_CORRECTION`,
+`REPEATED_FRICTION`, `SHARED_GUIDANCE_CONFLICT`, `CONTRACT_AMBIGUITY`, and
+`VERIFICATION_GAP` use `R1`; and an adopted `R2` trigger (formal closure,
+fixed-candidate review, Gate failure, Authority/governance change,
+security/recovery/concurrency finding, or Contract/Schema/projection change)
+requires an assessment. The request carries the independent `projectGate`
+(`PASS`, `FAIL`, `BLOCKED`, or `NOT_RUN`); it must never be inferred from,
+replaced by, or reported as `growthCaptureGate`.
+
+An assessment concludes either `SIGNAL` or `NO_SIGNAL`. For example, a repeated
+reusable verification failure supported by distilled evidence can be an `R1`
+`SIGNAL`; a one-off project-local correction, accidental event, non-transferable
+fact, already-covered issue, or insufficient evidence is a `NO_SIGNAL`. A
+`SIGNAL` is only an explicit `HUMAN_TRIAGE_REQUIRED` disposition in a scan; a
+`NO_SIGNAL` is `NO_ACTION`. Neither outcome is a runtime enablement, adoption,
+landing, push, release, or promotion claim.
+
+The Inbox is external to both the Harness and source project worktrees. With no
+explicit `--state-root`, its location is
+`$CODEX_HOME/agent-evolution/growth/v1`; `CODEX_HOME` must be present and
+absolute. An explicit state root must also be absolute and must not be inside a
+protected Harness, source, or Git worktree. The state root and its fixed
+`inbox`, `staging`, and `locks` directories are owner-only (`0700`), and the
+Inbox lock is owner-only (`0600`). `assess` may append one validated Receipt;
+`receipt` and `scan` open the Inbox read-only. Assessment and scan never write
+the Harness worktree or a project worktree.
+
+All Growth commands are JSON-only and require their explicit arguments. Prefer
+stdin for the bounded, single-read request; `--request` accepts `-` or an
+absolute regular request file. The request is structured metadata plus bounded
+distillations: it must not contain a transcript, messages, prompts, responses,
+raw logs, source-body bytes, or a claim that opaque evidence references are
+readable files.
+
+```bash
+# Read one request from stdin and append only an external Receipt when source
+# validation and the external Inbox are available.
+./harness growth assess \
+  --source /absolute/path/to/registered-project \
+  --request - \
+  --format json < assessment.yaml
+
+# Read and validate one existing Receipt without changing it.
+./harness growth receipt \
+  --id growth-assessment:0123456789abcdef01234567 \
+  --check \
+  --format json
+
+# Read-only report over the external Inbox at an explicit cutoff.
+./harness growth scan \
+  --as-of 2026-09-02T00:00:00Z \
+  --format json
+```
+
+`growthCaptureGate=PASS` means only that a typed Receipt was recorded or an
+exact prior Receipt was returned as `DUPLICATE`; `DEFERRED` is limited to an
+unavailable state root or a busy Inbox lock and must be retried with the same
+request/source context. A failed capture is not a project Gate conclusion.
+Receipt and scan validate existing data rather than repair it; scan can return
+`gate=FAIL` for invalid Inbox entries while remaining read-only.
+
+Phase 1 implements no Skill, Hook, scheduler, repository scanner, transcript
+capture, source-body capture, automatic Experience import, Candidate creation,
+Eval creation, capability change, projection, or Promotion. A later human
+triage/import step may sanitize an explicitly selected Receipt into an
+`UNTRIAGED` Experience under its own authority; that later boundary is not
+executed by these commands. Phase 2--4 behavior is intentionally not described
+here as implemented.
+
 ## Local acceptance sequence
 
 ```bash

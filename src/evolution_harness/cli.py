@@ -160,7 +160,13 @@ def _load_growth_request(path: str) -> dict[str, Any]:
     try:
         document = raw.decode("utf-8", "strict")
         value = yaml.load(document, Loader=_StrictGrowthLoader)
-    except (UnicodeDecodeError, yaml.YAMLError) as exc:
+    except (
+        UnicodeDecodeError,
+        yaml.YAMLError,
+        RecursionError,
+        ValueError,
+        OverflowError,
+    ) as exc:
         raise _growth_input_error("growth request is not one strict UTF-8 JSON or YAML document") from exc
     if not isinstance(value, dict):
         raise _growth_input_error("growth request document root must be an object")
@@ -320,18 +326,50 @@ def _coordination_command_from_argv(argv: list[str]) -> str | None:
     return "coordination"
 
 
-def _growth_command_from_argv(argv: list[str]) -> str | None:
+def _growth_command_index(argv: list[str]) -> int | None:
     index = 0
-    if index < len(argv) and argv[index] == "--repository-root":
-        index += 2
-    elif index < len(argv) and argv[index].startswith("--repository-root="):
-        index += 1
-    if index >= len(argv) or argv[index] != "growth":
+    while index < len(argv) and argv[index].startswith("--"):
+        index += 1 if "=" in argv[index] else 2
+    if index < len(argv) and argv[index] == "growth":
+        return index
+    return None
+
+
+def _growth_command_from_argv(argv: list[str]) -> str | None:
+    index = _growth_command_index(argv)
+    if index is None:
         return None
     index += 1
     if index < len(argv) and argv[index] in {"assess", "receipt", "scan"}:
         return f"growth {argv[index]}"
     return "growth"
+
+
+def _growth_raw_long_options_are_closed(argv: list[str]) -> bool:
+    index = _growth_command_index(argv)
+    if index is None:
+        return True
+    prefix = argv[:index]
+    if prefix:
+        if len(prefix) == 1:
+            if not prefix[0].startswith("--repository-root="):
+                return False
+        elif len(prefix) == 2:
+            if prefix[0] != "--repository-root":
+                return False
+        else:
+            return False
+
+    action = argv[index + 1] if index + 1 < len(argv) else None
+    allowed = {
+        "assess": {"--source", "--request", "--state-root", "--format"},
+        "receipt": {"--id", "--state-root", "--check", "--format"},
+        "scan": {"--as-of", "--state-root", "--format"},
+    }.get(action, set())
+    for token in argv[index + 2 :]:
+        if token.startswith("--") and token.partition("=")[0] not in allowed:
+            return False
+    return True
 
 
 def _emit_coordination(
@@ -385,9 +423,10 @@ def _growth_state_root(args) -> Path | None:
 def _preflight_growth_default_state_root(args) -> None:
     if getattr(args, "state_root", None) is not None:
         return
-    codex_home = os.environ.get("CODEX_HOME")
-    if codex_home and not Path(codex_home).is_absolute():
-        raise GrowthAssessmentError("STATE_ROOT_UNSAFE", "CODEX_HOME must be absolute")
+    if "CODEX_HOME" in os.environ:
+        codex_home = os.environ["CODEX_HOME"]
+        if not codex_home or not Path(codex_home).is_absolute():
+            raise GrowthAssessmentError("STATE_ROOT_UNSAFE", "CODEX_HOME must be absolute")
 
 
 def _close_growth_inbox(inbox: GrowthInbox) -> None:
@@ -404,7 +443,7 @@ def _growth_assess(root: Path, args) -> dict[str, Any]:
     growth_assessment_key(normalized)
     growth_assessment_id(normalized)
     growth_request_digest(normalized)
-    if args.state_root is None and not os.environ.get("CODEX_HOME"):
+    if args.state_root is None and "CODEX_HOME" not in os.environ:
         return build_growth_capture_result(
             normalized, deferred_reason="STATE_ROOT_UNAVAILABLE"
         )
@@ -562,9 +601,22 @@ def build_parser(
 
 def main(argv=None) -> int:
     arguments = list(sys.argv[1:] if argv is None else argv)
+    growth_error_command = _growth_command_from_argv(arguments)
+    if growth_error_command is not None and not _growth_raw_long_options_are_closed(
+        arguments
+    ):
+        return _emit(
+            {
+                "code": "GROWTH_ARGUMENT_INVALID",
+                "message": "invalid growth command arguments",
+            },
+            fmt="json",
+            ok=False,
+            command=growth_error_command,
+        )
     parser = build_parser(
         coordination_error_command=_coordination_command_from_argv(arguments),
-        growth_error_command=_growth_command_from_argv(arguments),
+        growth_error_command=growth_error_command,
     )
     args = parser.parse_args(arguments)
     root = Path(args.repository_root)

@@ -96,12 +96,35 @@ def _filesystem_snapshot(root: Path) -> dict[str, tuple[Any, ...]]:
 
 
 def _git_probe(root: Path) -> dict[str, bytes | str]:
+    refs = subprocess.run(
+        [
+            "/usr/bin/git",
+            "for-each-ref",
+            "--format=%(refname)%00%(objectname)%00%(symref)%00%(contents:subject)",
+        ],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        env={
+            "PATH": "/usr/bin:/bin",
+            "HOME": "/var/empty",
+            "XDG_CONFIG_HOME": "/var/empty",
+            "LANG": "C",
+            "LC_ALL": "C",
+            "GIT_CONFIG_GLOBAL": "/dev/null",
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_OPTIONAL_LOCKS": "0",
+            "GIT_TERMINAL_PROMPT": "0",
+        },
+    ).stdout
     return {
         "head": _git(root, "rev-parse", "HEAD"),
         "tree": _git(root, "rev-parse", "HEAD^{tree}"),
         "status": _git(root, "status", "--porcelain=v2", "--untracked-files=all"),
         "index": Path(_git(root, "rev-parse", "--path-format=absolute", "--git-path", "index")).read_bytes(),
         "head-file": Path(_git(root, "rev-parse", "--path-format=absolute", "--git-path", "HEAD")).read_bytes(),
+        "head-symbolic-target": _git(root, "symbolic-ref", "-q", "HEAD"),
+        "refs": refs,
     }
 
 
@@ -110,12 +133,15 @@ def _run_cli(
     *arguments: str,
     stdin: str | None = None,
     environment: dict[str, str] | None = None,
+    unset_environment: tuple[str, ...] = (),
     timeout: float = 30,
 ) -> subprocess.CompletedProcess[str]:
     current = os.environ.copy()
     current["PYTHONPATH"] = str(_repository_root() / "src")
     if environment:
         current.update(environment)
+    for name in unset_environment:
+        current.pop(name, None)
     return subprocess.run(
         [
             sys.executable,
@@ -279,6 +305,146 @@ def test_growth_argument_failures_are_exact_json_and_write_nothing(
     assert before_git == _git_probe(_repository_root())
 
 
+def test_top_level_growth_option_abbreviation_is_rejected_before_state_access(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+):
+    from evolution_harness import cli
+
+    def forbidden_state_access(*args, **kwargs):
+        raise AssertionError("top-level Growth argument validation must precede state access")
+
+    monkeypatch.setattr(cli.GrowthInbox, "open_read_only", forbidden_state_access)
+    result = cli.main(
+        [
+            "--repository-ro",
+            str(_repository_root()),
+            "growth",
+            "scan",
+            "--as-of",
+            "2026-09-02T08:00:00Z",
+            "--state-root",
+            str(tmp_path / "state"),
+            "--format",
+            "json",
+        ]
+    )
+
+    output = capsys.readouterr()
+    assert result == 1
+    assert output.err == ""
+    assert json.loads(output.out) == {
+        "schemaVersion": "harness-cli/v1",
+        "ok": False,
+        "command": "growth scan",
+        "data": {
+            "code": "GROWTH_ARGUMENT_INVALID",
+            "message": "invalid growth command arguments",
+        },
+    }
+    assert not (tmp_path / "state").exists()
+
+
+def test_repeated_top_level_repository_root_is_growth_argument_invalid_before_access(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+):
+    from evolution_harness import cli
+
+    def forbidden_state_access(*args, **kwargs):
+        raise AssertionError("repeated top-level option validation must precede state access")
+
+    monkeypatch.setattr(cli.GrowthInbox, "open_read_only", forbidden_state_access)
+    result = cli.main(
+        [
+            "--repository-root",
+            str(_repository_root()),
+            "--repository-root",
+            str(_repository_root()),
+            "growth",
+            "scan",
+            "--as-of",
+            "2026-09-02T08:00:00Z",
+            "--state-root",
+            str(tmp_path / "state"),
+            "--format",
+            "json",
+        ]
+    )
+
+    output = capsys.readouterr()
+    assert result == 1
+    assert output.err == ""
+    assert json.loads(output.out)["data"] == {
+        "code": "GROWTH_ARGUMENT_INVALID",
+        "message": "invalid growth command arguments",
+    }
+    assert json.loads(output.out)["command"] == "growth scan"
+    assert not (tmp_path / "state").exists()
+
+
+@pytest.mark.parametrize("codex_home", ["", "relative-codex-home"])
+def test_present_invalid_codex_home_fails_before_request_source_or_state_access(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    codex_home: str,
+):
+    from evolution_harness import cli
+
+    observed: list[str] = []
+
+    def forbidden_request(*args, **kwargs):
+        observed.append("request")
+        raise AssertionError("request accessed")
+
+    def forbidden_source(*args, **kwargs):
+        observed.append("source")
+        raise AssertionError("source accessed")
+
+    def forbidden_state(*args, **kwargs):
+        observed.append("state")
+        raise AssertionError("state accessed")
+
+    monkeypatch.setenv("CODEX_HOME", codex_home)
+    monkeypatch.setattr(cli, "_load_growth_request", forbidden_request)
+    monkeypatch.setattr(cli, "validate_growth_source", forbidden_source)
+    monkeypatch.setattr(cli.GrowthInbox, "open_for_record", forbidden_state)
+    result = cli.main(
+        [
+            "--repository-root",
+            str(_repository_root()),
+            "growth",
+            "assess",
+            "--source",
+            str(tmp_path / "source"),
+            "--request",
+            str(tmp_path / "request.json"),
+            "--format",
+            "json",
+        ]
+    )
+
+    output = capsys.readouterr()
+    assert result == 1
+    assert output.err == ""
+    assert json.loads(output.out) == {
+        "schemaVersion": "harness-cli/v1",
+        "ok": False,
+        "command": "growth assess",
+        "data": {
+            "code": "STATE_ROOT_UNSAFE",
+            "message": "Growth Inbox state is unsafe",
+            "growthCaptureGate": "FAIL",
+        },
+    }
+    assert observed == []
+    assert not (tmp_path / "source").exists()
+    assert not (tmp_path / "request.json").exists()
+
+
 @pytest.mark.parametrize("serialization", ["json", "yaml"])
 def test_growth_assess_stdin_records_registered_r1_signal_without_source_or_harness_writes(
     tmp_path: Path, serialization: str
@@ -385,7 +551,7 @@ def test_assess_deferred_results_are_typed_and_retry_bound(tmp_path: Path):
         "--format",
         "json",
         stdin=json.dumps(request),
-        environment={"CODEX_HOME": ""},
+        unset_environment=("CODEX_HOME",),
     )
     assert missing_home.returncode == 1
     unavailable = json.loads(missing_home.stdout)["data"]
@@ -406,6 +572,7 @@ def test_assess_deferred_results_are_typed_and_retry_bound(tmp_path: Path):
     )
     expected = json.loads(recorded.stdout)["data"]
     lock_descriptor = os.open(state / "locks/inbox.lock", os.O_RDWR)
+    before_locked_attempt = _filesystem_snapshot(state)
     try:
         fcntl.flock(lock_descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
         locked = _run_cli(
@@ -420,6 +587,7 @@ def test_assess_deferred_results_are_typed_and_retry_bound(tmp_path: Path):
     assert deferred["assessmentKey"] == expected["assessmentKey"]
     assert deferred["assessmentId"] == expected["assessmentId"]
     assert deferred["requestDigest"] == expected["requestDigest"]
+    assert _filesystem_snapshot(state) == before_locked_attempt
     SchemaStore(_repository_root()).validate(
         "core/schemas/growth-capture-result.schema.json", deferred
     )
@@ -456,7 +624,41 @@ def test_strict_request_reader_rejects_ambiguous_yaml_without_state_creation(
     assert not state.exists()
 
 
-def test_request_size_symlink_and_relative_paths_fail_before_access(tmp_path: Path):
+@pytest.mark.parametrize(
+    "document",
+    [
+        "nested: " + "[" * 1_200 + "0" + "]" * 1_200,
+        '{"integer":' + "9" * 5_000 + "}",
+    ],
+    ids=["deep-yaml-recursion", "oversized-json-integer-construction"],
+)
+def test_untrusted_loader_construction_failures_are_schema_invalid_and_zero_write(
+    tmp_path: Path, document: str
+):
+    source = tmp_path / "source-must-not-be-accessed"
+    state = tmp_path / "state"
+    before_harness = _filesystem_snapshot(_repository_root())
+    before_harness_git = _git_probe(_repository_root())
+
+    result = _run_cli(
+        _repository_root(), *_growth_arguments(source, state), stdin=document
+    )
+
+    payload = _assert_error(
+        result,
+        command="growth assess",
+        code="ASSESSMENT_SCHEMA_INVALID",
+        capture_gate=True,
+    )
+    assert payload["data"]["message"] == "growth assessment request is invalid"
+    assert document[:64] not in payload["data"]["message"]
+    assert not source.exists()
+    assert not state.exists()
+    assert before_harness == _filesystem_snapshot(_repository_root())
+    assert before_harness_git == _git_probe(_repository_root())
+
+
+def test_request_size_and_symlink_fail_before_state_access(tmp_path: Path):
     source, request = _registered_fixture(tmp_path)
     state = tmp_path / "state"
     oversized = json.dumps(request) + (" " * 70_000)
@@ -484,21 +686,40 @@ def test_request_size_symlink_and_relative_paths_fail_before_access(tmp_path: Pa
         code="ASSESSMENT_SCHEMA_INVALID",
         capture_gate=True,
     )
-    relative = _run_cli(
+    assert not state.exists()
+
+
+@pytest.mark.parametrize("relative_field", ["source", "request", "state-root"])
+def test_each_relative_growth_path_is_independently_rejected_before_access(
+    tmp_path: Path, relative_field: str
+):
+    source = tmp_path / "absolute-source"
+    request = tmp_path / "absolute-request.json"
+    state = tmp_path / "absolute-state"
+    values = {
+        "source": str(source),
+        "request": str(request),
+        "state-root": str(state),
+    }
+    values[relative_field] = f"relative-{relative_field}"
+    before = _filesystem_snapshot(tmp_path)
+
+    result = _run_cli(
         _repository_root(),
         "growth",
         "assess",
         "--source",
-        "relative-source",
+        values["source"],
         "--request",
-        "relative-request.yaml",
+        values["request"],
         "--state-root",
-        "relative-state",
+        values["state-root"],
         "--format",
         "json",
     )
-    _assert_error(relative, command="growth assess", code="GROWTH_ARGUMENT_INVALID")
-    assert not state.exists()
+
+    _assert_error(result, command="growth assess", code="GROWTH_ARGUMENT_INVALID")
+    assert _filesystem_snapshot(tmp_path) == before
 
 
 def test_explicit_request_non_regular_file_is_rejected_without_blocking(tmp_path: Path):
@@ -583,6 +804,63 @@ def test_receipt_and_scan_are_read_only_typed_and_do_not_load_source(tmp_path: P
         second_data["assessmentId"]: "NO_ACTION",
     }
     assert _filesystem_snapshot(state) == before
+
+
+def test_receipt_existing_state_missing_id_and_corruption_use_outer_error_envelope(
+    tmp_path: Path,
+):
+    source, request = _registered_fixture(tmp_path)
+    state = tmp_path / "state"
+    recorded = _run_cli(
+        _repository_root(), *_growth_arguments(source, state), stdin=json.dumps(request)
+    )
+    assert recorded.returncode == 0
+    recorded_id = json.loads(recorded.stdout)["data"]["assessmentId"]
+    before_missing = _filesystem_snapshot(state)
+
+    missing = _run_cli(
+        _repository_root(),
+        "growth",
+        "receipt",
+        "--id",
+        "growth-assessment:" + "f" * 24,
+        "--state-root",
+        str(state),
+        "--check",
+        "--format",
+        "json",
+    )
+
+    _assert_error(
+        missing,
+        command="growth receipt",
+        code="RECEIPT_NOT_FOUND",
+    )
+    assert _filesystem_snapshot(state) == before_missing
+
+    winner = next((state / "inbox").iterdir())
+    winner.write_bytes(b'{"corrupt":true}\n')
+    winner.chmod(0o600)
+    before_corrupt = _filesystem_snapshot(state)
+    corrupt = _run_cli(
+        _repository_root(),
+        "growth",
+        "receipt",
+        "--id",
+        recorded_id,
+        "--state-root",
+        str(state),
+        "--check",
+        "--format",
+        "json",
+    )
+
+    _assert_error(
+        corrupt,
+        command="growth receipt",
+        code="RECEIPT_CORRUPT",
+    )
+    assert _filesystem_snapshot(state) == before_corrupt
 
 
 @pytest.mark.parametrize("action", ["receipt", "scan"])
@@ -673,6 +951,39 @@ def test_state_root_containment_fails_before_any_state_entry(tmp_path: Path):
             capture_gate=True,
         )
         assert not state.exists()
+
+
+def test_state_root_inside_linked_source_worktree_fails_with_complete_git_zero_write_probe(
+    tmp_path: Path,
+):
+    source, request = _registered_fixture(tmp_path)
+    linked = tmp_path / "linked-source-worktree"
+    _git(source, "worktree", "add", "-q", "-b", "growth-linked", str(linked))
+    state = linked / "nested/growth-state"
+    before_source = _filesystem_snapshot(source)
+    before_linked = _filesystem_snapshot(linked)
+    before_source_git = _git_probe(source)
+    before_linked_git = _git_probe(linked)
+    before_harness = _filesystem_snapshot(_repository_root())
+    before_harness_git = _git_probe(_repository_root())
+
+    result = _run_cli(
+        _repository_root(), *_growth_arguments(source, state), stdin=json.dumps(request)
+    )
+
+    _assert_error(
+        result,
+        command="growth assess",
+        code="STATE_ROOT_UNSAFE",
+        capture_gate=True,
+    )
+    assert not state.exists()
+    assert before_source == _filesystem_snapshot(source)
+    assert before_linked == _filesystem_snapshot(linked)
+    assert before_source_git == _git_probe(source)
+    assert before_linked_git == _git_probe(linked)
+    assert before_harness == _filesystem_snapshot(_repository_root())
+    assert before_harness_git == _git_probe(_repository_root())
 
 
 def test_scan_invalid_receipt_returns_typed_fail_report(tmp_path: Path):

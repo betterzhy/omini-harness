@@ -806,6 +806,222 @@ def test_receipt_and_scan_are_read_only_typed_and_do_not_load_source(tmp_path: P
     assert _filesystem_snapshot(state) == before
 
 
+def test_neutral_pilot_runs_full_growth_cli_sequence_with_zero_project_writes(
+    tmp_path: Path,
+):
+    from evolution_harness.schema import SchemaStore
+
+    source, signal = _registered_fixture(tmp_path)
+    signal["task"]["taskId"] = "hg1-task-7-neutral-pilot"
+    no_signal = _no_signal(signal)
+    state = tmp_path / "neutral-pilot-state"
+    before_source = _filesystem_snapshot(source)
+    before_source_git = _git_probe(source)
+    before_harness = _filesystem_snapshot(_repository_root())
+    before_harness_git = _git_probe(_repository_root())
+
+    no_signal_recorded = _run_cli(
+        _repository_root(),
+        *_growth_arguments(source, state),
+        stdin=json.dumps(no_signal),
+    )
+    assert no_signal_recorded.returncode == 0, (
+        no_signal_recorded.stdout,
+        no_signal_recorded.stderr,
+    )
+    no_signal_data = json.loads(no_signal_recorded.stdout)["data"]
+    assert no_signal_data["status"] == "RECORDED"
+    assert no_signal_data["growthCaptureGate"] == "PASS"
+    assert no_signal_data["receipt"]["assessment"]["riskLevel"] == "R2"
+    assert no_signal_data["receipt"]["assessment"]["verdict"] == "NO_SIGNAL"
+    SchemaStore(_repository_root()).validate(
+        "core/schemas/growth-capture-result.schema.json", no_signal_data
+    )
+
+    after_first_record = _filesystem_snapshot(state)
+    no_signal_replayed = _run_cli(
+        _repository_root(),
+        *_growth_arguments(source, state),
+        stdin=json.dumps(no_signal),
+    )
+    assert no_signal_replayed.returncode == 0, (
+        no_signal_replayed.stdout,
+        no_signal_replayed.stderr,
+    )
+    replay_data = json.loads(no_signal_replayed.stdout)["data"]
+    assert replay_data["status"] == "DUPLICATE"
+    assert replay_data["assessmentKey"] == no_signal_data["assessmentKey"]
+    assert replay_data["assessmentId"] == no_signal_data["assessmentId"]
+    assert replay_data["requestDigest"] == no_signal_data["requestDigest"]
+    assert _filesystem_snapshot(state) == after_first_record
+
+    signal_recorded = _run_cli(
+        _repository_root(),
+        *_growth_arguments(source, state),
+        stdin=json.dumps(signal),
+    )
+    assert signal_recorded.returncode == 0, (
+        signal_recorded.stdout,
+        signal_recorded.stderr,
+    )
+    signal_data = json.loads(signal_recorded.stdout)["data"]
+    assert signal_data["status"] == "RECORDED"
+    assert signal_data["growthCaptureGate"] == "PASS"
+    assert signal_data["receipt"]["assessment"]["riskLevel"] == "R1"
+    assert signal_data["receipt"]["assessment"]["verdict"] == "SIGNAL"
+    assert signal_data["assessmentKey"] != no_signal_data["assessmentKey"]
+    SchemaStore(_repository_root()).validate(
+        "core/schemas/growth-capture-result.schema.json", signal_data
+    )
+
+    signal_winner = next(
+        path
+        for path in (state / "inbox").iterdir()
+        if json.loads(path.read_bytes())["assessmentId"] == signal_data["assessmentId"]
+    )
+    signal_winner_bytes = signal_winner.read_bytes()
+    before_conflict = _filesystem_snapshot(state)
+    conflicting_signal = copy.deepcopy(signal)
+    conflicting_signal["summary"] = (
+        "The same obligation conflicts with the recorded neutral pilot assessment."
+    )
+    conflict = _run_cli(
+        _repository_root(),
+        *_growth_arguments(source, state),
+        stdin=json.dumps(conflicting_signal),
+    )
+    _assert_error(
+        conflict,
+        command="growth assess",
+        code="ASSESSMENT_KEY_CONFLICT",
+        capture_gate=True,
+    )
+    assert signal_winner.read_bytes() == signal_winner_bytes
+    assert _filesystem_snapshot(state) == before_conflict
+
+    receipts: dict[str, dict[str, Any]] = {}
+    for expected in (no_signal_data, signal_data):
+        verified = _run_cli(
+            _repository_root(),
+            "growth",
+            "receipt",
+            "--id",
+            expected["assessmentId"],
+            "--state-root",
+            str(state),
+            "--check",
+            "--format",
+            "json",
+        )
+        assert verified.returncode == 0, (verified.stdout, verified.stderr)
+        receipt = json.loads(verified.stdout)["data"]
+        assert receipt == expected["receipt"]
+        assert receipt["status"] == "RECORDED"
+        receipts[receipt["assessmentId"]] = receipt
+
+    before_scan = _filesystem_snapshot(state)
+    scan = _run_cli(
+        _repository_root(),
+        "growth",
+        "scan",
+        "--as-of",
+        "2026-09-02T09:00:00Z",
+        "--state-root",
+        str(state),
+        "--format",
+        "json",
+    )
+    assert scan.returncode == 0, (scan.stdout, scan.stderr)
+    report = json.loads(scan.stdout)["data"]
+    assert report["gate"] == "PASS"
+    assert report["counts"] == {
+        "totalEntries": 2,
+        "validRecords": 2,
+        "invalidRecords": 0,
+        "signal": 1,
+        "noSignal": 1,
+        "humanTriageRequired": 1,
+        "noAction": 1,
+    }
+    assert {
+        record["assessmentId"]: record["disposition"]
+        for record in report["records"]
+    } == {
+        signal_data["assessmentId"]: "HUMAN_TRIAGE_REQUIRED",
+        no_signal_data["assessmentId"]: "NO_ACTION",
+    }
+    assert set(receipts) == {
+        no_signal_data["assessmentId"],
+        signal_data["assessmentId"],
+    }
+    assert _filesystem_snapshot(state) == before_scan
+    assert len(list((state / "inbox").iterdir())) == 2
+    assert before_source == _filesystem_snapshot(source)
+    assert before_source_git == _git_probe(source)
+    assert before_harness == _filesystem_snapshot(_repository_root())
+    assert before_harness_git == _git_probe(_repository_root())
+
+
+def test_cli_retry_and_scan_ignore_stale_partial_and_complete_staging_entries(
+    tmp_path: Path,
+):
+    source, signal = _registered_fixture(tmp_path)
+    request = _no_signal(signal)
+    state = tmp_path / "stale-staging-state"
+    recorded = _run_cli(
+        _repository_root(),
+        *_growth_arguments(source, state),
+        stdin=json.dumps(request),
+    )
+    assert recorded.returncode == 0, (recorded.stdout, recorded.stderr)
+    recorded_data = json.loads(recorded.stdout)["data"]
+    winner = next((state / "inbox").iterdir())
+    winner_bytes = winner.read_bytes()
+    partial = state / "staging" / "stale-partial.part"
+    partial.write_bytes(winner_bytes[: max(1, len(winner_bytes) // 2)])
+    partial.chmod(0o600)
+    complete = state / "staging" / "stale-complete.part"
+    os.link(winner, complete, follow_symlinks=False)
+    assert complete.stat().st_ino == winner.stat().st_ino
+    before = _filesystem_snapshot(state)
+
+    replayed = _run_cli(
+        _repository_root(),
+        *_growth_arguments(source, state),
+        stdin=json.dumps(request),
+    )
+    scan = _run_cli(
+        _repository_root(),
+        "growth",
+        "scan",
+        "--as-of",
+        "2026-09-02T09:00:00Z",
+        "--state-root",
+        str(state),
+        "--format",
+        "json",
+    )
+
+    assert replayed.returncode == 0, (replayed.stdout, replayed.stderr)
+    replay_data = json.loads(replayed.stdout)["data"]
+    assert replay_data["status"] == "DUPLICATE"
+    assert replay_data["assessmentId"] == recorded_data["assessmentId"]
+    assert scan.returncode == 0, (scan.stdout, scan.stderr)
+    report = json.loads(scan.stdout)["data"]
+    assert report["gate"] == "PASS"
+    assert report["counts"] == {
+        "totalEntries": 1,
+        "validRecords": 1,
+        "invalidRecords": 0,
+        "signal": 0,
+        "noSignal": 1,
+        "humanTriageRequired": 0,
+        "noAction": 1,
+    }
+    assert winner.read_bytes() == winner_bytes
+    assert _filesystem_snapshot(state) == before
+
+
 def test_receipt_existing_state_missing_id_and_corruption_use_outer_error_envelope(
     tmp_path: Path,
 ):

@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import re
+import stat
 import sys
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -26,6 +29,16 @@ from .discussion import materialize_discussion_contract, route_next_topics
 from .evals import record_eval_result
 from .feedback import capture_feedback_as_experience
 from .handoff import build_design_handoff
+from .growth_assessment import (
+    GrowthAssessmentError,
+    build_growth_capture_result,
+    growth_assessment_id,
+    growth_assessment_key,
+    growth_request_digest,
+    normalize_growth_assessment_request,
+)
+from .growth_source import validate_growth_source
+from .growth_store import GrowthInbox
 from .install import install_projection, uninstall_projection
 from .integration import (
     build_integration_projection,
@@ -52,6 +65,147 @@ def _load_yaml(path: str | Path) -> dict[str, Any]:
     return yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
 
 
+_GROWTH_REQUEST_LIMIT = 65_536
+_GROWTH_ASSESSMENT_ID = re.compile(r"^growth-assessment:[0-9a-f]{24}$")
+
+
+class _StrictGrowthLoader(yaml.SafeLoader):
+    def compose_node(self, parent, index):
+        if self.check_event(yaml.AliasEvent):
+            raise yaml.composer.ComposerError(
+                None, None, "aliases are not permitted", self.peek_event().start_mark
+            )
+        event = self.peek_event()
+        if getattr(event, "anchor", None) is not None:
+            raise yaml.composer.ComposerError(
+                None, None, "anchors are not permitted", event.start_mark
+            )
+        return super().compose_node(parent, index)
+
+    def construct_mapping(self, node, deep=False):
+        if not isinstance(node, yaml.MappingNode):
+            raise yaml.constructor.ConstructorError(
+                None, None, "mapping node is invalid", node.start_mark
+            )
+        result: dict[str, Any] = {}
+        for key_node, value_node in node.value:
+            if (
+                key_node.tag == "tag:yaml.org,2002:merge"
+                or isinstance(key_node, yaml.ScalarNode)
+                and key_node.value == "<<"
+            ):
+                raise yaml.constructor.ConstructorError(
+                    None, None, "merge keys are not permitted", key_node.start_mark
+                )
+            key = self.construct_object(key_node, deep=deep)
+            if not isinstance(key, str):
+                raise yaml.constructor.ConstructorError(
+                    None, None, "mapping keys must be strings", key_node.start_mark
+                )
+            if key in result:
+                raise yaml.constructor.ConstructorError(
+                    None, None, "duplicate mapping key", key_node.start_mark
+                )
+            result[key] = self.construct_object(value_node, deep=deep)
+        return result
+
+
+def _growth_input_error(message: str) -> GrowthAssessmentError:
+    return GrowthAssessmentError("ASSESSMENT_SCHEMA_INVALID", message)
+
+
+def _bounded_growth_file(path: str) -> bytes:
+    descriptor = -1
+    try:
+        descriptor = os.open(
+            path,
+            os.O_RDONLY
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_NONBLOCK", 0),
+        )
+        current = os.fstat(descriptor)
+        if not stat.S_ISREG(current.st_mode):
+            raise _growth_input_error("growth request input must be a regular file")
+        if current.st_size > _GROWTH_REQUEST_LIMIT:
+            raise _growth_input_error("growth request exceeds the encoded-size limit")
+        raw = os.read(descriptor, _GROWTH_REQUEST_LIMIT + 1)
+    except GrowthAssessmentError:
+        raise
+    except OSError as exc:
+        raise _growth_input_error("growth request file is unavailable or unsafe") from exc
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+    if len(raw) > _GROWTH_REQUEST_LIMIT:
+        raise _growth_input_error("growth request exceeds the encoded-size limit")
+    return raw
+
+
+def _bounded_growth_stdin() -> bytes:
+    stream = getattr(sys.stdin, "buffer", None)
+    if stream is not None:
+        raw = stream.read(_GROWTH_REQUEST_LIMIT + 1)
+    else:
+        try:
+            raw = sys.stdin.read(_GROWTH_REQUEST_LIMIT + 1).encode("utf-8")
+        except UnicodeError as exc:
+            raise _growth_input_error("growth request is not valid UTF-8") from exc
+    if len(raw) > _GROWTH_REQUEST_LIMIT:
+        raise _growth_input_error("growth request exceeds the encoded-size limit")
+    return raw
+
+
+def _load_growth_request(path: str) -> dict[str, Any]:
+    raw = _bounded_growth_stdin() if path == "-" else _bounded_growth_file(path)
+    try:
+        document = raw.decode("utf-8", "strict")
+        value = yaml.load(document, Loader=_StrictGrowthLoader)
+    except (UnicodeDecodeError, yaml.YAMLError) as exc:
+        raise _growth_input_error("growth request is not one strict UTF-8 JSON or YAML document") from exc
+    if not isinstance(value, dict):
+        raise _growth_input_error("growth request document root must be an object")
+    return value
+
+
+class _GrowthValueAction(argparse.Action):
+    def __call__(self, parser, namespace, values, option_string=None):
+        marker = f"_growth_seen_{self.dest}"
+        if getattr(namespace, marker, False):
+            parser.error("repeated growth argument")
+        setattr(namespace, marker, True)
+        setattr(namespace, self.dest, values)
+
+
+class _GrowthFlagAction(argparse.Action):
+    def __init__(self, option_strings, dest, **kwargs):
+        super().__init__(option_strings, dest, nargs=0, **kwargs)
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        marker = f"_growth_seen_{self.dest}"
+        if getattr(namespace, marker, False):
+            parser.error("repeated growth argument")
+        setattr(namespace, marker, True)
+        setattr(namespace, self.dest, True)
+
+
+def _absolute_growth_path(value: str) -> str:
+    if not Path(value).is_absolute():
+        raise argparse.ArgumentTypeError("growth paths must be absolute")
+    return value
+
+
+def _growth_request_path(value: str) -> str:
+    if value != "-" and not Path(value).is_absolute():
+        raise argparse.ArgumentTypeError("growth request path must be absolute or stdin")
+    return value
+
+
+def _growth_assessment_id(value: str) -> str:
+    if _GROWTH_ASSESSMENT_ID.fullmatch(value) is None:
+        raise argparse.ArgumentTypeError("growth assessment ID is invalid")
+    return value
+
+
 def _emit(data: Any, *, fmt: str, ok: bool = True, command: str = "") -> int:
     payload = {"schemaVersion": "harness-cli/v1", "ok": ok, "command": command, "data": data}
     if fmt == "json":
@@ -67,6 +221,20 @@ def _emit(data: Any, *, fmt: str, ok: bool = True, command: str = "") -> int:
 class _HarnessArgumentParser(argparse.ArgumentParser):
     def error(self, message: str) -> None:
         command = self.prog.removeprefix("harness ")
+        growth_command = getattr(self, "_growth_error_command", None)
+        if command == "growth" or command.startswith("growth "):
+            growth_command = command
+        if growth_command is not None:
+            _emit(
+                {
+                    "code": "GROWTH_ARGUMENT_INVALID",
+                    "message": "invalid growth command arguments",
+                },
+                fmt="json",
+                ok=False,
+                command=growth_command,
+            )
+            raise SystemExit(1)
         coordination_command = getattr(
             self, "_coordination_error_command", None
         )
@@ -152,6 +320,20 @@ def _coordination_command_from_argv(argv: list[str]) -> str | None:
     return "coordination"
 
 
+def _growth_command_from_argv(argv: list[str]) -> str | None:
+    index = 0
+    if index < len(argv) and argv[index] == "--repository-root":
+        index += 2
+    elif index < len(argv) and argv[index].startswith("--repository-root="):
+        index += 1
+    if index >= len(argv) or argv[index] != "growth":
+        return None
+    index += 1
+    if index < len(argv) and argv[index] in {"assess", "receipt", "scan"}:
+        return f"growth {argv[index]}"
+    return "growth"
+
+
 def _emit_coordination(
     data: dict[str, Any], *, message: str, command: str
 ) -> int:
@@ -195,11 +377,112 @@ def _project_verification_operation(
         yield verification_session
 
 
+def _growth_state_root(args) -> Path | None:
+    value = getattr(args, "state_root", None)
+    return None if value is None else Path(value)
+
+
+def _preflight_growth_default_state_root(args) -> None:
+    if getattr(args, "state_root", None) is not None:
+        return
+    codex_home = os.environ.get("CODEX_HOME")
+    if codex_home and not Path(codex_home).is_absolute():
+        raise GrowthAssessmentError("STATE_ROOT_UNSAFE", "CODEX_HOME must be absolute")
+
+
+def _close_growth_inbox(inbox: GrowthInbox) -> None:
+    inbox._close()
+
+
+def _growth_assess(root: Path, args) -> dict[str, Any]:
+    _preflight_growth_default_state_root(args)
+    request = _load_growth_request(args.request)
+    normalized = normalize_growth_assessment_request(root, request)
+    source = Path(args.source)
+    validate_growth_source(root, source, normalized)
+
+    growth_assessment_key(normalized)
+    growth_assessment_id(normalized)
+    growth_request_digest(normalized)
+    if args.state_root is None and not os.environ.get("CODEX_HOME"):
+        return build_growth_capture_result(
+            normalized, deferred_reason="STATE_ROOT_UNAVAILABLE"
+        )
+
+    inbox: GrowthInbox | None = None
+    try:
+        inbox = GrowthInbox.open_for_record(root, source, _growth_state_root(args))
+        receipt = inbox.record(normalized)
+    except GrowthAssessmentError as exc:
+        if exc.code in {"STATE_ROOT_UNAVAILABLE", "INBOX_LOCKED"}:
+            return build_growth_capture_result(normalized, deferred_reason=exc.code)
+        raise
+    finally:
+        if inbox is not None:
+            _close_growth_inbox(inbox)
+    return build_growth_capture_result(normalized, receipt=receipt)
+
+
+def _growth_receipt(root: Path, args) -> dict[str, Any]:
+    _preflight_growth_default_state_root(args)
+    inbox = GrowthInbox.open_read_only(root, _growth_state_root(args))
+    try:
+        return inbox.receipt(args.id)
+    finally:
+        _close_growth_inbox(inbox)
+
+
+def _growth_scan(root: Path, args) -> dict[str, Any]:
+    _preflight_growth_default_state_root(args)
+    inbox = GrowthInbox.open_read_only(root, _growth_state_root(args))
+    try:
+        return inbox.scan(as_of=args.as_of)
+    finally:
+        _close_growth_inbox(inbox)
+
+
+_GROWTH_PUBLIC_MESSAGES = {
+    "ASSESSMENT_SCHEMA_INVALID": "growth assessment request is invalid",
+    "GROWTH_ARGUMENT_INVALID": "growth request value is invalid",
+    "ASSESSMENT_KEY_CONFLICT": "assessment key already has another receipt",
+    "ASSESSMENT_ID_MISMATCH": "growth assessment identity does not match",
+    "REQUEST_DIGEST_MISMATCH": "growth request digest does not match",
+    "SOURCE_REGISTRATION_INVALID": "growth source registration is invalid",
+    "SOURCE_CONTEXT_MISMATCH": "growth source context does not match",
+    "SOURCE_AUTHORITY_NO_GO": "growth source authority is not acceptable",
+    "SOURCE_REVISION_MISMATCH": "growth source revision does not match",
+    "SOURCE_LOCK_MISMATCH": "growth source lock does not match",
+    "SOURCE_SELF_INVALID": "Harness-self source context is invalid",
+    "STATE_ROOT_UNAVAILABLE": "Growth Inbox state is unavailable",
+    "STATE_ROOT_UNSAFE": "Growth Inbox state is unsafe",
+    "INBOX_LOCKED": "Growth Inbox lock is busy",
+    "RECEIPT_UNSAFE": "growth receipt is unsafe",
+    "RECEIPT_CORRUPT": "growth receipt is corrupt",
+    "RECEIPT_NOT_FOUND": "growth receipt was not found",
+    "SCAN_LIMIT_EXCEEDED": "Growth Inbox scan limit was exceeded",
+    "TIMESTAMP_INVALID": "growth timestamp is invalid",
+}
+
+
+def _growth_public_error(exc: Exception, *, action: str) -> dict[str, Any]:
+    code = exc.code if isinstance(exc, GrowthAssessmentError) else "INTERNAL_ERROR"
+    error = {
+        "code": code,
+        "message": _GROWTH_PUBLIC_MESSAGES.get(code, "growth command failed safely"),
+    }
+    if action == "assess":
+        error["growthCaptureGate"] = "FAIL"
+    return error
+
+
 def build_parser(
-    *, coordination_error_command: str | None = None
+    *,
+    coordination_error_command: str | None = None,
+    growth_error_command: str | None = None,
 ) -> argparse.ArgumentParser:
     parser = _HarnessArgumentParser(prog="harness")
     parser._coordination_error_command = coordination_error_command
+    parser._growth_error_command = growth_error_command
     parser.add_argument("--repository-root", default=".")
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -218,6 +501,23 @@ def build_parser(
 
     p = sub.add_parser("planning"); s = p.add_subparsers(dest="action", required=True)
     q = s.add_parser("plan"); q.add_argument("--request", required=True); _add_format(q)
+
+    p = sub.add_parser("growth", allow_abbrev=False)
+    s = p.add_subparsers(dest="action", required=True)
+    q = s.add_parser("assess", allow_abbrev=False)
+    q.add_argument("--source", required=True, type=_absolute_growth_path, action=_GrowthValueAction)
+    q.add_argument("--request", required=True, type=_growth_request_path, action=_GrowthValueAction)
+    q.add_argument("--state-root", type=_absolute_growth_path, action=_GrowthValueAction)
+    q.add_argument("--format", required=True, choices=("json",), action=_GrowthValueAction)
+    q = s.add_parser("receipt", allow_abbrev=False)
+    q.add_argument("--id", required=True, type=_growth_assessment_id, action=_GrowthValueAction)
+    q.add_argument("--state-root", type=_absolute_growth_path, action=_GrowthValueAction)
+    q.add_argument("--check", required=True, action=_GrowthFlagAction, default=False)
+    q.add_argument("--format", required=True, choices=("json",), action=_GrowthValueAction)
+    q = s.add_parser("scan", allow_abbrev=False)
+    q.add_argument("--as-of", required=True, action=_GrowthValueAction)
+    q.add_argument("--state-root", type=_absolute_growth_path, action=_GrowthValueAction)
+    q.add_argument("--format", required=True, choices=("json",), action=_GrowthValueAction)
 
     p = sub.add_parser("coordination"); s = p.add_subparsers(dest="action", required=True)
     q = s.add_parser("status"); q.add_argument("--source", required=True)
@@ -263,15 +563,40 @@ def build_parser(
 def main(argv=None) -> int:
     arguments = list(sys.argv[1:] if argv is None else argv)
     parser = build_parser(
-        coordination_error_command=_coordination_command_from_argv(arguments)
+        coordination_error_command=_coordination_command_from_argv(arguments),
+        growth_error_command=_growth_command_from_argv(arguments),
     )
     args = parser.parse_args(arguments)
     root = Path(args.repository_root)
     fmt = getattr(args, "format", "text")
     if args.command == "coordination":
         fmt = "json"
+    if args.command == "growth":
+        fmt = "json"
     command = args.command if not hasattr(args, "action") or args.action is None else f"{args.command} {args.action}"
     try:
+        if args.command == "growth" and args.action == "assess":
+            data = _growth_assess(root, args)
+            return _emit(
+                data,
+                fmt="json",
+                ok=data["growthCaptureGate"] == "PASS",
+                command=command,
+            )
+        if args.command == "growth" and args.action == "receipt":
+            return _emit(
+                _growth_receipt(root, args),
+                fmt="json",
+                command=command,
+            )
+        if args.command == "growth" and args.action == "scan":
+            data = _growth_scan(root, args)
+            return _emit(
+                data,
+                fmt="json",
+                ok=data["gate"] == "PASS",
+                command=command,
+            )
         if args.command == "validate":
             if args.scope == "core" and args.project:
                 parser.error("validate --scope core does not accept --project")
@@ -537,7 +862,10 @@ def main(argv=None) -> int:
         if args.command == "revalidation":
             return _emit(check_revalidation(root, as_of=args.as_of, triggers=args.trigger), fmt=fmt, command=command)
     except Exception as exc:
-        if args.command == "coordination":
+        if args.command == "growth":
+            error = _growth_public_error(exc, action=args.action)
+            fmt = "json"
+        elif args.command == "coordination":
             if isinstance(exc, ControlledCoordinationError):
                 code = exc.code
                 message = str(exc)
